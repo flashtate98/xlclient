@@ -34,6 +34,7 @@
 #include "Engine/Source/Tempest/CImVector.h"
 #include "Engine/Source/Tempest/CRandom.h"
 #include "WoW/Common/ComponentCore/ComponentUtils.h"
+#include "WoW/Common/ComponentCore/ShellRaces.h"
 #include "WoW/Common/TextureCache.h"
 #include "WoW/Source/DB/DBClient/DBClient.h"
 #include "WoW/Source/DB/Rec/CharHairGeosetsRec.h"
@@ -1737,6 +1738,11 @@ void CCharacterComponent::ReplaceExtraSkinTexture(const char* debug) {
 
     if (texture) {
         this->m_data.m_model->ReplaceTexture(8, texture);
+
+        // FlashWOW: shell races take the skin row's second texture as their body scales (slot 11).
+        if (ShellRaces::IsShellRace(this->m_data.m_preferences.m_raceID)) {
+            this->m_data.m_model->ReplaceTexture(11, texture);
+        }
         HandleClose(reinterpret_cast<HOBJECT>(texture));
     }
 }
@@ -3536,6 +3542,9 @@ void CCharacterComponent::GeosRenderPrep() {
         this->m_data.m_model->SetGeometryVisible(rec.m_geosetGroup[0] + 1801, rec.m_geosetGroup[0] + 1801, 1);
     }
 
+    // FlashWOW: customization pieces and armor shells for shell races (Drakonid).
+    ShellRaces::ApplyGeosets(this);
+
     this->m_data.m_model->OptimizeVisibleGeometry();
     this->m_flags &= ~0x4;
 }
@@ -4317,6 +4326,13 @@ void CCharacterComponent::CreateBaseTexture() {
 
     this->m_baseSkinTexture = TextureCreate(s_textureSize, s_textureSize, this->m_gxTexFormat, dataFormat, flags, this, &CCharacterComponent::UpdateBaseTexture, "CharacterBaseSkin", 1);
     this->m_data.m_model->ReplaceTexture(1, this->m_baseSkinTexture);
+
+    // FlashWOW: shell races' armor shells sample texture slot 14. Until the alpha clothing
+    // composite is ported, give them the composited body texture, which already has the
+    // equipped items painted over the skin in the same 512x512 layout.
+    if (ShellRaces::IsShellRace(this->m_data.m_preferences.m_raceID)) {
+        this->m_data.m_model->ReplaceTexture(14, this->m_baseSkinTexture);
+    }
 }
 
 // VERIFY: 51c5a21d manual

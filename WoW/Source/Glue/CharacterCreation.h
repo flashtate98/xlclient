@@ -14,7 +14,7 @@ struct CharacterPreferences;
 
 class CCharacterCreation {
     public:
-    static CharacterPreferences* m_charPreferences[22][2];
+    static CharacterPreferences* m_charPreferences[128][2]; // FlashWOW: was [22][2] (races 0-21)
     static CCharacterComponent* m_character;
     static CNameGen m_nameGen;
     static CSimpleModelFFX* m_charCustomizeFrame;

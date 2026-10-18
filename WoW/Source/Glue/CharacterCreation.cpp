@@ -35,7 +35,7 @@ int32_t CCharacterCreation::m_selectedClassID = 1;
 int32_t CCharacterCreation::m_existingCharacterIndex = -1;
 
 // STATIC: 0x00B6B0D0
-CharacterPreferences* CCharacterCreation::m_charPreferences[22][2];
+CharacterPreferences* CCharacterCreation::m_charPreferences[128][2]; // FlashWOW: was [22][2]
 
 // STATIC: 0x00B6B180
 uint32_t CCharacterCreation::m_raceIndex;
@@ -122,7 +122,7 @@ void CCharacterCreation::Shutdown() {
     CCharacterCreation::m_nameGen.m_names.Clear();
     CCharacterCreation::m_nameGen.m_dictionary.Clear();
 
-    for (uint32_t i = 0; i < 22; i++) {
+    for (uint32_t i = 0; i < 128; i++) { // FlashWOW: was 22
         for (uint32_t j = 0; j < 2; j++) {
             delete CCharacterCreation::m_charPreferences[i][j];
             CCharacterCreation::m_charPreferences[i][j] = nullptr;
