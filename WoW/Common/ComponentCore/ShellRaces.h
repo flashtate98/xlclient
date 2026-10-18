@@ -2,6 +2,7 @@
 #define WOW_COMMON_COMPONENTCORE_SHELLRACES_H
 
 #include <cstdint>
+#include "Engine/Source/Gx/Types.h"
 
 class CCharacterComponent;
 class ItemDisplayInfoRec;
@@ -26,6 +27,19 @@ bool HelmetHidesHorns(const ItemDisplayInfoRec& rec);
 // Shows the customization pieces (groups 31, 32, 35) and the covered armor shells.
 // Called at the end of CCharacterComponent::GeosRenderPrep, before OptimizeVisibleGeometry.
 void ApplyGeosets(CCharacterComponent* component);
+
+// Clothing texture (model texture slot 14) that the armor shells sample. It holds only the
+// equipped items' body textures, with real alpha, on a transparent background, so the scales
+// show through wherever an item leaves a gap. Always ARGB8888, even when componentCompress
+// makes the body texture DXT1 (DXT1 would drop the alpha).
+//
+// Refresh is called by the compositor each time it finishes a body texture update; it creates
+// the texture on first use, binds it to slot 14 and asks for an upload, which builds it.
+void RefreshClothing(CCharacterComponent* component);
+void DestroyClothing(CCharacterComponent* component);
+
+// Texture callback: GxTex_Lock builds the composite, GxTex_Latch hands each mip level over.
+void UpdateClothingTexture(EGxTexCommand command, uint32_t width, uint32_t height, uint32_t depth, uint32_t mipLevel, void* userArg, uint32_t& texelStrideInBytes, const void*& texels);
 
 } // namespace ShellRaces
 

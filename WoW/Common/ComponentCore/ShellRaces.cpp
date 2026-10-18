@@ -2,9 +2,16 @@
 
 #include <cctype>
 #include <cstddef>
+#include <cstring>
 
+#include "Engine/Source/Base/Handle.h"
+#include "Engine/Source/Gx/CGxDevice/CGxDevice.h"
+#include "Engine/Source/Gx/CGxTexFlags.h"
+#include "Engine/Source/Gx/Gx.h"
 #include "Engine/Source/Model2/M2Model.h"
+#include "Engine/Source/Services/Texture.h"
 #include "WoW/Common/ComponentCore/CharacterComponent.h"
+#include "WoW/Common/TextureCache.h"
 #include "WoW/Source/DB/DBClient/DBClient.h"
 #include "WoW/Source/DB/Rec/ItemDisplayInfoRec.h"
 
@@ -64,6 +71,91 @@ bool ModelIs(const char* modelName, const char* base) {
     }
 
     return modelName[i] == '\0' || modelName[i] == '.';
+}
+
+// Scratch image the clothing composite is built in. Shared by every component, like the stock
+// compositor's own buffer: it is filled on GxTex_Lock and read on GxTex_Latch of the same upload.
+MipBits* s_clothingBuffer;
+
+uint32_t TextureSize() {
+    return 1u << CCharacterComponent::s_mipLevels;
+}
+
+// The equipment layers each body section can hold (CharacterSection::m_layerTex), as the stock
+// RenderPrep functions read them. Robes skip the pants layer (0) on both leg sections.
+void LayerRange(int32_t section, bool robe, int32_t& first, int32_t& last) {
+    static const int32_t s_layerCounts[8] = { 2, 7, 1, 5, 7, 3, 6, 1 };
+
+    first = 0;
+    last = s_layerCounts[section];
+
+    if (robe && section == SECTION_LEG_UPPER) {
+        first = 1;
+        last = 2;
+    } else if (robe && section == SECTION_LEG_LOWER) {
+        first = 1;
+        last = 4;
+    }
+}
+
+void BuildClothing(CCharacterComponent* component) {
+    uint32_t size = TextureSize();
+
+    if (!s_clothingBuffer) {
+        s_clothingBuffer = TextureAllocMippedImg(PIXEL_ARGB8888, size, size);
+    }
+
+    // Start fully transparent, every mip level.
+    for (uint32_t level = 0, width = size; ; level++, width >>= 1) {
+        memset(s_clothingBuffer->m_mip[level], 0, width * width * 4);
+
+        if (width == 1) {
+            break;
+        }
+    }
+
+    // Make sure every body section's item textures are loaded, not just the dirty ones the stock
+    // compositor needed this time. Remember which ones this call loaded, to free them after.
+    void* before[8][7];
+
+    for (int32_t section = 0; section < 8; section++) {
+        for (int32_t layer = 0; layer < 7; layer++) {
+            before[section][layer] = component->m_section[section].m_layerTex[layer];
+        }
+    }
+
+    uint32_t dirty = component->m_dirtySections;
+    component->m_dirtySections = 0xFF;
+    component->ItemsLoaded(1);
+    component->m_dirtySections = dirty;
+
+    // Paste the items, in stock order. The paste routines write alpha 0xFF wherever they draw and
+    // leave the rest untouched, so gaps in an item stay transparent.
+    bool robe = (component->m_flags & 0x20) != 0;
+
+    for (int32_t section = 0; section < 8; section++) {
+        CharacterSection& data = component->m_section[section];
+        int32_t first;
+        int32_t last;
+        LayerRange(section, robe, first, last);
+
+        for (int32_t layer = first; layer < last; layer++) {
+            if (((1 << layer) & data.m_layerMask) && data.m_layerTex[layer]) {
+                CCharacterComponent::PasteToSection(static_cast<COMPONENT_SECTIONS>(section), data.m_layerTex[layer], s_clothingBuffer);
+            }
+        }
+    }
+
+    for (int32_t section = 0; section < 8; section++) {
+        CharacterSection& data = component->m_section[section];
+
+        for (int32_t layer = 0; layer < 7; layer++) {
+            if (!before[section][layer] && data.m_layerTex[layer] && data.m_layerItemDisplayId[layer]) {
+                TextureCacheDestroyTexture(data.m_layerTex[layer]);
+                data.m_layerTex[layer] = nullptr;
+            }
+        }
+    }
 }
 
 // Typical coverage by slot, for an equipped display the client has no ItemDisplayInfo row for
@@ -196,4 +288,59 @@ void ShellRaces::ApplyGeosets(CCharacterComponent* component) {
 
         model->SetGeometryVisible(geoset, geoset, 1);
     }
+}
+
+void ShellRaces::UpdateClothingTexture(EGxTexCommand command, uint32_t width, uint32_t height, uint32_t depth, uint32_t mipLevel, void* userArg, uint32_t& texelStrideInBytes, const void*& texels) {
+    CCharacterComponent* component = static_cast<CCharacterComponent*>(userArg);
+
+    switch (command) {
+        case GxTex_Lock:
+            BuildClothing(component);
+            break;
+
+        case GxTex_Latch:
+            texelStrideInBytes = 4 * width;
+            texels = s_clothingBuffer ? s_clothingBuffer->m_mip[mipLevel] : nullptr;
+            break;
+
+        default:
+            break;
+    }
+}
+
+void ShellRaces::RefreshClothing(CCharacterComponent* component) {
+    CM2Model* model = component->m_data.m_model;
+
+    if (!model || !ShellRaces::IsShellRace(component->m_data.m_preferences.m_raceID)) {
+        return;
+    }
+
+    uint32_t size = TextureSize();
+
+    if (!component->m_shellClothingTexture) {
+        CGxTexFlags flags(GxTex_LinearMipLinear, 0, 0, 0, 0, 0, 1);
+
+        if (g_theGxDevicePtr->DeviceApi() == GxApi_GLL) {
+            flags.m_bit14 = 1;
+        }
+
+        component->m_shellClothingTexture = TextureCreate(size, size, GxTex_Argb8888, GxTex_Argb8888, flags, component, &ShellRaces::UpdateClothingTexture, "ShellClothing", 1);
+
+        if (!component->m_shellClothingTexture) {
+            return;
+        }
+    }
+
+    model->ReplaceTexture(14, component->m_shellClothingTexture);
+    GxTexUpdate(TextureGetGxTex(component->m_shellClothingTexture, 1, nullptr), 0, 0, size, size, 1);
+}
+
+void ShellRaces::DestroyClothing(CCharacterComponent* component) {
+    if (!component->m_shellClothingTexture) {
+        return;
+    }
+
+    GxTexSetCannotUpdate(TextureGetGxTex(component->m_shellClothingTexture, 1, nullptr));
+    HandleClose(reinterpret_cast<HOBJECT>(component->m_shellClothingTexture));
+    component->m_shellClothingTexture = nullptr;
 }

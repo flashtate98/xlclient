@@ -157,6 +157,7 @@ class CCharacterComponent {
     /* 0458 */ uint32_t m_handItemDisplayID [3];
     /* 0464 */ int32_t m_itemSlotForAttachSlot [50];
     /* 052C */ CComponentRequest* m_request;
+    CTexture* m_shellClothingTexture; // FlashWOW: shell races' clothing texture (slot 14), see ShellRaces.h
 
     CCharacterComponent();
     ~CCharacterComponent();

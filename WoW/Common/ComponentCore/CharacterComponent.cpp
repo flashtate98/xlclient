@@ -4208,6 +4208,7 @@ CCharacterComponent::CCharacterComponent() {
     this->m_dirtySections = 0xFFFFFFFF;
     this->m_request = nullptr;
     this->m_baseSkinTexture = nullptr;
+    this->m_shellClothingTexture = nullptr; // FlashWOW
     this->m_gxTexFormat = CCharacterComponent::s_gxFormat;
     memset(this->m_itemDisplayID, 0, sizeof(this->m_itemDisplayID));
     memset(this->m_itemSlotForAttachSlot, 0xFF, sizeof(this->m_itemSlotForAttachSlot));
@@ -4228,6 +4229,8 @@ CCharacterComponent::~CCharacterComponent() {
         HandleClose(reinterpret_cast<HOBJECT>(this->m_baseSkinTexture));
         this->m_baseSkinTexture = nullptr;
     }
+
+    ShellRaces::DestroyClothing(this); // FlashWOW
 
     if (this->m_data.m_model) {
         this->m_data.m_model->Release();
@@ -4326,13 +4329,6 @@ void CCharacterComponent::CreateBaseTexture() {
 
     this->m_baseSkinTexture = TextureCreate(s_textureSize, s_textureSize, this->m_gxTexFormat, dataFormat, flags, this, &CCharacterComponent::UpdateBaseTexture, "CharacterBaseSkin", 1);
     this->m_data.m_model->ReplaceTexture(1, this->m_baseSkinTexture);
-
-    // FlashWOW: shell races' armor shells sample texture slot 14. Until the alpha clothing
-    // composite is ported, give them the composited body texture, which already has the
-    // equipped items painted over the skin in the same 512x512 layout.
-    if (ShellRaces::IsShellRace(this->m_data.m_preferences.m_raceID)) {
-        this->m_data.m_model->ReplaceTexture(14, this->m_baseSkinTexture);
-    }
 }
 
 // VERIFY: 51c5a21d manual
@@ -4936,6 +4932,7 @@ void CCharacterComponent::ProcessFinishedRequest() {
     }
 
     this->UpdateSections();
+    ShellRaces::RefreshClothing(this); // FlashWOW: before the layer textures are released
     this->m_request->m_flags &= ~0x1;
     this->m_flags &= ~0x1;
     this->m_request = nullptr;
@@ -5112,6 +5109,7 @@ void CCharacterComponent::RenderPrepSections() {
     }
 
     this->PrepSections();
+    ShellRaces::RefreshClothing(this); // FlashWOW: before the layer textures are released
     this->m_flags &= ~0x1;
     this->m_dirtySections = 0;
     this->DestroyRenderTextures();
@@ -5546,6 +5544,8 @@ bool CCharacterComponent::Init(ComponentData* data, const char* debug) {
         HandleClose(reinterpret_cast<HOBJECT>(this->m_baseSkinTexture));
         this->m_baseSkinTexture = nullptr;
     }
+
+    ShellRaces::DestroyClothing(this); // FlashWOW: rebuilt for the new race/model on next refresh
 
     uint32_t dataFlags = this->m_data.m_flags;
 
