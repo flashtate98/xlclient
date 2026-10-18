@@ -98,6 +98,109 @@ void LayerRange(int32_t section, bool robe, int32_t& first, int32_t& last) {
     }
 }
 
+// Straight-alpha "over": the source pixel (b, g, r, a) on top of whatever is already there.
+// Unlike the stock paste routines, a transparent source pixel leaves the destination
+// transparent instead of turning it opaque black.
+void BlendOver(uint8_t* dst, uint32_t b, uint32_t g, uint32_t r, uint32_t a) {
+    if (!a) {
+        return;
+    }
+
+    uint32_t prior = dst[3];
+    uint32_t total = a * 255 + prior * (255 - a);   // output alpha, scaled by 255
+
+    dst[0] = static_cast<uint8_t>((b * a * 255 + dst[0] * prior * (255 - a) + total / 2) / total);
+    dst[1] = static_cast<uint8_t>((g * a * 255 + dst[1] * prior * (255 - a) + total / 2) / total);
+    dst[2] = static_cast<uint8_t>((r * a * 255 + dst[2] * prior * (255 - a) + total / 2) / total);
+    dst[3] = static_cast<uint8_t>((total + 127) / 255);
+}
+
+// Draws one item layer into its section of the clothing image (mip 0 only), scaled to the
+// section with nearest-neighbour sampling, keeping the layer's own alpha (0, 1, 4 or 8 bit).
+void PasteLayer(void* texture, int32_t section, uint32_t size) {
+    TCTEXTUREINFO info = {};
+    info.m_opaque = 1;
+
+    if (!TextureCacheHasMips(texture) || !TextureCacheGetInfo(texture, info, 1)) {
+        return;
+    }
+
+    const BlpPalPixel* pal = TextureCacheGetPal(texture);
+    const uint8_t* src = static_cast<const uint8_t*>(TextureCacheGetMip(texture, 0));
+    uint32_t srcWidth = info.m_width;
+    uint32_t srcHeight = info.m_height;
+
+    if (!pal || !src || !srcWidth || !srcHeight) {
+        return;
+    }
+
+    const uint8_t* alpha = src + srcWidth * srcHeight;
+    uint32_t alphaSize = info.m_alphaSize;
+    uint32_t shift = 9 - CCharacterComponent::s_mipLevels;
+    const CompSectionInfo& raw = CCharacterComponent::s_sectionInfoRaw[section];
+    uint32_t left = raw.m_pos.x >> shift;
+    uint32_t top = raw.m_pos.y >> shift;
+    uint32_t width = raw.m_size.x >> shift;
+    uint32_t height = raw.m_size.y >> shift;
+    uint8_t* image = reinterpret_cast<uint8_t*>(s_clothingBuffer->m_mip[0]);
+
+    for (uint32_t y = 0; y < height; y++) {
+        uint32_t sy = y * srcHeight / height;
+
+        for (uint32_t x = 0; x < width; x++) {
+            uint32_t sx = x * srcWidth / width;
+            uint32_t i = sy * srcWidth + sx;
+            uint32_t a = 255;
+
+            if (alphaSize == 1) {
+                a = ((alpha[i >> 3] >> (i & 7)) & 0x1) ? 255 : 0;
+            } else if (alphaSize == 4) {
+                a = ((alpha[i >> 1] >> (4 * (i & 1))) & 0xF) * 17;
+            } else if (alphaSize == 8) {
+                a = alpha[i];
+            }
+
+            const BlpPalPixel& color = pal[src[i]];
+            BlendOver(image + ((top + y) * size + left + x) * 4, color.m_b, color.m_g, color.m_r, a);
+        }
+    }
+}
+
+// Fills mip levels 1..n from level 0 with a 2x2 box filter, weighting colour by alpha so the
+// transparent (black) pixels around an item don't darken its edges at a distance.
+void BuildMips(uint32_t size) {
+    for (uint32_t level = 1, width = size >> 1; width; level++, width >>= 1) {
+        const uint8_t* src = reinterpret_cast<const uint8_t*>(s_clothingBuffer->m_mip[level - 1]);
+        uint8_t* dst = reinterpret_cast<uint8_t*>(s_clothingBuffer->m_mip[level]);
+        uint32_t srcWidth = width * 2;
+
+        for (uint32_t y = 0; y < width; y++) {
+            for (uint32_t x = 0; x < width; x++) {
+                uint32_t sum[3] = { 0, 0, 0 };
+                uint32_t alphaSum = 0;
+
+                for (uint32_t dy = 0; dy < 2; dy++) {
+                    for (uint32_t dx = 0; dx < 2; dx++) {
+                        const uint8_t* p = src + ((y * 2 + dy) * srcWidth + x * 2 + dx) * 4;
+                        sum[0] += p[0] * p[3];
+                        sum[1] += p[1] * p[3];
+                        sum[2] += p[2] * p[3];
+                        alphaSum += p[3];
+                    }
+                }
+
+                uint8_t* out = dst + (y * width + x) * 4;
+
+                for (uint32_t c = 0; c < 3; c++) {
+                    out[c] = static_cast<uint8_t>(alphaSum ? (sum[c] + alphaSum / 2) / alphaSum : 0);
+                }
+
+                out[3] = static_cast<uint8_t>((alphaSum + 2) / 4);
+            }
+        }
+    }
+}
+
 void BuildClothing(CCharacterComponent* component) {
     uint32_t size = TextureSize();
 
@@ -129,8 +232,9 @@ void BuildClothing(CCharacterComponent* component) {
     component->ItemsLoaded(1);
     component->m_dirtySections = dirty;
 
-    // Paste the items, in stock order. The paste routines write alpha 0xFF wherever they draw and
-    // leave the rest untouched, so gaps in an item stay transparent.
+    // Paste the items, in stock order, with real alpha. (The stock paste routines can't be used
+    // here: their 4- and 8-bit paths make every pixel of the section opaque, so a transparent
+    // part of an item came out solid black.)
     bool robe = (component->m_flags & 0x20) != 0;
 
     for (int32_t section = 0; section < 8; section++) {
@@ -141,10 +245,12 @@ void BuildClothing(CCharacterComponent* component) {
 
         for (int32_t layer = first; layer < last; layer++) {
             if (((1 << layer) & data.m_layerMask) && data.m_layerTex[layer]) {
-                CCharacterComponent::PasteToSection(static_cast<COMPONENT_SECTIONS>(section), data.m_layerTex[layer], s_clothingBuffer);
+                PasteLayer(data.m_layerTex[layer], section, size);
             }
         }
     }
+
+    BuildMips(size);
 
     for (int32_t section = 0; section < 8; section++) {
         CharacterSection& data = component->m_section[section];
