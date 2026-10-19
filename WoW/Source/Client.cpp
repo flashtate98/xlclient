@@ -577,8 +577,9 @@ uint8_t GetClientExpansionLevel() {
 // VERIFY: 45dcce86 auto
 // OFFSET: 0x00402B20
 void SetPaths() {
-    SFile::DisableSFileCheckDisk();
-    SFile::EnableDirectAccess(0);
+    // SXC: read loose files from the client folder, as the common 3.3.5 loose-file exe patch does
+    // (stock: SFile::DisableSFileCheckDisk(); SFile::EnableDirectAccess(0);).
+    SFile::EnableDirectAccess(0xFF);
 
     const char* path = CmdLineGetString(CMD_DATA_DIR);
     char buffer[260];

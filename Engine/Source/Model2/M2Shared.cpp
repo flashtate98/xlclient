@@ -24,6 +24,7 @@
 #include "Engine/Source/Storm/H/storm.h"
 #include "Engine/Source/Tempest/CImVector.h"
 #include "Engine/Source/Os/OsMemory.h"
+#include "SXC/Log.h"  // SXC:
 
 // STATIC: 0x00A45644
 static const uint32_t s_skinProfileBoneCounts[4] = { 256, 64, 53, 21 };
@@ -1642,8 +1643,21 @@ int32_t CM2Shared::LoadSkinProfile(uint32_t profile) {
 
 // INLINED
 uint32_t CM2Shared::GetSkinProfileIndex(uint32_t maxBones) {
-    for (uint32_t i = 0; i < this->m_data->m_numSkinProfiles; i++) {
-        if (s_skinProfileBoneCounts[4 - this->m_data->m_numSkinProfiles + i] <= maxBones) {
+    // SXC: a model that declares more than 4 skin profiles made the index below negative: the 32-bit
+    // original read whatever lies before the table, x64 wraps it to ~4 billion and faults (crash in
+    // Elwynn, 2026-10-18). Profiles before the table's four count as full detail (its first entry).
+    const uint32_t numProfiles = this->m_data->m_numSkinProfiles;
+
+    if (numProfiles > 4) {
+        char key[300];
+        SStrPrintf(key, sizeof(key), "skins|%s", this->m_fileName);
+        SXC::LogOnce(key, "model %s declares %u skin profiles; the client knows 4, the extra ones count as full detail", this->m_fileName, numProfiles);
+    }
+
+    for (uint32_t i = 0; i < numProfiles; i++) {
+        const int32_t slot = 4 - static_cast<int32_t>(numProfiles) + static_cast<int32_t>(i);
+
+        if (s_skinProfileBoneCounts[slot < 0 ? 0 : slot] <= maxBones) {
             return i;
         }
     }

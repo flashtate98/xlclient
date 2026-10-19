@@ -155,7 +155,9 @@ void DeleteInterfaceFiles() {
     for (uint32_t i = 0; i < sizeof(directories) / sizeof(directories[0]); i++) {
         const char* directory = directories[i];
 
-        if (OsDirectoryExists(directory)) {
+        // SXC: loose Interface\GlueXML and Interface\FrameXML are kept (stock renames them to .old at
+        // every glue start); tswow's allow-custom-gluexml patch jumps past this block (0x5F4DBF).
+        if (false && OsDirectoryExists(directory)) {
             char oldPath[260];
             SStrPrintf(oldPath, sizeof(oldPath), "%s.old", directory);
             OsRemoveDirectoryRecurse(oldPath, 1);

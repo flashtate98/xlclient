@@ -182,7 +182,10 @@ static int32_t Script_SendChatMessage(lua_State* L) {
         }
     }
 
-    if (player->IsDeadOrGhost() && type != CHAT_MSG_WHISPER && type != CHAT_MSG_PARTY && type != CHAT_MSG_PARTY_LEADER && type != CHAT_MSG_RAID && type != CHAT_MSG_RAID_LEADER && type != CHAT_MSG_RAID_WARNING && type != CHAT_MSG_GUILD && type != CHAT_MSG_OFFICER && type != CHAT_MSG_CHANNEL && type != CHAT_MSG_DND && type != CHAT_MSG_BATTLEGROUND && type != CHAT_MSG_BATTLEGROUND_LEADER) {
+    // SXC: GM commands (".tele darnassus") go out in any chat type while dead; everything else is
+    // blocked as stock. The base exe's patch let every message through (0x50D641, je -> jmp) and left
+    // it to the server; checking the leading dot here saves those round trips.
+    if (!(text && text[0] == '.') && player->IsDeadOrGhost() && type != CHAT_MSG_WHISPER && type != CHAT_MSG_PARTY && type != CHAT_MSG_PARTY_LEADER && type != CHAT_MSG_RAID && type != CHAT_MSG_RAID_LEADER && type != CHAT_MSG_RAID_WARNING && type != CHAT_MSG_GUILD && type != CHAT_MSG_OFFICER && type != CHAT_MSG_CHANNEL && type != CHAT_MSG_DND && type != CHAT_MSG_BATTLEGROUND && type != CHAT_MSG_BATTLEGROUND_LEADER) {
         CGGameUI::DisplayError(ERR_CHAT_WHILE_DEAD);
         return 0;
     }

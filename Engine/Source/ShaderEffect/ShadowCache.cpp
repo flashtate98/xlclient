@@ -204,6 +204,7 @@ int32_t CShadowCache::ValidateShadowMode(EShadowMode mode) {
             switch (g_theGxDevicePtr->DeviceApi()) {
                 case GxApi_D3d9:
                 case GxApi_D3d9Ex:
+                case GxApi_Vulkan:  // SXC: Vulkan reports D3D9's shader levels; unlisted, it got only the lowest mode
                     if (vertexTarget != 1 && vertexTarget != 2 && vertexTarget != 3) {
                         return 0;
                     }
@@ -235,6 +236,7 @@ int32_t CShadowCache::ValidateShadowMode(EShadowMode mode) {
             switch (g_theGxDevicePtr->DeviceApi()) {
                 case GxApi_D3d9:
                 case GxApi_D3d9Ex:
+                case GxApi_Vulkan:  // SXC: see above
                     if (vertexTarget != 3 || pixelTarget != 4) {
                         return 0;
                     }

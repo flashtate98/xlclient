@@ -2719,6 +2719,14 @@ void DayNight::SetColors() {
     DayNight::g_planets.m_moon.m_color = sunColor;
     DayNight::g_moonGlare.m_color = sunColor;
 
+    // SXC: the Blue Child is drawn: stock never gives m_moon2 a colour, so it keeps CImVector()'s
+    // zero alpha and stays invisible. The base exe's fix (Robinsh) writes opaque white to its colour
+    // (0xD38E74); set here every frame so the storm fade below still applies.
+    DayNight::g_planets.m_moon2.m_color.r = 0xFF;
+    DayNight::g_planets.m_moon2.m_color.g = 0xFF;
+    DayNight::g_planets.m_moon2.m_color.b = 0xFF;
+    DayNight::g_planets.m_moon2.m_color.a = 0xFF;
+
     if (info.m_flashBlend != 0.0f) {
         CImVector flash = info.m_flashColor;
 

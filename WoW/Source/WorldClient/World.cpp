@@ -1320,14 +1320,17 @@ void World::SetDetailDoodadDist(float dist) {
 // VERIFY: 5f5281b3 auto
 // OFFSET: 0x00780770
 float World::ValidateFarClip(float farClip, int32_t mapID) {
-    float maxFarClip = 4750.0f / 3.0f;
+    // SXC: both caps at 10000 (stock 1583.33 for Outland/Northrend, 791.67 for the old world and on
+    // machines with 1 GB or less), as tswow's view-distance-unlock and the base exe set them.
+    const float sxcMaxFarClip = 10000.0f;
+    float maxFarClip = sxcMaxFarClip;
 
     if (mapID < 530 || mapID == 575 || mapID == 543) {
         if (!CWorldParam::cvar_farClipOverride || CWorldParam::cvar_farClipOverride->m_intValue < 1) {
-            maxFarClip = 2375.0f / 3.0f;
+            maxFarClip = sxcMaxFarClip;
         }
     } else if (OsGetPhysicalMemory() <= 0x40000000) {
-        maxFarClip = 2375.0f / 3.0f;
+        maxFarClip = sxcMaxFarClip;
     }
 
     if (farClip < 550.0f / 3.0f) {

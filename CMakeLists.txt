@@ -112,6 +112,7 @@ if (WOWDECOMP_ARCH_64)
     add_subdirectory(Tools/XvidDecoder)
 endif ()
 add_subdirectory(WarcraftXL)
+add_subdirectory(SXC)  # SXC: our own layer, links itself into the executables
 
 foreach (target Wow WowClient MapViewer M2Viewer GxTest MpqTest BlpTest DbcTest AssetCheck)
     if (TARGET ${target})

@@ -1,5 +1,6 @@
 #include "CharacterCreation.h"
 #include <cstring>
+#include <vector>  // SXC: GetRandomClassID
 #include "Engine/Source/Event/Event.h"
 #include "Engine/Source/FrameScript/FrameScript.h"
 #include "Engine/Source/Model2/M2Model.h"
@@ -394,7 +395,9 @@ int32_t CCharacterCreation::GetExistingClassIndex() {
 // VERIFY: 6c4329fd manual
 // OFFSET: 0x004E0F50
 int32_t CCharacterCreation::GetRandomClassID() {
-    int32_t classes[10];
+    // SXC: as many slots as there are classes (stock: 10, which more classes overflow on the stack;
+    // tswow's "unlimited race/class pairs" patch enlarges the frame instead).
+    std::vector<int32_t> classes(CCharacterCreation::m_classes.Count() ? CCharacterCreation::m_classes.Count() : 1, 0);
     int32_t count = 0;
     uint8_t expansion = ClientServices::Connection()->m_accountExpansion;
 

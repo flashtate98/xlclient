@@ -17,7 +17,10 @@ enum EGxApi {
     GxApi_D3d10 = 3,
     GxApi_D3d11 = 4,
     GxApi_GLL = 5,
-    GxApis_Last = 6,
+    // Not in the 3.3.5a binary: the Vulkan backend (Engine/Source/Gx/CGxDeviceVulkan). Appended after the
+    // original six so every table and loop indexed by EGxApi keeps the binary's values for 0..5.
+    GxApi_Vulkan = 6,
+    GxApis_Last = 7,
 };
 
 enum EGxBlend {

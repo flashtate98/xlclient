@@ -30,6 +30,7 @@
 #include "WoW/Source/WorldClient/MapObjGroup.h"
 #include "WoW/Source/WorldClient/Types.h"
 #include "WoW/Source/WorldClient/World.h"
+#include "SXC/Log.h"  // SXC:
 
 // STATIC: 0x00D1C4C4
 static uint32_t s_indexBufferSize;
@@ -573,18 +574,31 @@ void CDetailDoodad::UpdatePools() {
     s_vertexBufferSize = sizeof(CGxVertexPNCT) * vertexItems;
     s_indexBufferSize = sizeof(uint16_t) * indexItems;
 
-    CDetailDoodad::s_gxVertexPool = g_theGxDevicePtr->PoolCreate(GxPoolTarget_Vertex, GxPoolUsage_Dynamic, 128 * sizeof(CGxVertexPNCT) * vertexItems, GxPoolHintBit_Unk3, "CDetailDoodad_vtx");
-    CDetailDoodad::s_gxIndexPool = g_theGxDevicePtr->PoolCreate(GxPoolTarget_Index, GxPoolUsage_Dynamic, 128 * sizeof(uint16_t) * indexItems, GxPoolHintBit_Unk0, "CDetailDoodad_idx");
+    // SXC: one vertex/index buffer pair per ground effect batch in range, scaled with the area the
+    // ground effect distance covers. Stock has 128 pairs, enough for its 140-yard limit; past them
+    // AcquireBuffers hands out stream buffers, which later draws overwrite while the grass still
+    // draws from them: colourful lines past ~500 yards with the raised limit (2026-10-18).
+    const float sxcRange = CWorld::detailDoodadDist / 140.0f;
+    uint32_t pairs = static_cast<uint32_t>(128.0f * sxcRange * sxcRange + 0.5f);
+    pairs = pairs < 128 ? 128 : pairs;
 
-    CDetailDoodad::s_freeGxBufs.Reserve(256, 0);
+    if (pairs > 128) {
+        SXC::Log("ground effects: %u buffer pairs for %.0f yards at density %u (%.0f MB)", pairs, CWorld::detailDoodadDist, World::s_detailDoodadDensity,
+                 static_cast<double>(pairs) * (s_vertexBufferSize + s_indexBufferSize) / (1024.0 * 1024.0));
+    }
 
-    for (uint32_t i = 0; i < 256; i += 2) {
+    CDetailDoodad::s_gxVertexPool = g_theGxDevicePtr->PoolCreate(GxPoolTarget_Vertex, GxPoolUsage_Dynamic, pairs * sizeof(CGxVertexPNCT) * vertexItems, GxPoolHintBit_Unk3, "CDetailDoodad_vtx");
+    CDetailDoodad::s_gxIndexPool = g_theGxDevicePtr->PoolCreate(GxPoolTarget_Index, GxPoolUsage_Dynamic, pairs * sizeof(uint16_t) * indexItems, GxPoolHintBit_Unk0, "CDetailDoodad_idx");
+
+    CDetailDoodad::s_freeGxBufs.Reserve(2 * pairs, 0);
+
+    for (uint32_t i = 0; i < 2 * pairs; i += 2) {
         *CDetailDoodad::s_freeGxBufs.New() = g_theGxDevicePtr->BufCreate(CDetailDoodad::s_gxVertexPool, sizeof(CGxVertexPNCT), CDetailDoodad::s_vtxBufItems, sizeof(CGxVertexPNCT) * CDetailDoodad::s_vtxBufItems * (i >> 1));
         *CDetailDoodad::s_freeGxBufs.New() = g_theGxDevicePtr->BufCreate(CDetailDoodad::s_gxIndexPool, sizeof(uint16_t), CDetailDoodad::s_idxBufItems, sizeof(uint16_t) * CDetailDoodad::s_idxBufItems * (i >> 1));
         unk_D1C4E8 += 2;
     }
 
-    unk_D1C4DC = 256;
+    unk_D1C4DC = 2 * pairs;  // SXC: was 256
     CDetailDoodad::s_bPoolsDirty = 0;
 }
 

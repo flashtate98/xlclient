@@ -24,8 +24,21 @@
 #include "Engine/Source/FrameScript/FrameScript.h"
 #include "Engine/Source/FrameXML/LoadXML.h"
 
+// SXC: the dungeon finder roles per class (bits: 1 leader, 2 tank, 4 healer, 8 damage), widened from
+// stock's 11 entries to 32, the class mask's width, as tswow's class roles patch does: classes 1..11
+// keep stock's values, custom classes 12..32 may take every role (the server decides in the end).
+// TODO(cdbc): data, written by tswow per class, instead of this table.
 // STATIC: 0x00A394B0
-static const uint8_t s_classRoles[11] = { 0x0B, 0x0F, 0x09, 0x09, 0x0D, 0x0B, 0x0D, 0x09, 0x09, 0x00, 0x0F };
+static const uint8_t s_classRoles[32] = {
+    0x0B, 0x0F, 0x09, 0x09, 0x0D, 0x0B, 0x0D, 0x09, 0x09, 0x00, 0x0F,
+    0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F,
+    0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F
+};
+
+// SXC: a class id outside 1..32 has no roles instead of reading past the table.
+static uint8_t SxcClassRoles(uint32_t classID) {
+    return classID >= 1 && classID <= 32 ? s_classRoles[classID - 1] : 0;
+}
 
 // STATIC: 0x00ACDD6C
 static int32_t s_joinAttempts;
@@ -36,7 +49,7 @@ static float s_lastJoinTime;
 // VERIFY: 7da483d6 auto
 // OFFSET: 0x00552940
 uint8_t CGLookingForGroup::GetClassRoles(uint32_t classID) {
-    return s_classRoles[classID - 1];
+    return SxcClassRoles(classID);  // SXC: bounds-checked
 }
 
 // VERIFY: 29999d79 manual
@@ -122,7 +135,7 @@ int32_t PushDungeonEncounterInfo(lua_State* L, int32_t mapId, int32_t difficulty
 // OFFSET: 0x00553B50
 uint32_t FilterRolesByClass(uint8_t roles) {
     ChrClassesRec* rec = g_chrClassesDB.GetRecord(ClientServices::GetCharacterClass());
-    return roles & s_classRoles[rec->m_id - 1];
+    return roles & SxcClassRoles(rec ? rec->m_id : 0);  // SXC: bounds-checked (and a missing class record)
 }
 
 // VERIFY: 49ccd8f7 manual

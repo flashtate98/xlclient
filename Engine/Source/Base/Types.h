@@ -22,6 +22,10 @@ enum CMDOPT {
     CMD_22050HZ = 14,
     CMD_NO_WARNINGS = 15,
     CMDOPTS = 16,
+    // Not in the 3.3.5a binary: "-vulkan" selects the Vulkan backend like "-opengl" / "-d3d" select theirs.
+    // Past every id the client registers (WOWCMDOPT in WoW/Source/Client.h ends at CMD_GX_OVERRIDE = 39):
+    // SCmd keys its arguments on the id, so a reused value would alias another option.
+    CMD_VULKAN = 40,
 };
 
 enum PROPERTY {

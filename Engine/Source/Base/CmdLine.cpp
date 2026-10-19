@@ -20,6 +20,7 @@ static const _ARGLIST s_argList[] = {
     { SCMD_TYPE_BOOL, CMD_FULL_SCREEN, "fullscreen", nullptr },
     { SCMD_TYPE_BOOL, CMD_22050HZ, "22050", nullptr },
     { SCMD_TYPE_BOOL, CMD_NO_WARNINGS, "nowarnings", nullptr },
+    { SCMD_TYPE_BOOL, CMD_VULKAN, "vulkan", nullptr },
 };
 
 // VERIFY: 51748a1e auto

@@ -1,4 +1,9 @@
 #include "GruntLogin.h"
+
+// SXC: set by SXC/CMakeLists.txt; stock when built without it.
+#ifndef SXC_GAME_BUILD
+#define SXC_GAME_BUILD 12340
+#endif
 #include "Engine/Source/Os/OsSecureRandom.h"
 #include "WoW/Source/Net/NetClient/NetClient.h"
 #include <cstring>
@@ -73,7 +78,7 @@ void GruntLogin::GetLogonMethod() {
     logon.m_versionMajor = 3;
     logon.m_versionMinor = 3;
     logon.m_versionPatch = 5;
-    logon.m_build = 12340;
+    logon.m_build = SXC_GAME_BUILD;  // SXC: stock 12340; the SXC_GAME_BUILD CMake option (SXC/CMakeLists.txt)
     logon.m_locale = SFile::s_locale;
     logon.m_timeZone = OsGetTimeZone();
 

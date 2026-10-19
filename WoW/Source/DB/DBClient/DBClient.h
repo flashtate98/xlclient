@@ -338,6 +338,8 @@ extern WowClientDB<HolidayDescriptionsRec> g_holidayDescriptionsDB;
 extern WowClientDB<HolidayNamesRec> g_holidayNamesDB;
 extern WowClientDB<HolidaysRec> g_holidaysDB;
 extern WowClientDB<ItemRec> g_itemDB;
+// SXC: Item.dbc lookups answer from the server's item cache first (SXC/ItemRecord.cpp).
+template <> ItemRec* WowClientDB<ItemRec>::GetRecord(int32_t id) const;
 extern WowClientDB<ItemBagFamilyRec> g_itemBagFamilyDB;
 extern WowClientDB<ItemClassRec> g_itemClassDB;
 extern WowClientDB<ItemCondExtCostsRec> g_itemCondExtCostsDB;

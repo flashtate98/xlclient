@@ -231,9 +231,14 @@ static C3Vector s_occlusionVolumeVerts60[4] = { C3Vector(-470.600006f, 2243.3000
 // STATIC: 0x00AF0010
 static C3Vector s_occlusionVolumeVerts61[4] = { C3Vector(-475.600006f, 2173.80005f, 614.0f), C3Vector(-502.200012f, 2148.69995f, -158.0f), C3Vector(-344.399994f, 2309.0f, -158.0f), C3Vector(-403.899994f, 2243.69995f, 614.0f) };
 
+// SXC: TODO(cdbc): these tables (s_occlusionVolumes with its s_occlusionVolumeVerts*, and the
+// s_worldOccluderVerts* below) are map data hardcoded in the exe; they should become cdbc files, so
+// custom maps can add and move occluders without a client build.
 // STATIC: 0x00AF0040
 static OcclusionVolume s_occlusionVolumes[62] = {
-    { 0, 0, { CAaBox(C3Vector(0.0f, 0.0f, 0.0f), C3Vector(0.0f, 0.0f, 0.0f)), s_occlusionVolumeVerts0, 4 } },
+    // SXC: map 99999 (stock 0) switches this Eastern Kingdoms volume off: it cuts away the Stormwind
+    // gate, which Open Azeroth changes (Seyri's base exe fix).
+    { 99999, 0, { CAaBox(C3Vector(0.0f, 0.0f, 0.0f), C3Vector(0.0f, 0.0f, 0.0f)), s_occlusionVolumeVerts0, 4 } },
     { 571, 0, { CAaBox(C3Vector(0.0f, 0.0f, 0.0f), C3Vector(0.0f, 0.0f, 0.0f)), s_occlusionVolumeVerts1, 8 } },
     { 571, 2, { CAaBox(C3Vector(0.0f, 0.0f, 0.0f), C3Vector(0.0f, 0.0f, 0.0f)), s_occlusionVolumeVerts2, 6 } },
     { 571, 0, { CAaBox(C3Vector(0.0f, 0.0f, 0.0f), C3Vector(0.0f, 0.0f, 0.0f)), s_occlusionVolumeVerts3, 4 } },

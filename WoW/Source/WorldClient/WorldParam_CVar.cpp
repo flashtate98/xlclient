@@ -376,10 +376,11 @@ bool CWorldParam::GroundEffectDensityCallback(CVar* var, const char* oldValue, c
 // OFFSET: 0x0078DB10
 bool CWorldParam::GroundEffectDistCallback(CVar* var, const char* oldValue, const char* value, void* arg) {
     float dist = SStrToFloat(value);
+    const float sxcMaxDist = 1024.0f;  // SXC: stock 140, as the base exe raises it
 
-    if (dist < 0.0f || dist > 140.0f) {
+    if (dist < 0.0f || dist > sxcMaxDist) {
         char buffer[256];
-        sprintf(buffer, "Ground effect distance must be in range %0f to %0f.", 0.0, 140.0);
+        sprintf(buffer, "Ground effect distance must be in range %0f to %0f.", 0.0, static_cast<double>(sxcMaxDist));
         ConsoleWriteA(buffer, DEFAULT_COLOR);
 
         return false;

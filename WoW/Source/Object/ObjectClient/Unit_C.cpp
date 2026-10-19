@@ -7780,7 +7780,9 @@ void CGUnit_C::SetMaxAlpha(float alpha) {
             this->m_alphaScale = static_cast<uint8_t>(CMath::fint_(alpha * 255.0f));
         }
     } else {
-        this->m_alphaScale = static_cast<uint8_t>(CMath::fint_(alpha * 255.0f));
+        // SXC: units that are not vehicle passengers keep their alpha: the camera zooming in no longer
+        // fades the character out (the base exe's "no transparency for characters", 0x737441 NOP'd).
+        // Stock: this->m_alphaScale = static_cast<uint8_t>(CMath::fint_(alpha * 255.0f));
     }
 
     CVehicle_C* vehicle = this->m_vehicle;
@@ -11626,7 +11628,9 @@ bool CGUnit_C::CanAutoDismount() const {
 void CGUnit_C::UpdateSpellCastBars(uint32_t time) {
     CGNamePlateFrame* namePlate = this->m_namePlateFrame;
 
-    if (!namePlate || this->m_obj->m_guid != CGGameUI::m_lockedTarget) {
+    // SXC: every nameplate gets its unit's cast bar, not only the locked target's (stock). The stock
+    // UI shows nothing more; nameplate addons read it ("cast bar on all frames", 0x720E73).
+    if (!namePlate) {
         return;
     }
 

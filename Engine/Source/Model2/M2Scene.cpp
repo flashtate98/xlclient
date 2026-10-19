@@ -21,6 +21,13 @@
 #include "Engine/Source/Tempest/C33Matrix.h"
 #include "Engine/Source/Tempest/C3Ray.h"
 #include "Engine/Source/Tempest/NTempest.h"
+#include "SXC/Log.h"  // SXC:
+
+// SXC: the mesh IntersectHitTestTriangles is testing, for its out-of-range check and report: set by
+// HitTestGeometry (a skin section) and HitTestCollision (the collision mesh, section -1).
+static const CM2Model* s_sxcHitModel;
+static int32_t s_sxcHitSection;
+static uint32_t s_sxcHitVertexCount;
 
 // STATIC: 0x00A45374
 const uint32_t s_localLighting[7] = { 1, 1, 1, 1, 1, 0, 0 };
@@ -447,9 +454,37 @@ void M2BlendBoneMatrices(const C44Matrix* bones, ubyte4 weights, ubyte4 indices,
 // OFFSET: 0x0081D510
 M2HitRec* CM2Scene::IntersectHitTestTriangles(const uint16_t* indices, const uint16_t* end, uint32_t vertexStart, const C3Vector& start, uint32_t pass, M2HitRec* rec, float& t, M2HitRec* best) {
     for (; indices < end; indices += 3) {
-        const C3Vector& v0 = this->m_hitVerts[indices[0] - vertexStart];
-        const C3Vector& v1 = this->m_hitVerts[indices[1] - vertexStart];
-        const C3Vector& v2 = this->m_hitVerts[indices[2] - vertexStart];
+        // SXC: skip a triangle whose index falls outside the mesh's transformed vertices, and report the
+        // model once. An index below vertexStart wraps to ~4 billion: the 32-bit original read a
+        // garbage vertex just before the buffer and went on, x64 reads ~48 GB past it and faults
+        // (crash in Auberdine, 2026-10-18). One past the mesh but inside the buffer read a stale vertex.
+        const uint32_t i0 = indices[0] - vertexStart;
+        const uint32_t i1 = indices[1] - vertexStart;
+        const uint32_t i2 = indices[2] - vertexStart;
+        const uint32_t count = s_sxcHitVertexCount < this->m_hitVertCapacity ? s_sxcHitVertexCount : this->m_hitVertCapacity;
+
+        if (i0 >= count || i1 >= count || i2 >= count) {
+            if (s_sxcHitModel) {
+                const char* file = s_sxcHitModel->m_shared->m_fileName;
+                const uint16_t bad = i0 >= count ? indices[0] : i1 >= count ? indices[1] : indices[2];
+                char key[300];
+                SStrPrintf(key, sizeof(key), "hit|%s|%d", file, s_sxcHitSection);
+
+                if (s_sxcHitSection < 0) {
+                    SXC::LogOnce(key, "model %s: collision mesh has a triangle with vertex %u, outside its %u vertices; such triangles are skipped by the hit test",
+                                 file, bad, s_sxcHitVertexCount);
+                } else {
+                    SXC::LogOnce(key, "model %s: skin section %d has a triangle with vertex %u, outside its vertices %u..%u; such triangles are skipped by the hit test",
+                                 file, s_sxcHitSection, bad, vertexStart, vertexStart + s_sxcHitVertexCount - 1);
+                }
+            }
+
+            continue;
+        }
+
+        const C3Vector& v0 = this->m_hitVerts[i0];
+        const C3Vector& v1 = this->m_hitVerts[i1];
+        const C3Vector& v2 = this->m_hitVerts[i2];
         float det = (v2.y - v0.y) * (v1.x - v0.x) - (v2.x - v0.x) * (v1.y - v0.y);
 
         if (fabsf(det) < 0.0000099999997f) {
@@ -654,6 +689,7 @@ M2HitRec* CM2Scene::HitTestGeometry(const CM2Model* model, uint32_t pass, const 
         }
 
         const uint16_t* indices = &skinData->m_indices[section->m_indexStart];
+        s_sxcHitModel = model, s_sxcHitSection = batch->m_skinSectionIndex, s_sxcHitVertexCount = section->m_vertexCount;  // SXC:
         best = this->IntersectHitTestTriangles(indices, indices + section->m_indexCount, section->m_vertexStart, start, pass, rec, t, best);
     }
 
@@ -689,6 +725,7 @@ M2HitRec* CM2Scene::HitTestCollision(const CM2Model* model, uint32_t pass, const
     }
 
     const uint16_t* indices = data->m_collisionIndices.Data();
+    s_sxcHitModel = model, s_sxcHitSection = -1, s_sxcHitVertexCount = data->m_collisionPositions.m_count;  // SXC:
 
     return this->IntersectHitTestTriangles(indices, indices + data->m_collisionIndices.m_count, 0, start, pass, rec, t, best);
 }
