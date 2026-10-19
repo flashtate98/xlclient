@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\WXL-WoW-Decomp\WXLMorfyClient\Build\CMakeFiles\e718a02ca4bfa9f187abaa6f97b84b1c\INSTALL_force.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{925D044E-1F2D-3498-8DED-F8F1A16E0F58}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

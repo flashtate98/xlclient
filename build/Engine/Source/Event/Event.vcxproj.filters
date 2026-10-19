@@ -1,0 +1,49 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\Engine\Source\Event\CEvent.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\Engine\Source\Event\CMouseEvent.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\Engine\Source\Event\CSBasePriorityQueue.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\Engine\Source\Event\Event.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\Engine\Source\Event\EvtContext.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\Engine\Source\Event\EvtContextQueue.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\Engine\Source\Event\EvtInput.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\Engine\Source\Event\EvtQueue.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\Engine\Source\Event\EvtSched.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\Engine\Source\Event\EvtThread.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\Engine\Source\Event\EvtTimer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\Engine\Source\Event\Observer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\WXL-WoW-Decomp\WXLMorfyClient\Engine\Source\Event\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{B34BE6CE-3975-38DF-9BE2-862AEDB6024C}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

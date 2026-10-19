@@ -1,0 +1,70 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WowServices\BattlenetLogin.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WowServices\BigInteger.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WowServices\Grunt.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WowServices\GruntLogin.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WowServices\HMAC.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WowServices\Login.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WowServices\PatchFiles.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WowServices\RealmConnection.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WowServices\SRP6_Client.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WowServices\SRP6_Random.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WowServices\TSFixedArray.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WowServices\WDataStore.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WowServices\Win32\WowConnection.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WowServices\Win32\WowConnectionNet.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WowServices\Win64\BattlenetLogin.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WowServices\Win64\WowConnection.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WowServices\Win64\WowConnectionNet.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WowServices\WowConnection.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WowServices\WowConnectionNet.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WowServices\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{B34BE6CE-3975-38DF-9BE2-862AEDB6024C}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

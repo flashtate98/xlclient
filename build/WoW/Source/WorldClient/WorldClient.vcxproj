@@ -1,0 +1,372 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="MinSizeRel|x64">
+      <Configuration>MinSizeRel</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="RelWithDebInfo|x64">
+      <Configuration>RelWithDebInfo</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{398D010D-4CED-3481-BEC0-EDD4BB265FCC}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <Platform>x64</Platform>
+    <ProjectName>WorldClient</ProjectName>
+    <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\WXL-WoW-Decomp\WXLMorfyClient\Build\lib\Debug\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">WorldClient.dir\Debug\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">WorldClient</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">.lib</TargetExt>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\WXL-WoW-Decomp\WXLMorfyClient\Build\lib\Release\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">WorldClient.dir\Release\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">WorldClient</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Release|x64'">.lib</TargetExt>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\WXL-WoW-Decomp\WXLMorfyClient\Build\lib\MinSizeRel\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">WorldClient.dir\MinSizeRel\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">WorldClient</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">.lib</TargetExt>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\WXL-WoW-Decomp\WXLMorfyClient\Build\lib\RelWithDebInfo\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">WorldClient.dir\RelWithDebInfo\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">WorldClient</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">.lib</TargetExt>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>C:\WXL-WoW-Decomp\WXLMorfyClient;C:\WXL-WoW-Decomp\WXLMorfyClient\..\core\include;C:\WXL-WoW-Decomp\WXLMorfyClient\..\sdk\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>Disabled</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <SupportJustMyCode></SupportJustMyCode>
+      <UseFullPaths>false</UseFullPaths>
+      <WarningLevel>Level3</WarningLevel>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;WOWDECOMP_ARCH_64=1;NOMINMAX;WIN32_LEAN_AND_MEAN;_CRT_SECURE_NO_WARNINGS;DISABLE_SIGNATURE_CHECKS=1;CMAKE_INTDIR="Debug"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;WOWDECOMP_ARCH_64=1;NOMINMAX;WIN32_LEAN_AND_MEAN;_CRT_SECURE_NO_WARNINGS;DISABLE_SIGNATURE_CHECKS=1;CMAKE_INTDIR=\"Debug\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>C:\WXL-WoW-Decomp\WXLMorfyClient;C:\WXL-WoW-Decomp\WXLMorfyClient\..\core\include;C:\WXL-WoW-Decomp\WXLMorfyClient\..\sdk\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>C:\WXL-WoW-Decomp\WXLMorfyClient;C:\WXL-WoW-Decomp\WXLMorfyClient\..\core\include;C:\WXL-WoW-Decomp\WXLMorfyClient\..\sdk\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Lib>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+    </Lib>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>C:\WXL-WoW-Decomp\WXLMorfyClient;C:\WXL-WoW-Decomp\WXLMorfyClient\..\core\include;C:\WXL-WoW-Decomp\WXLMorfyClient\..\sdk\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>MaxSpeed</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <SupportJustMyCode></SupportJustMyCode>
+      <UseFullPaths>false</UseFullPaths>
+      <WarningLevel>Level3</WarningLevel>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;WOWDECOMP_ARCH_64=1;NOMINMAX;WIN32_LEAN_AND_MEAN;_CRT_SECURE_NO_WARNINGS;DISABLE_SIGNATURE_CHECKS=1;CMAKE_INTDIR="Release"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <DebugInformationFormat>
+      </DebugInformationFormat>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;WOWDECOMP_ARCH_64=1;NOMINMAX;WIN32_LEAN_AND_MEAN;_CRT_SECURE_NO_WARNINGS;DISABLE_SIGNATURE_CHECKS=1;CMAKE_INTDIR=\"Release\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>C:\WXL-WoW-Decomp\WXLMorfyClient;C:\WXL-WoW-Decomp\WXLMorfyClient\..\core\include;C:\WXL-WoW-Decomp\WXLMorfyClient\..\sdk\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>C:\WXL-WoW-Decomp\WXLMorfyClient;C:\WXL-WoW-Decomp\WXLMorfyClient\..\core\include;C:\WXL-WoW-Decomp\WXLMorfyClient\..\sdk\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Lib>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+    </Lib>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>C:\WXL-WoW-Decomp\WXLMorfyClient;C:\WXL-WoW-Decomp\WXLMorfyClient\..\core\include;C:\WXL-WoW-Decomp\WXLMorfyClient\..\sdk\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <InlineFunctionExpansion>OnlyExplicitInline</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>MinSpace</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <SupportJustMyCode></SupportJustMyCode>
+      <UseFullPaths>false</UseFullPaths>
+      <WarningLevel>Level3</WarningLevel>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;WOWDECOMP_ARCH_64=1;NOMINMAX;WIN32_LEAN_AND_MEAN;_CRT_SECURE_NO_WARNINGS;DISABLE_SIGNATURE_CHECKS=1;CMAKE_INTDIR="MinSizeRel"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <DebugInformationFormat>
+      </DebugInformationFormat>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;WOWDECOMP_ARCH_64=1;NOMINMAX;WIN32_LEAN_AND_MEAN;_CRT_SECURE_NO_WARNINGS;DISABLE_SIGNATURE_CHECKS=1;CMAKE_INTDIR=\"MinSizeRel\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>C:\WXL-WoW-Decomp\WXLMorfyClient;C:\WXL-WoW-Decomp\WXLMorfyClient\..\core\include;C:\WXL-WoW-Decomp\WXLMorfyClient\..\sdk\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>C:\WXL-WoW-Decomp\WXLMorfyClient;C:\WXL-WoW-Decomp\WXLMorfyClient\..\core\include;C:\WXL-WoW-Decomp\WXLMorfyClient\..\sdk\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Lib>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+    </Lib>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>C:\WXL-WoW-Decomp\WXLMorfyClient;C:\WXL-WoW-Decomp\WXLMorfyClient\..\core\include;C:\WXL-WoW-Decomp\WXLMorfyClient\..\sdk\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <InlineFunctionExpansion>OnlyExplicitInline</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>MaxSpeed</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <SupportJustMyCode></SupportJustMyCode>
+      <UseFullPaths>false</UseFullPaths>
+      <WarningLevel>Level3</WarningLevel>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;WOWDECOMP_ARCH_64=1;NOMINMAX;WIN32_LEAN_AND_MEAN;_CRT_SECURE_NO_WARNINGS;DISABLE_SIGNATURE_CHECKS=1;CMAKE_INTDIR="RelWithDebInfo"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;WOWDECOMP_ARCH_64=1;NOMINMAX;WIN32_LEAN_AND_MEAN;_CRT_SECURE_NO_WARNINGS;DISABLE_SIGNATURE_CHECKS=1;CMAKE_INTDIR=\"RelWithDebInfo\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>C:\WXL-WoW-Decomp\WXLMorfyClient;C:\WXL-WoW-Decomp\WXLMorfyClient\..\core\include;C:\WXL-WoW-Decomp\WXLMorfyClient\..\sdk\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>C:\WXL-WoW-Decomp\WXLMorfyClient;C:\WXL-WoW-Decomp\WXLMorfyClient\..\core\include;C:\WXL-WoW-Decomp\WXLMorfyClient\..\sdk\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Lib>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+    </Lib>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\CMakeLists.txt">
+      <UseUtf8Encoding>Always</UseUtf8Encoding>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Building Custom Rule C:/WXL-WoW-Decomp/WXLMorfyClient/WoW/Source/WorldClient/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/WXL-WoW-Decomp/WXLMorfyClient -BC:/WXL-WoW-Decomp/WXLMorfyClient/Build --check-stamp-file C:/WXL-WoW-Decomp/WXLMorfyClient/Build/WoW/Source/WorldClient/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\WXL-WoW-Decomp\WXLMorfyClient\Build\CMakeFiles\cmake.verify_globs;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\WXL-WoW-Decomp\WXLMorfyClient\Build\WoW\Source\WorldClient\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Building Custom Rule C:/WXL-WoW-Decomp/WXLMorfyClient/WoW/Source/WorldClient/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/WXL-WoW-Decomp/WXLMorfyClient -BC:/WXL-WoW-Decomp/WXLMorfyClient/Build --check-stamp-file C:/WXL-WoW-Decomp/WXLMorfyClient/Build/WoW/Source/WorldClient/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\WXL-WoW-Decomp\WXLMorfyClient\Build\CMakeFiles\cmake.verify_globs;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\WXL-WoW-Decomp\WXLMorfyClient\Build\WoW\Source\WorldClient\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Building Custom Rule C:/WXL-WoW-Decomp/WXLMorfyClient/WoW/Source/WorldClient/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/WXL-WoW-Decomp/WXLMorfyClient -BC:/WXL-WoW-Decomp/WXLMorfyClient/Build --check-stamp-file C:/WXL-WoW-Decomp/WXLMorfyClient/Build/WoW/Source/WorldClient/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\WXL-WoW-Decomp\WXLMorfyClient\Build\CMakeFiles\cmake.verify_globs;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\WXL-WoW-Decomp\WXLMorfyClient\Build\WoW\Source\WorldClient\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Building Custom Rule C:/WXL-WoW-Decomp/WXLMorfyClient/WoW/Source/WorldClient/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/WXL-WoW-Decomp/WXLMorfyClient -BC:/WXL-WoW-Decomp/WXLMorfyClient/Build --check-stamp-file C:/WXL-WoW-Decomp/WXLMorfyClient/Build/WoW/Source/WorldClient/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\WXL-WoW-Decomp\WXLMorfyClient\Build\CMakeFiles\cmake.verify_globs;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\WXL-WoW-Decomp\WXLMorfyClient\Build\WoW\Source\WorldClient\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\AreaList.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\Barrier.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\BspQuery_SegmentLink.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\CDetailDoodadData.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\CDetailDoodadInstBatch.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\CMapBaseObjLink.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\CPortalView.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\CWorldMath.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\CWorldOcclusion.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\CWorldSceneRender.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\ClipInfo.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\DayNight.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\DayNightRender.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\DetailDoodad.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\FVBBList.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\FrameTime.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\LiquidEnvironment.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\LiquidGeomFactories.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\LiquidWaveManager.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\Map.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\MapArea.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\MapBaseObj.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\MapChunk.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\MapChunkLiquid.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\MapDoodadDef.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\MapEntity.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\MapLight.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\MapLoad.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\MapLowDetail.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\MapMem.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\MapObj.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\MapObjDef.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\MapObjGroup.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\MapObjRead.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\MapRenderChunk.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\MapShadow.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\MapWeather.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\MapWeather_CVar.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\Mists.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\Particulate.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\PolyClipper.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\Rain.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\Sand.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\ShadowQuery.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\ShadowQuery_CVar.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\Snow.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\SortTable.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\TSLink.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\WaterRipple.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\World.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\WorldParam.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\WorldParam_CVar.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\WorldScene.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\WorldView.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\World_Console.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\Zones.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\shadow.cpp" />
+    <ClCompile Include="C:\WXL-WoW-Decomp\WXLMorfyClient\WoW\Source\WorldClient\shadow_CVar.cpp" />
+  </ItemGroup>
+  <ItemGroup />
+  <ItemGroup>
+    <ProjectReference Include="C:\WXL-WoW-Decomp\WXLMorfyClient\Build\ZERO_CHECK.vcxproj">
+      <Project>{ED519A72-8BC2-3599-BC90-7DB46B846B69}</Project>
+      <Name>ZERO_CHECK</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="C:\WXL-WoW-Decomp\WXLMorfyClient\Build\WarcraftXL\WarcraftXLClient.vcxproj">
+      <Project>{A878306A-1481-378B-ADA8-D2F7D7A9A173}</Project>
+      <Name>WarcraftXLClient</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\WXL-WoW-Decomp\WXLMorfyClient\Build\WarcraftXL\core\wxl-core.vcxproj">
+      <Project>{5356A4D1-7325-3041-9A99-42F0EC6B60BD}</Project>
+      <Name>wxl-core</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\WXL-WoW-Decomp\WXLMorfyClient\Build\WarcraftXL\wxl-seam-check.vcxproj">
+      <Project>{55F4D3C3-EF69-30BB-B4E0-2766A12CD6B2}</Project>
+      <Name>wxl-seam-check</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>
