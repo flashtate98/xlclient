@@ -15,6 +15,7 @@
 #include "Engine/Source/Tempest/CRandom.h"
 #include "Engine/Source/Tempest/CRange.h"
 #include "WoW/Source/DB/DBClient/DBClient.h"
+#include "WoW/Source/DB/Rec/ChrRacesRec.h"
 #include "WoW/Source/DB/Rec/ResistancesRec.h"
 #include "WoW/Source/DB/Rec/SpellRec.h"
 #include "WoW/Source/Game/GameClient/ComSatClient.h"
@@ -1501,7 +1502,18 @@ int32_t SI2::GetChunkLocation(int32_t* mapId, int32_t* chunkX, int32_t* chunkY, 
 // OFFSET: 0x004CDA20
 void SI2::DK_GetPlayerFilterName(CGUnit_C* unit, char* name, uint32_t size) {
     uint8_t race = unit->m_unit->m_unitFieldBytes0[0];
-    SStrPrintf(name, size, "Death Knight %s %s", s_raceFileNames[race], unit->m_unit->m_unitFieldBytes0[2] ? "Female" : "Male");
+
+    // The table only covers the stock races. Any other race ID read past its end and handed
+    // SStrPrintf a garbage pointer, so take the name from ChrRaces instead.
+    const char* raceName = nullptr;
+
+    if (race < sizeof(s_raceFileNames) / sizeof(s_raceFileNames[0])) {
+        raceName = s_raceFileNames[race];
+    } else if (ChrRacesRec* rec = g_chrRacesDB.GetRecord(race)) {
+        raceName = rec->m_clientFileString;
+    }
+
+    SStrPrintf(name, size, "Death Knight %s %s", raceName ? raceName : "", unit->m_unit->m_unitFieldBytes0[2] ? "Female" : "Male");
 }
 
 // VERIFY: 8858e33e auto

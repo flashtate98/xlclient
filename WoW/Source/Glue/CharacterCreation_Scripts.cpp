@@ -105,7 +105,13 @@ static int32_t Script_IsRaceClassRestricted(lua_State* L) {
 
         default: {
             restricted = false;
-            luaL_error(L, "Script_IsRaceClassRestricted: unsupported race ID(%d)", raceID);
+
+            // The restriction bits only exist for the stock races. A race added through ChrRaces
+            // is not restricted here (the server still decides); only IDs ChrRaces lacks error.
+            if (!g_chrRacesDB.GetRecord(raceID)) {
+                luaL_error(L, "Script_IsRaceClassRestricted: unsupported race ID(%d)", raceID);
+            }
+
             break;
         }
     }
