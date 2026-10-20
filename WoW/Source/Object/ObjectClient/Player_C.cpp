@@ -2400,6 +2400,19 @@ uint32_t FindEmptySwapIndex() {
         s_itemSwaps.SetCount(s_itemSwaps.m_count + 1);
     }
 
+    // FlashWOW: start every entry from a clean state. A slot the array just grew is not
+    // initialised, and the bind-on-equip paths (AutoEquipItem, SwapItems, ServerBindConfirm)
+    // fill in everything but m_item. ClearPendingEquip then took the leftover m_item for an
+    // item to equip and called AutoEquipItemToSlot with a garbage pointer (crash on "Okay" in
+    // the bind-on-equip prompt). Only AutoEquipItemToSlot sets m_item, after this.
+    ITEMSWAP& swap = s_itemSwaps.m_data[index];
+    swap.m_srcContainer = WOWGUID();
+    swap.m_dstContainer = WOWGUID();
+    swap.m_srcSlot = 0xFFFFFFFF;
+    swap.m_dstSlot = 0xFFFFFFFF;
+    swap.m_itemId = 0;
+    swap.m_item = nullptr;
+
     return index;
 }
 
