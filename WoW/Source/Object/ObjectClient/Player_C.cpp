@@ -2400,7 +2400,7 @@ uint32_t FindEmptySwapIndex() {
         s_itemSwaps.SetCount(s_itemSwaps.m_count + 1);
     }
 
-    // FlashWOW: start every entry from a clean state. A slot the array just grew is not
+    // Start every entry from a clean state. A slot the array just grew is not
     // initialised, and the bind-on-equip paths (AutoEquipItem, SwapItems, ServerBindConfirm)
     // fill in everything but m_item. ClearPendingEquip then took the leftover m_item for an
     // item to equip and called AutoEquipItemToSlot with a garbage pointer (crash on "Okay" in
