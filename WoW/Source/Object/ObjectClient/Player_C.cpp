@@ -6894,7 +6894,12 @@ int32_t CGPlayer_C::CanUseItem(const ItemStats_C* stats, int32_t& error) {
 
     CGUnitData* unit = this->m_unit;
 
-    if (static_cast<int32_t>(stats->m_requiredLevel) > static_cast<int32_t>(unit->m_unitFieldLevel) || !((1 << (unit->m_unitFieldBytes0[1] - 1)) & stats->m_allowableClass) || !((1 << (unit->m_unitFieldBytes0[0] - 1)) & stats->m_allowableRace)) {
+    // A race outside 1-32 has no bit in the 32-bit mask (the shift would wrap onto another
+    // race), so leave that check to the server.
+    uint32_t raceId = unit->m_unitFieldBytes0[0];
+    bool raceAllowed = raceId < 1 || raceId > 32 || ((1u << (raceId - 1)) & stats->m_allowableRace);
+
+    if (static_cast<int32_t>(stats->m_requiredLevel) > static_cast<int32_t>(unit->m_unitFieldLevel) || !((1 << (unit->m_unitFieldBytes0[1] - 1)) & stats->m_allowableClass) || !raceAllowed) {
         error = ERR_CANT_USE_ITEM;
         return 0;
     }

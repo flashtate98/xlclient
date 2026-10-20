@@ -1,7 +1,49 @@
 #include "ItemStats.h"
+#include "WoW/Source/DB/DBClient/DBClient.h"
+#include "WoW/Source/DB/Rec/ChrRacesRec.h"
 #include "Engine/Source/Base/CDataStore.h"
 #include "Engine/Source/Storm/H/storm.h"
 #include <cstring>
+
+// Item race masks only know the stock races (1-11), so a server that adds playable races sends
+// masks such as 1791 ("every race"), 1101 ("Alliance") or 690 ("Horde") without their bits, and
+// the client then treats those races as unable to use the item (no client-side bind-on-equip
+// confirm, red "Races:" tooltip line). When a mask holds every playable stock race of a faction,
+// add that faction's other playable races from ChrRaces. Masks naming specific races are kept
+// as they are, and races above 32 cannot be expressed in a mask at all.
+static uint32_t ExpandStockRaceMask(uint32_t mask) {
+    const int32_t lastStockRace = 11;
+    uint32_t stock[2] = { 0, 0 };
+    uint32_t added[2] = { 0, 0 };
+
+    for (int32_t i = 0; i < g_chrRacesDB.m_numRecords; i++) {
+        ChrRacesRec* race = g_chrRacesDB.GetRecordByIndex(i);
+
+        if (!race || (race->m_flags & 0x1) || race->m_id < 1 || race->m_id > 32) {
+            continue;
+        }
+
+        if (race->m_alliance != 0 && race->m_alliance != 1) {
+            continue;
+        }
+
+        uint32_t bit = 1u << (race->m_id - 1);
+
+        if (race->m_id <= lastStockRace) {
+            stock[race->m_alliance] |= bit;
+        } else {
+            added[race->m_alliance] |= bit;
+        }
+    }
+
+    for (int32_t team = 0; team < 2; team++) {
+        if (stock[team] && (mask & stock[team]) == stock[team]) {
+            mask |= added[team];
+        }
+    }
+
+    return mask;
+}
 
 // INLINED
 ItemStats_C::ItemStats_C() {
@@ -58,6 +100,7 @@ void ItemStats_C::Unpack(CDataStore* msg) {
     msg->Get(this->m_inventoryType);
     msg->Get(this->m_allowableClass);
     msg->Get(this->m_allowableRace);
+    this->m_allowableRace = ExpandStockRaceMask(this->m_allowableRace);
     msg->Get(this->m_itemLevel);
     msg->Get(this->m_requiredLevel);
     msg->Get(this->m_requiredSkill);
