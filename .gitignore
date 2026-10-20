@@ -412,3 +412,5 @@ FodyWeavers.xsd
 CMakeSettings.json
 /Tools/VulkanShaders/translated
 build/
+build/
+CMakeFiles/
