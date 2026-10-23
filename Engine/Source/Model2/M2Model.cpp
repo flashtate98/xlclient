@@ -4033,6 +4033,11 @@ void CM2Model::SetGeometryVisible(uint32_t first, uint32_t last, int32_t visible
 
         for (uint32_t i = 0; i < skin->m_skinSections.m_count; i++) {
             uint32_t id = skin->m_skinSections[i].m_skinSectionId;
+#if defined(WOWDECOMP_RETAIL_MODELS)
+            // Not in the original: the upper word is the section's index start "level" in skins
+            // with more than 65535 indices (M2WideIndexStart), not part of the geoset ID.
+            id &= 0xFFFF;
+#endif
 
             if (first <= id && id <= last) {
                 uint32_t* section = &this->m_skinSections[i];
@@ -4123,6 +4128,15 @@ void CM2Model::OptimizeVisibleGeometry() {
     CM2Shared* shared = this->m_shared;
     uint32_t cacheFlags = shared->m_cache->m_flags;
     M2SkinProfile* skin = shared->m_skinData;
+
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: the merged sections keep 16-bit index starts and counts and use the
+    // section ID word as their range index, so a skin with more than 65535 indices (Retail
+    // models) would draw merged batches from the wrong place. Such skins draw section by section.
+    if (skin->m_indices.m_count > 0xFFFF) {
+        return;
+    }
+#endif
     M2Batch* prevBatch = nullptr;
     M2SkinSection* prevSection = nullptr;
     uint32_t batchCount = 0;
