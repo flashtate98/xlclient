@@ -39,7 +39,7 @@ class CImVector;
 class ShadowConstants {
     public:
     // Not in the original: Retail model bone palettes need more vertex registers than the 256 a
-    // D3D9-class device offers. Only the Vulkan device reports the larger file (see its caps).
+    // D3D9-class device offers. Only the Vulkan device reports the larger file (1024, see its caps).
 #if defined(WOWDECOMP_RETAIL_MODELS)
     static constexpr uint32_t Count = 1024;
 #else

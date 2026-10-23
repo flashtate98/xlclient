@@ -21,7 +21,7 @@ sliders, the CDN downloader and the item importers are not included.
    ```
 
    Retail rigs draw with bigger bone palettes than 3.3.5 models. With this option the Vulkan device
-   offers 512 vertex constant rows instead of 256. Stock models pick the same skin profiles either
+   offers 1024 vertex constant rows instead of 256 (a Retail skin can share one palette of about 250 bones; the Dracthyr dragon's is 246). Stock models pick the same skin profiles either
    way, so old content is unaffected; Retail models with large palettes need the re-translated set.
    D3D9 and OpenGL keep the old limit, so run with Vulkan.
 

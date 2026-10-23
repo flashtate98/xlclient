@@ -83,7 +83,7 @@ def main(argv):
     ap.add_argument('--names', default=None, help='only these Name:perm (comma-separated), for a look')
     ap.add_argument('--print', action='store_true', help='print the GLSL of each emitted record')
     ap.add_argument('--retail-palette', action='store_true',
-                    help='512 vertex constant rows, for clients built with WOWDECOMP_RETAIL_MODELS (Retail bone palettes)')
+                    help='1024 vertex constant rows, for clients built with WOWDECOMP_RETAIL_MODELS (Retail bone palettes)')
     args = ap.parse_args(argv)
 
     data = find_data(args.client)

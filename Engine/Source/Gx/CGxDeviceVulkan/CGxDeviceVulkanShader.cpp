@@ -283,6 +283,10 @@ void CGxDeviceVulkan::IShaderFolder(char* folder, size_t size) {
     SStrPrintf(folder, static_cast<int32_t>(size), "%s\\VulkanShaders", exe);
 }
 
+// Not in the original: one past the highest vertex register ever written. Rows above it were never
+// set, so a draw uploads only up to here instead of the whole (Retail-sized) register file.
+static uint32_t s_vertexRowsWritten = 0;
+
 // Mirrors CGxDeviceD3d::IShaderConstantsFlush (0x006A9FE0): the shadow constants' dirty ranges
 // become the device's registers (index 1 of s_shadowConstants is the vertex file, 0 the pixel one,
 // as ShaderConstantsSet files them), and the ranges are reset.
@@ -292,6 +296,10 @@ void CGxDeviceVulkan::IShaderConstantsFlush() {
     if (vs.dirtyMin <= vs.dirtyMax && vs.dirtyMax < ShadowConstants::Count) {
         memcpy(&this->m_vertexRegs[vs.dirtyMin * 4], &vs.constants[vs.dirtyMin * 4], (vs.dirtyMax - vs.dirtyMin + 1) * 4 * sizeof(float));
         g_stats.flushes++;
+
+        if (vs.dirtyMax + 1 > s_vertexRowsWritten) {
+            s_vertexRowsWritten = vs.dirtyMax + 1;
+        }
     }
 
     vs.dirtyMin = ShadowConstants::Count - 1;
@@ -364,6 +372,7 @@ uint32_t CGxDeviceVulkan::IShaderPrograms(pipelines::Draw& draw) {
         draw.vertexRecord = vs->record;
         // A 256-row module (translated before the larger palette) reads the front of the larger slice.
         draw.vertexRows = vs->record->vconst > pipelines::kVertexRowsSmall ? pipelines::kVertexRowsLarge : pipelines::kVertexRowsSmall;
+        draw.vertexRowsUsed = s_vertexRowsWritten < draw.vertexRows ? s_vertexRowsWritten : draw.vertexRows;
     } else {
         draw.vertex = pipelines::VertexProgram::FixedFunctionSemantic;
 

@@ -10,7 +10,7 @@
 // format: blocks separated by a blank line, lines of space-separated tokens, '#' to end of line a
 // comment.
 //
-//   record <md5> <vertex|pixel> <vs_3_0|ps_3_0|vs_2_0|ps_2_0|ff> <spv path> vconst=<64|256|512> pconst=16
+//   record <md5> <vertex|pixel> <vs_3_0|ps_3_0|vs_2_0|ps_2_0|ff> <spv path> vconst=<64|256|512|1024> pconst=16
 //   name <Name:perm>               repeatable; also the bare <Name> for record 0 of a container
 //   sampler <slot 0..15> <2d|cube> pixel only, repeatable
 //   input <semantic> <vN>          vertex only, repeatable
@@ -70,7 +70,7 @@ namespace gxvk::vk::manifest
         char     spv[kPathChars];  ///< relative to the manifest's folder, forward slashes
         Kind     kind;
         Profile  profile;
-        uint16_t vconst;           ///< 64, 256 or 512: rows of regs.v[] the vertex module declares
+        uint16_t vconst;           ///< 64, 256, 512 or 1024: rows of regs.v[] the vertex module declares
         uint16_t pconst;           ///< 16: rows of regs.p[]
         uint16_t samplerMask;      ///< pixel: bit s set for `sampler s ...`
         uint16_t cubeMask;         ///< pixel: bit s set when that sampler is a cube
