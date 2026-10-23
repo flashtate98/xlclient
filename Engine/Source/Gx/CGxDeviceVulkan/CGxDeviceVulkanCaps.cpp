@@ -102,7 +102,13 @@ void CGxDeviceVulkan::ISetCaps(const CGxFormat& format) {
 
     this->m_caps.m_shaderTargets[GxSh_Pixel] = 4;
     this->m_caps.m_shaderTargets[GxSh_Vertex] = 3;
+    #if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: room for Retail bone palettes. Needs shaders translated with the 512-row
+    // vertex class (Tools/VulkanShaders); stock models choose the same skin profiles either way.
+    this->m_caps.m_shaderConstants[GxSh_Vertex] = 512;
+#else
     this->m_caps.m_shaderConstants[GxSh_Vertex] = 256;
+#endif
 
     if (format.m_fixedFunction[GxSh_Pixel] != -1 && format.m_fixedFunction[GxSh_Pixel] <= this->m_caps.m_shaderTargets[GxSh_Pixel]) {
         this->m_caps.m_shaderTargets[GxSh_Pixel] = format.m_fixedFunction[GxSh_Pixel];

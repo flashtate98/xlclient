@@ -830,17 +830,17 @@ void CGxDevice::TexParameters(const CGxTex* texId, CGxTexParms& parms) {
 // VERIFY: 48e3bca3 auto
 // OFFSET: 0x006833A0
 void CGxDevice::ShaderConstantsClear() {
-    for (uint32_t i = 0; i < 256 * 4; i++) {
+    for (uint32_t i = 0; i < ShadowConstants::Count * 4; i++) {
         s_shadowConstants[0].constants[i] = FLT_MAX;
     }
 
-    for (uint32_t i = 0; i < 256 * 4; i++) {
+    for (uint32_t i = 0; i < ShadowConstants::Count * 4; i++) {
         s_shadowConstants[1].constants[i] = FLT_MAX;
     }
 
-    s_shadowConstants[1].dirtyMin = 255;
+    s_shadowConstants[1].dirtyMin = ShadowConstants::Count - 1;
     s_shadowConstants[1].dirtyMax = 0;
-    s_shadowConstants[0].dirtyMin = 255;
+    s_shadowConstants[0].dirtyMin = ShadowConstants::Count - 1;
     s_shadowConstants[0].dirtyMax = 0;
 }
 

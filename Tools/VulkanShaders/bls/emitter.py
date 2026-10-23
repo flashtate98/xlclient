@@ -38,7 +38,7 @@ for _i in range(8):
     VARYING_LOCATION['texcoord%d' % _i] = 2 + _i
 VARYING_TYPE = {'fog0': 'float'}
 PCONST = 16
-VCONST_SMALL, VCONST_LARGE = 64, 256
+VCONST_SMALL, VCONST_LARGE = 64, 256  # translate.py --retail-palette raises VCONST_LARGE to 512
 
 # vs_2_0 fixed-function output registers -> semantic
 VS2_OUT = {'oPos': 'position0', 'oD0': 'color0', 'oD1': 'color1', 'oFog': 'fog0', 'oPts': 'psize0'}
@@ -137,7 +137,7 @@ class Emitter(object):
         self.cmax = max(self.cmax, o.index)
         if self.vs:
             if o.index >= VCONST_LARGE:
-                raise Refused('vertex constant c%d beyond the 256-row window' % o.index)
+                raise Refused('vertex constant c%d beyond the %d-row window' % (o.index, VCONST_LARGE))
             return 'regs.v[%d]' % o.index
         if o.index >= PCONST:
             raise Refused('pixel constant c%d beyond the 16-row window' % o.index)

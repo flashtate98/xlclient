@@ -82,6 +82,8 @@ def main(argv):
     ap.add_argument('--deploy', action='store_true', help='copy the result into <client>/VulkanShaders/')
     ap.add_argument('--names', default=None, help='only these Name:perm (comma-separated), for a look')
     ap.add_argument('--print', action='store_true', help='print the GLSL of each emitted record')
+    ap.add_argument('--retail-palette', action='store_true',
+                    help='512 vertex constant rows, for clients built with WOWDECOMP_RETAIL_MODELS (Retail bone palettes)')
     args = ap.parse_args(argv)
 
     data = find_data(args.client)
@@ -100,6 +102,8 @@ def main(argv):
     sys.path.insert(0, HERE)
     from bls import translate
     argv2 = ['--data', data, '--glslang', glslang]
+    if args.retail_palette:
+        argv2.append('--retail-palette')
     if args.names:
         argv2 += ['--names', args.names]
         if args.print:

@@ -20,6 +20,11 @@
 #include "Engine/Source/Storm/H/storm.h"
 #include "WarcraftXL/Seams.h"
 #include "Engine/Source/Storm/Source/MD5.h"
+#if defined(WOWDECOMP_RETAIL_MODELS)
+#include <string>
+#include <vector>
+#include "Engine/Source/Retail/LocalSource.h"
+#endif
 
 // STATIC: 0x00B32038
 static SFileStreamingStatus s_streamingStatus;
@@ -157,6 +162,15 @@ int32_t STORMAPI SFile::EnableDirectAccess(uint32_t flags) {
 // VERIFY: 94f59314 auto
 // OFFSET: 0x004217E0
 bool STORMAPI SFile::FileGetIsLocalAmount(const char* name, int64_t& local, int64_t& total) {
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: Retail model files are local by construction; report their size.
+    if (Retail::Source().Handles(name)) {
+        uint32_t size = 0;
+        const bool known = Retail::Source().Size(name, size);
+        local = total = size;
+        return known;
+    }
+#endif
     return Blizzard::Mopaq::SFileGetIsLocalAmount(name, local, total);
 }
 
@@ -457,6 +471,29 @@ int32_t STORMAPI SFile::SetFilePointer(SFileImpl* file, int32_t distance, int32_
             break;
         }
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+        // Not in the original: a Retail model file, prepared in memory when it was opened.
+        case 6: {
+            int64_t move = distanceHigh ? (int64_t(*distanceHigh) * 0x100000000LL + uint32_t(distance)) : int64_t(distance);
+            int64_t origin = method == 0 ? 0 : method == 1 ? file->m_position : file->m_size;
+
+            if (method > 2 || move < -origin || move > int64_t(UINT32_MAX) - origin) {
+                SErrSetLastError(87);
+                result = -1;
+            } else {
+                file->m_position = static_cast<uint32_t>(origin + move);
+
+                if (distanceHigh) {
+                    *distanceHigh = 0;
+                }
+
+                result = static_cast<int32_t>(file->m_position);
+            }
+
+            break;
+        }
+#endif
+
         case 5: {
             if (method == 0) {
                 file->m_position = distance;
@@ -620,6 +657,12 @@ int32_t STORMAPI SFileCloseArchive(SArchive* archive) {
 // VERIFY: cd537558 auto
 // OFFSET: 0x00421FC0
 int32_t STORMAPI SFile::FileExistsInArchives(const char* name) {
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    if (Retail::Source().Handles(name)) {
+        std::string error;
+        return Retail::Source().Exists(name, error);
+    }
+#endif
     int32_t result = Blizzard::Mopaq::SFileFileExists(nullptr, name, 0, nullptr);
 
     if (result) {
@@ -632,6 +675,12 @@ int32_t STORMAPI SFile::FileExistsInArchives(const char* name) {
 // VERIFY: 00e4abfa auto
 // OFFSET: 0x00421FF0
 int32_t STORMAPI SFileLoadFileEx(SArchive* archive, const char* name, void** data, uint32_t* size, uint32_t extra, uint32_t flags, SOVERLAPPED* overlapped) {
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: Retail model files are prepared in memory, so load them through OpenEx.
+    if (!archive && Retail::Source().Handles(name)) {
+        return SFile::ReadFile(nullptr, name, data, size, extra, flags, overlapped);
+    }
+#endif
     bool result = Blizzard::Mopaq::SFileLoadFile(reinterpret_cast<System_SFile::ARCHIVEREC*>(archive), name, data, size, extra, flags);
 
     if (!result) {
@@ -784,7 +833,8 @@ int32_t STORMAPI SFileReadFile(SFileImpl* file, void* buffer, uint32_t count, ui
         }
 
         case 4:
-        case 5: {
+        case 5:
+        case 6: {
             uint32_t available = file->m_position >= file->m_size ? 0 : file->m_size - file->m_position;
             uint32_t read = std::min(available, count);
 
@@ -855,7 +905,12 @@ uint32_t STORMAPI SFileGetFileSize(SFileImpl* file, uint32_t* sizeHigh) {
         }
 
         case 1:
-        case 5: {
+        case 5:
+        case 6: {
+            if (file->m_type == 6 && sizeHigh) {
+                *sizeHigh = 0;
+            }
+
             return file->m_size;
         }
 
@@ -944,6 +999,24 @@ void System_SFile2::BuildFileSystemHash() {
 // VERIFY: f3281a6b manual
 // OFFSET: 0x00424780
 bool System_SFile2::FindFile(const char* name, char* path, uint32_t size, uint32_t flags, uint32_t* type, System_SFile::ARCHIVEREC** archive) {
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: Retail model files are served from memory (type 6) by OpenEx.
+    if (Retail::Source().Handles(name)) {
+        if (archive) {
+            *archive = nullptr;
+        }
+
+        std::string error;
+
+        if (!Retail::Source().Exists(name, error)) {
+            return false;
+        }
+
+        Blizzard::String::Copy(path, name, size);
+        *type = 6;
+        return true;
+    }
+#endif
     flags |= s_directAccess;
 
     if (archive) {
@@ -1036,6 +1109,40 @@ int32_t STORMAPI SFile::OpenEx(SArchive* archive, const char* name, uint32_t fla
     }
 
     Blizzard::File::SetLastErrorStack(nullptr);
+
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: a Retail model, or a file it references, is read from the archives and
+    // prepared for this engine in memory (Engine/Source/Retail). The handle serves those bytes.
+    if (!archive && Retail::Source().Handles(name)) {
+        *result = nullptr;
+        std::vector<uint8_t> bytes;
+        std::string error;
+
+        if (!Retail::Source().Read(name, bytes, error)) {
+            SErrSetLastError(2);
+            return 0;
+        }
+
+        SFileImpl* file = new (0u, __FILE__, __LINE__) SFileImpl(6);
+        file->m_size = static_cast<uint32_t>(bytes.size());
+        file->m_position = 0;
+        file->m_name = Blizzard::String::Duplicate(name);
+        file->m_data = static_cast<uint8_t*>(Blizzard::Memory::Allocate(std::max(size_t(1), bytes.size()), 0, __FILE__, __LINE__));
+
+        if (!file->m_data) {
+            delete file;
+            SErrSetLastError(8);
+            return 0;
+        }
+
+        if (!bytes.empty()) {
+            std::memcpy(file->m_data, bytes.data(), bytes.size());
+        }
+
+        *result = file;
+        return 1;
+    }
+#endif
 
     if (CheckIfStreamingAndTrial() && System_SFile2::s_soundCacheArchive && Blizzard::String::FindI(name, ".wav", 0x7FFFFFFF)) {
         *result = new (0u, __FILE__, __LINE__) SFileImpl(3);
@@ -1255,24 +1362,45 @@ int32_t STORMAPI SFileOpenFile(const char* name, SFileImpl** result) {
 // VERIFY: 933721df auto
 // OFFSET: 0x004217A0
 int32_t STORMAPI SFile::FileIsLocal(const char* name, int32_t flags) {
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: Retail model files come from the local archives.
+    if (Retail::Source().Handles(name)) {
+        return 1;
+    }
+#endif
     return Blizzard::Mopaq::SFileFileIsLocal(name, flags);
 }
 
 // VERIFY: bc7e8291 auto
 // OFFSET: 0x004217C0
 int32_t STORMAPI SFile::FileIsLocal(SFileImpl* file, int32_t flags) {
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    if (file->m_type == 6) {
+        return 1;
+    }
+#endif
     return Blizzard::Mopaq::SFileFileIsLocal(file->m_file, flags);
 }
 
 // VERIFY: 06d4e040 auto
 // OFFSET: 0x00421800
 int32_t STORMAPI SFile::MakeFileLocal(const char* name, int32_t priority, bool wait) {
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    if (Retail::Source().Handles(name)) {
+        return 1;
+    }
+#endif
     return Blizzard::Mopaq::SFileMakeFileLocal(name, priority, wait);
 }
 
 // VERIFY: f939f7d6 auto
 // OFFSET: 0x00421820
 int32_t STORMAPI SFile::MakeFileLocal(SFileImpl* file, int32_t priority, bool wait) {
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    if (file->m_type == 6) {
+        return 1;
+    }
+#endif
     return Blizzard::Mopaq::SFileMakeFileLocal(file->m_file->GetPath(), priority, wait);
 }
 

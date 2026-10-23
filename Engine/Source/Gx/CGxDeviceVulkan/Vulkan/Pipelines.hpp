@@ -46,10 +46,14 @@ namespace gxvk::vk::pipelines
     constexpr uint32_t kTextureStages = 16;
 
     /// The constant register files of the translated interface: pixel c0..c15, vertex c0..c63 or
-    /// c0..c255 by the vertex record's `vconst`.
+    /// c0..c255 (c0..c511 with Retail models) by the vertex record's `vconst`.
     constexpr uint32_t kPixelRows       = 16;
     constexpr uint32_t kVertexRowsSmall = 64;
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    constexpr uint32_t kVertexRowsLarge = 512; // Retail bone palettes; 256-row modules read the front
+#else
     constexpr uint32_t kVertexRowsLarge = 256;
+#endif
 
     enum class VertexProgram : uint32_t
     {

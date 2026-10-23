@@ -54,6 +54,14 @@ if (WOWDECOMP_DISABLE_SIGNATURE_CHECKS)
     add_compile_definitions(DISABLE_SIGNATURE_CHECKS=1)
 endif ()
 
+# Off by default: loads Retail (MD21) models from the client's own archives, with their skins, .anim
+# and .skel files, preparing them in memory (Engine/Source/Retail, docs/retail-models.md). Also widens
+# the Vulkan vertex constant file for Retail bone palettes; translate shaders with --retail-palette.
+option(WOWDECOMP_RETAIL_MODELS "Load Retail (MD21) models, animations and skeletons from local files" OFF)
+if (WOWDECOMP_RETAIL_MODELS)
+    add_compile_definitions(WOWDECOMP_RETAIL_MODELS=1)
+endif ()
+
 # Third-party code is linked, not decompiled, for now.
 if (EXISTS ${CMAKE_SOURCE_DIR}/ThirdParty/CMakeLists.txt)
     add_subdirectory(ThirdParty)

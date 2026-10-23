@@ -364,6 +364,33 @@ class M2SkinProfile {
     /* 002C */ uint32_t m_boneCountMax;
 };
 
+// Not in the original: skins whose index list exceeds 65535 keep the high 16 bits of a section's
+// index start in the upper word of m_skinSectionId (the "level" field). Retail models use this.
+// `totalIndices` validates it; a start that does not fit falls back to the 16-bit value.
+inline uint32_t M2WideIndexStart(const M2SkinSection* section, uint32_t totalIndices) {
+#if !defined(WOWDECOMP_RETAIL_MODELS)
+    (void)totalIndices;
+    return section->m_indexStart;
+#else
+    uint32_t wide = (section->m_skinSectionId >> 16 << 16) | section->m_indexStart;
+
+    if (wide <= totalIndices && section->m_indexCount <= totalIndices - wide) {
+        return wide;
+    }
+
+    return section->m_indexStart;
+#endif
+}
+
+// The start CM2Shared::SetIndices wrote into its processed copy of a section (same encoding).
+inline uint32_t M2ProcessedIndexStart(const M2SkinSection* section) {
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    return (section->m_skinSectionId >> 16 << 16) | section->m_indexStart;
+#else
+    return section->m_indexStart;
+#endif
+}
+
 // OFFSET: [0x0081CD50]
 template <class T>
 inline T& M2Array<T>::operator[](uint32_t index) const {

@@ -123,7 +123,7 @@ void CM2SceneRender::SetupTextures() {
                 CShaderEffect::SetTexMtx_SphereMap(stage);
             }
 
-            shift -= 4;
+            if (shift >= 4) shift -= 4;
             i++;
         } while (i < count);
 
@@ -463,7 +463,7 @@ void CM2SceneRender::DrawBatch() {
 
     CGxBatch batch;
     batch.m_primType = GxPrim_Triangles;
-    batch.m_start = this->m_curSkinSection->m_indexStart;
+    batch.m_start = M2ProcessedIndexStart(this->m_curSkinSection);
     batch.m_count = this->m_curSkinSection->m_indexCount;
 
     if (CShaderEffect::s_enableShaders) {
@@ -609,7 +609,7 @@ void CM2SceneRender::DrawBatchDoodad(M2Element* elements, uint32_t* indices) {
 
     CGxBatch batch;
     batch.m_primType = GxPrim_Triangles;
-    batch.m_start = this->m_curSkinSection->m_indexStart;
+    batch.m_start = M2ProcessedIndexStart(this->m_curSkinSection);
     batch.m_count = 0;
     batch.m_minIndex = 0;
     batch.m_maxIndex = 0;

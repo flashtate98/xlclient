@@ -289,22 +289,22 @@ void CGxDeviceVulkan::IShaderFolder(char* folder, size_t size) {
 void CGxDeviceVulkan::IShaderConstantsFlush() {
     ShadowConstants& vs = CGxDevice::s_shadowConstants[1];
 
-    if (vs.dirtyMin <= vs.dirtyMax && vs.dirtyMax < 256) {
+    if (vs.dirtyMin <= vs.dirtyMax && vs.dirtyMax < ShadowConstants::Count) {
         memcpy(&this->m_vertexRegs[vs.dirtyMin * 4], &vs.constants[vs.dirtyMin * 4], (vs.dirtyMax - vs.dirtyMin + 1) * 4 * sizeof(float));
         g_stats.flushes++;
     }
 
-    vs.dirtyMin = 255;
+    vs.dirtyMin = ShadowConstants::Count - 1;
     vs.dirtyMax = 0;
 
     ShadowConstants& ps = CGxDevice::s_shadowConstants[0];
 
-    if (ps.dirtyMin <= ps.dirtyMax && ps.dirtyMax < 256) {
+    if (ps.dirtyMin <= ps.dirtyMax && ps.dirtyMax < ShadowConstants::Count) {
         memcpy(&this->m_pixelRegs[ps.dirtyMin * 4], &ps.constants[ps.dirtyMin * 4], (ps.dirtyMax - ps.dirtyMin + 1) * 4 * sizeof(float));
         g_stats.flushes++;
     }
 
-    ps.dirtyMin = 255;
+    ps.dirtyMin = ShadowConstants::Count - 1;
     ps.dirtyMax = 0;
 }
 
@@ -362,7 +362,8 @@ uint32_t CGxDeviceVulkan::IShaderPrograms(pipelines::Draw& draw) {
     if (vsTranslated) {
         draw.vertex = pipelines::VertexProgram::Translated;
         draw.vertexRecord = vs->record;
-        draw.vertexRows = vs->record->vconst == pipelines::kVertexRowsLarge ? pipelines::kVertexRowsLarge : pipelines::kVertexRowsSmall;
+        // A 256-row module (translated before the larger palette) reads the front of the larger slice.
+        draw.vertexRows = vs->record->vconst > pipelines::kVertexRowsSmall ? pipelines::kVertexRowsLarge : pipelines::kVertexRowsSmall;
     } else {
         draw.vertex = pipelines::VertexProgram::FixedFunctionSemantic;
 
