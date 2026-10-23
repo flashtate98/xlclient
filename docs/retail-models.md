@@ -32,26 +32,30 @@ sliders, the CDN downloader and the item importers are not included.
    textures. Keep them at their listfile paths.
 2. Put them in a patch MPQ or loose in `Data`. Point a CreatureModelData row (or any other model
    reference) at the `.m2` path as usual (`Creature\Foo\Foo.mdx` style works, as for stock models).
-3. Provide a listfile at `Data\Retail\listfile.csv` (beside the executable), rows
-   `FileDataID;path`. The community listfile works, but a trimmed one loads instantly:
+3. Give the client a FileDataID -> path table. Either works, and both can be present:
+   - **`TextureFilePath.db2` and `ModelFilePath.db2`** in `DBFilesClient` (loose or in an MPQ), the
+     tables WarcraftXL's wxl-db2 uses. If your client already has them, nothing else is needed. They
+     are read once at the first Retail reference and searched in place (WDC1 layout).
+   - **`Data\Retail\listfile.csv`** beside the executable, rows `FileDataID;path`. Its rows win
+     over the DB2 tables. The community listfile works; a trimmed one loads faster:
 
-   ```
-   python Tools/RetailModels/make_listfile.py --listfile community-listfile.csv --export <export folder> --out <client>\Data\Retail\listfile.csv
-   ```
+     ```
+     python Tools/RetailModels/make_listfile.py --listfile community-listfile.csv --export <export folder> --out <client>\Data\Retail\listfile.csv
+     ```
 
-   `WOW_RETAIL_LISTFILE` overrides the location.
+     `WOW_RETAIL_LISTFILE` overrides the location.
 
-### What needs the listfile
+### What needs a path table
 
 Inside an MD21 model every dependency is a FileDataID.
 
-| Reference | Without a listfile row |
+| Reference | Without a path table entry |
 |---|---|
 | Skins (`00.skin` ...) | Falls back to `<model name>00.skin` next to the model |
 | External animations | Falls back to `<model name><id>-<variation>.anim` next to the model |
 | The model's skeleton | Falls back to `<model name>.skel` next to the model |
-| Parent skeletons (SKPD) | **Needs the listfile** |
-| Textures | **Needs the listfile** (they are opened as `retail/<FileDataID>.blp`) |
+| Parent skeletons (SKPD) | **Needs an entry** |
+| Textures | **Needs an entry** (they are opened as `retail/<FileDataID>.blp`); a missing one draws green |
 
 A model is recognised by its header (`MD21`), whatever its path, so a stock 3.3.5 model with the
 same name keeps loading as before.
@@ -80,4 +84,5 @@ same name keeps loading as before.
 
 `Logs\RetailModels.log` names every file that failed and why ("FileDataID 123: cannot open ...",
 "Model needs its SKEL skeleton file", "Supported Retail M2 versions are 272-274", ...). The first
-line says how many listfile rows were loaded.
+lines say how many paths were loaded from listfile.csv and the FilePath DB2s. A reference that
+cannot be found is logged once with the FileDataID or the paths that were tried.

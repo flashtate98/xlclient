@@ -110,6 +110,95 @@ bool RawExists(const std::string& path) {
     return SFile::FileExistsEx(ArchivePath(path).c_str(), 0) != 0;
 }
 
+// FileDataID -> path tables shipped as DB2 (TextureFilePath.db2 / ModelFilePath.db2, the ones
+// WarcraftXL's wxl-db2 reads). WDC1 layout with one ID and one string field. The whole file stays
+// in memory and is searched in place; only the looked-up path becomes a std::string.
+struct PathTable {
+    std::vector<uint8_t> bytes;
+    size_t records = 0, recordSize = 0, idOffset = 0, pathOffset = 0, strings = 0, stringSize = 0, idList = 0;
+    uint32_t count = 0;
+    bool useIdList = false;
+    std::vector<std::pair<uint32_t, uint32_t>> sorted; // (id, record), only when the file is unsorted
+
+    uint32_t U32(size_t at) const {
+        uint32_t v;
+        std::memcpy(&v, bytes.data() + at, 4);
+        return v;
+    }
+
+    uint32_t IdAt(uint32_t i) const {
+        return useIdList ? U32(idList + size_t(i) * 4) : U32(records + size_t(i) * recordSize + idOffset);
+    }
+
+    bool Parse(std::string& error) {
+        const size_t header = 84;
+        if (bytes.size() < header || std::memcmp(bytes.data(), "WDC1", 4) != 0)
+            return Fail(error, "not a WDC1 table");
+        count = U32(4);
+        const uint32_t fields = U32(8), size = U32(12), stringTable = U32(16), copyTable = U32(40);
+        uint16_t flags, idIndex;
+        std::memcpy(&flags, bytes.data() + 44, 2);
+        std::memcpy(&idIndex, bytes.data() + 46, 2);
+        const uint32_t idListSize = U32(64);
+        if (fields < 1 || fields > 2 || size < 4 || (flags & 1) || copyTable)
+            return Fail(error, "unsupported layout (expected an ID and a path, no offset map or copy table)");
+        const size_t structures = header;
+        records = structures + size_t(fields) * 4;
+        recordSize = size;
+        strings = records + size_t(count) * size;
+        stringSize = stringTable;
+        if (strings + stringSize > bytes.size()) return Fail(error, "truncated");
+        useIdList = idListSize != 0;
+        if (useIdList) {
+            // IDs live in a list after the string table; the record holds only the path.
+            idList = strings + stringSize;
+            if (idListSize != count * 4 || idList + idListSize > bytes.size()) return Fail(error, "bad ID list");
+            pathOffset = 0;
+        } else {
+            if (fields != 2 || idIndex > 1) return Fail(error, "expected an inline ID field");
+            uint16_t offsets[2];
+            std::memcpy(&offsets[0], bytes.data() + structures + 2, 2);
+            std::memcpy(&offsets[1], bytes.data() + structures + 6, 2);
+            idOffset = offsets[idIndex];
+            pathOffset = offsets[idIndex ? 0 : 1];
+            if (idOffset + 4 > size || pathOffset + 4 > size) return Fail(error, "bad field offsets");
+        }
+        bool ordered = true;
+        for (uint32_t i = 1; i < count && ordered; ++i) ordered = IdAt(i - 1) < IdAt(i);
+        if (!ordered) {
+            sorted.reserve(count);
+            for (uint32_t i = 0; i < count; ++i) sorted.emplace_back(IdAt(i), i);
+            std::sort(sorted.begin(), sorted.end());
+        }
+        return true;
+    }
+
+    bool Find(uint32_t id, std::string& out) const {
+        if (!count) return false;
+        uint32_t record = 0;
+        if (sorted.empty()) {
+            uint32_t lo = 0, hi = count;
+            while (lo < hi) {
+                const uint32_t mid = lo + (hi - lo) / 2;
+                if (IdAt(mid) < id) lo = mid + 1; else hi = mid;
+            }
+            if (lo == count || IdAt(lo) != id) return false;
+            record = lo;
+        } else {
+            const auto it = std::lower_bound(sorted.begin(), sorted.end(), std::make_pair(id, 0u));
+            if (it == sorted.end() || it->first != id) return false;
+            record = it->second;
+        }
+        const uint32_t offset = U32(records + size_t(record) * recordSize + pathOffset);
+        if (offset >= stringSize) return false;
+        const char* text = reinterpret_cast<const char*>(bytes.data() + strings + offset);
+        const size_t length = strnlen(text, stringSize - offset);
+        if (!length || length == stringSize - offset) return false;
+        out = Normalize(std::string(text, length).c_str());
+        return true;
+    }
+};
+
 struct Model {
     std::vector<uint8_t> bytes;
     ModelFiles files;
@@ -129,8 +218,9 @@ struct Reference {
 
 struct LocalSource::Impl {
     std::mutex mutex;
-    bool listLoaded = false;
-    std::unordered_map<uint32_t, std::string> listfile;
+    std::once_flag tablesLoaded;
+    std::unordered_map<uint32_t, std::string> listfile;      // optional CSV, wins over the DB2 tables
+    PathTable texturePaths, modelPaths;
     std::unordered_map<std::string, bool> modelKinds;        // .m2 name -> header is MD21
     std::map<std::string, Reference> dependencies;           // published skin/anim names
     std::map<std::string, std::pair<std::shared_ptr<Model>, size_t>> models;
@@ -151,16 +241,33 @@ struct LocalSource::Impl {
         return std::filesystem::path("Data") / "Retail" / "listfile.csv";
     }
 
-    // Called with the mutex held. Loads once; a missing listfile leaves only the fallbacks.
+    // Loads the FileDataID tables once, without the mutex (the DB2s come from the archives).
+    void EnsureTables() {
+        std::call_once(tablesLoaded, [this] {
+            LoadListfile();
+            size_t rows = 0;
+            for (auto* table : {&texturePaths, &modelPaths}) {
+                const char* name = table == &texturePaths ? "DBFilesClient/TextureFilePath.db2" : "DBFilesClient/ModelFilePath.db2";
+                std::string error;
+                if (!RawRead(name, table->bytes, error)) continue;
+                if (!table->Parse(error)) {
+                    Blizzard::Log::Printf(1, kLog, "%s: %s; ignored\n", name, error.c_str());
+                    table->bytes.clear();
+                    table->count = 0;
+                    continue;
+                }
+                Blizzard::Log::Printf(1, kLog, "%s: %u paths\n", name, table->count);
+                rows += table->count;
+            }
+            if (listfile.empty() && !rows)
+                Blizzard::Log::Printf(1, kLog, "No listfile.csv and no TextureFilePath/ModelFilePath.db2: textures and parent skeletons cannot be resolved\n");
+        });
+    }
+
     void LoadListfile() {
-        if (listLoaded) return;
-        listLoaded = true;
         const auto path = ListfilePath();
         std::ifstream input(path);
-        if (!input) {
-            Blizzard::Log::Printf(1, kLog, "No listfile at %s: textures and parent skeletons cannot be resolved\n", path.string().c_str());
-            return;
-        }
+        if (!input) return;
         std::string line;
         size_t rows = 0;
         while (std::getline(input, line)) {
@@ -200,9 +307,10 @@ struct LocalSource::Impl {
     std::vector<std::string> Candidates(const Reference& ref) {
         std::vector<std::string> paths;
         if (ref.id) {
-            LoadListfile();
             const auto found = listfile.find(ref.id);
+            std::string path;
             if (found != listfile.end()) paths.push_back(found->second);
+            else if (texturePaths.Find(ref.id, path) || modelPaths.Find(ref.id, path)) paths.push_back(path);
         }
         if (!ref.path.empty() && std::find(paths.begin(), paths.end(), ref.path) == paths.end()) paths.push_back(ref.path);
         return paths;
@@ -215,8 +323,9 @@ struct LocalSource::Impl {
 
     // Called without the mutex: reads the archives.
     bool Fetch(const Reference& ref, std::vector<uint8_t>& bytes, std::string& error) {
+        EnsureTables();
         const auto paths = CandidatesLocked(ref);
-        if (paths.empty()) return Fail(error, "FileDataID " + std::to_string(ref.id) + " is not in the listfile");
+        if (paths.empty()) return Fail(error, "FileDataID " + std::to_string(ref.id) + " has no path in listfile.csv or the FilePath DB2s");
         std::string last;
         for (const auto& path : paths) {
             if (RawRead(path, bytes, last)) return true;
@@ -283,6 +392,7 @@ bool LocalSource::Handles(const char* name) {
 
 bool LocalSource::Exists(const char* name, std::string& error) {
     error.clear();
+    m_impl->EnsureTables();
     const auto key = Normalize(name);
     Reference ref;
     std::vector<std::string> paths;
@@ -297,7 +407,7 @@ bool LocalSource::Exists(const char* name, std::string& error) {
     // The engine checks existence before it opens, so a missing reference would otherwise fail
     // silently (a missing texture draws green). Name it in the log once.
     if (ref.id && paths.size() <= 1 && (paths.empty() || paths[0] == ref.path)) {
-        error = "FileDataID " + std::to_string(ref.id) + " is not in the listfile";
+        error = "FileDataID " + std::to_string(ref.id) + " has no path in listfile.csv or the FilePath DB2s";
     } else {
         error = "not found in the archives";
         for (const auto& path : paths) error += " | " + path;
@@ -311,6 +421,7 @@ bool LocalSource::Exists(const char* name, std::string& error) {
 }
 
 bool LocalSource::Size(const char* name, uint32_t& size) {
+    m_impl->EnsureTables();
     const auto key = Normalize(name);
     Reference ref;
     std::vector<std::string> paths;
