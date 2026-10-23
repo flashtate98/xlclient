@@ -11,6 +11,7 @@
 #include <fstream>
 #include <map>
 #include <mutex>
+#include <set>
 #include <unordered_map>
 #ifdef _WIN32
 #include <windows.h>
@@ -134,6 +135,7 @@ struct LocalSource::Impl {
     std::map<std::string, Reference> dependencies;           // published skin/anim names
     std::map<std::string, std::pair<std::shared_ptr<Model>, size_t>> models;
     std::map<std::string, uint32_t> preparedSizes;
+    std::set<std::string> reportedMissing;                   // logged once each
 
     static std::filesystem::path ListfilePath() {
         if (const char* env = std::getenv("WOW_RETAIL_LISTFILE"); env && *env) return env;
@@ -291,7 +293,21 @@ bool LocalSource::Exists(const char* name, std::string& error) {
         paths = m_impl->Candidates(ref);
     }
     for (const auto& path : paths) if (RawExists(path)) return true;
-    return Fail(error, "not found: " + key);
+
+    // The engine checks existence before it opens, so a missing reference would otherwise fail
+    // silently (a missing texture draws green). Name it in the log once.
+    if (ref.id && paths.size() <= 1 && (paths.empty() || paths[0] == ref.path)) {
+        error = "FileDataID " + std::to_string(ref.id) + " is not in the listfile";
+    } else {
+        error = "not found in the archives";
+        for (const auto& path : paths) error += " | " + path;
+    }
+
+    std::lock_guard<std::mutex> lock(m_impl->mutex);
+    if (m_impl->reportedMissing.insert(key).second) {
+        Blizzard::Log::Printf(1, kLog, "%s: %s\n", key.c_str(), error.c_str());
+    }
+    return false;
 }
 
 bool LocalSource::Size(const char* name, uint32_t& size) {
