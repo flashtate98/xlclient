@@ -16,7 +16,8 @@ namespace Retail::Appearance
 
     // A customization option of a model and the choices a new character of the class may take, in
     // OrderIndex order: NPC-only choices, Transmog placeholders and choices whose ChrCustomizationReq
-    // names other classes are left out (class 0: any class). Options without such choices are left out.
+    // names other classes are left out (class 0: any class), except that Demon Hunter choices are open
+    // to every class. Options without such choices are left out.
     struct Option {
         uint32_t id = 0;
         std::string name;              // "Skin Color", "Hair Style", ...

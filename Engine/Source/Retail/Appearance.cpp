@@ -115,7 +115,10 @@ bool CreationAllowed(const Index& x, const Row& choice, uint32_t classId) {
     if (x.requirement->Value(*requirement, "ReqType") != 3) return false;
     const uint32_t classes = x.requirement->Value(*requirement, "ClassMask");
     if (!classes || classes == 0xFFFFFFFFu || !classId || classId > 32) return true;
-    return (classes >> (classId - 1)) & 1;
+    // FlashWOW has no Demon Hunter class (12): its choices (horns, blindfolds, fel eyes, the extra
+    // skins and tattoos) are open to every class, on top of the class's own.
+    constexpr uint32_t kDemonHunter = 1u << (12 - 1);
+    return ((classes >> (classId - 1)) & 1) || (classes & kDemonHunter);
 }
 }
 
