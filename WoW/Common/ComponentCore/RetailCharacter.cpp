@@ -776,8 +776,24 @@ static bool SyncBodyModel(CCharacterComponent* character, const Look& look) {
     } else if (frame != s_bodyOwners.end()) {
         frame->second.first(frame->second.second, replacement);
     }
+    // The textures the component bound to the old body (skin sheet, hair, cape, ...) carry over by type,
+    // so the new body draws right before the next section pass. That pass is asked for directly: the swap
+    // can run inside a texture request (ProcessFinishedRequest), and SetDirtySections would cancel it
+    // under that pass's feet.
+    if (old->m_textures && replacement->m_shared->m_data) {
+        const auto& had = old->m_shared->m_data->m_textures;
+        const auto& wants = replacement->m_shared->m_data->m_textures;
+        for (uint32_t i = 0; i < wants.m_count; ++i) {
+            const uint32_t type = wants[i].m_type;
+            for (uint32_t j = 0; type && j < had.m_count; ++j)
+                if (had[j].m_type == type && old->m_textures[j]) {
+                    replacement->ReplaceTexture(type, old->m_textures[j]);
+                    break;
+                }
+        }
+    }
     character->m_flags |= 0x4;
-    character->SetDirtySections(0xFFFFFFFF);
+    character->m_dirtySections = 0xFFFFFFFF;
     s_swappingBody = false;
     Blizzard::Log::Printf(1, kLog, "Body swapped for %s: %s -> %s (%.1f ms)\n",
         unit ? "a unit" : frame != s_bodyOwners.end() ? "a model frame" : "a glue screen", from.c_str(), path.c_str(), Since(start));
