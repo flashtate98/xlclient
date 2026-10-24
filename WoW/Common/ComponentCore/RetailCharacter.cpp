@@ -16,9 +16,12 @@
 #include "WoW/Source/DB/Rec/ItemDisplayInfoRec.h"
 #include <deque>
 #include <charconv>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <algorithm>
 #include <map>
+#include <unordered_map>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -136,35 +139,6 @@ uint32_t StockValue(const CharacterPreferences& prefs, Stock stock) {
     }
 }
 
-// Every option takes its default choice, except the five the 3.3.5 selectors drive: there the
-// character's value picks the Nth choice (wrapping when the 3.3.5 range is longer).
-void ChoicesFor(uint32_t chrModel, const CharacterPreferences& prefs, std::vector<uint32_t>& choices) {
-    std::vector<Retail::Appearance::Option> options;
-    Retail::Appearance::Options(chrModel, prefs.m_classId, options);
-    std::vector<int32_t> driven(options.size(), -1);
-    for (const Stock stock : {Stock::Skin, Stock::Face, Stock::HairStyle, Stock::HairColor, Stock::Facial}) {
-        bool found = false;
-        for (const char* const* name = StockNames(stock, prefs.m_sexID); *name && !found; ++name)
-            for (size_t i = 0; i < options.size() && !found; ++i)
-                if (driven[i] < 0 && options[i].name == *name) {
-                    driven[i] = static_cast<int32_t>(stock);
-                    found = true;
-                }
-    }
-    // Options are taken in their OrderIndex order (Face before Skin Color), and a choice that asks for a
-    // choice of an earlier option is offered only when that choice was taken.
-    choices.clear();
-    std::vector<uint32_t> list;
-    for (size_t i = 0; i < options.size(); ++i) {
-        list.clear();
-        for (const uint32_t id : options[i].choices)
-            if (Retail::Appearance::RequirementsMet(id, choices)) list.push_back(id);
-        if (list.empty()) list = options[i].choices;
-        const uint32_t index = driven[i] < 0 ? 0 : StockValue(prefs, static_cast<Stock>(driven[i])) % list.size();
-        choices.push_back(list[index]);
-    }
-}
-
 // Composed looks and body sheets. They hold textures, so they are released at shutdown before the
 // texture system and the graphics device go (RetailCharacterShutdown), not by static destruction.
 std::map<std::string, std::shared_ptr<Look>> s_looks;
@@ -227,19 +201,87 @@ std::shared_ptr<Look> LookFor(uint32_t retailRace, uint32_t sex, uint32_t chrMod
     return look;
 }
 
-// The Retail look of a character with a Retail body, or null for stock bodies and unmapped races.
-std::shared_ptr<Look> RetailLook(CCharacterComponent* character) {
+// Choices of the options the 3.3.5 selectors do not drive, per character component, by option ID:
+// set by the character creation rows (RetailCustomizationCycle). An option without an entry, or whose
+// stored choice is not offered any more, takes its default choice.
+std::unordered_map<const CCharacterComponent*, std::map<uint32_t, uint32_t>> s_extraChoices;
+
+// One option as a character sees it: the choices offered given the class and the choices taken before
+// it, and the one taken.
+struct ResolvedOption {
+    uint32_t id = 0;
+    std::string name;
+    bool driven = false;            // by a 3.3.5 selector
+    std::vector<uint32_t> offered;
+    uint32_t index = 0;             // into offered
+};
+
+// The character's options in OrderIndex order (Face before Skin Color). The five the 3.3.5 selectors
+// drive take the Nth offered choice for the character's value (wrapping); the others take the stored
+// extra choice, or their first. A choice that asks for a choice of an earlier option is offered only
+// when that choice was taken.
+uint32_t Resolve(const CCharacterComponent* character, uint32_t chrModel, std::vector<ResolvedOption>& resolved,
+    std::vector<uint32_t>& choices) {
+    const auto& prefs = character->m_data.m_preferences;
+    std::vector<Retail::Appearance::Option> options;
+    Retail::Appearance::Options(chrModel, prefs.m_classId, options);
+    std::vector<int32_t> driven(options.size(), -1);
+    for (const Stock stock : {Stock::Skin, Stock::Face, Stock::HairStyle, Stock::HairColor, Stock::Facial}) {
+        bool found = false;
+        for (const char* const* name = StockNames(stock, prefs.m_sexID); *name && !found; ++name)
+            for (size_t i = 0; i < options.size() && !found; ++i)
+                if (driven[i] < 0 && options[i].name == *name) {
+                    driven[i] = static_cast<int32_t>(stock);
+                    found = true;
+                }
+    }
+    const auto extras = s_extraChoices.find(character);
+    resolved.clear();
+    choices.clear();
+    for (size_t i = 0; i < options.size(); ++i) {
+        ResolvedOption option;
+        option.id = options[i].id;
+        option.name = options[i].name;
+        option.driven = driven[i] >= 0;
+        for (const uint32_t id : options[i].choices)
+            if (Retail::Appearance::RequirementsMet(id, choices)) option.offered.push_back(id);
+        if (option.offered.empty()) option.offered = options[i].choices;
+        if (option.driven) {
+            option.index = StockValue(prefs, static_cast<Stock>(driven[i])) % option.offered.size();
+        } else if (extras != s_extraChoices.end()) {
+            const auto stored = extras->second.find(option.id);
+            if (stored != extras->second.end()) {
+                const auto at = std::find(option.offered.begin(), option.offered.end(), stored->second);
+                if (at != option.offered.end()) option.index = static_cast<uint32_t>(at - option.offered.begin());
+            }
+        }
+        choices.push_back(option.offered[option.index]);
+        resolved.push_back(std::move(option));
+    }
+    return chrModel;
+}
+
+// The character's Retail race and ChrModel, or 0 for stock bodies and unmapped races.
+uint32_t RetailModelOf(const CCharacterComponent* character, uint32_t& retailRace) {
     CM2Model* model = character->m_data.m_model;
-    if (!model || !model->m_shared || !Retail::Source().Handles(model->m_shared->m_fileName)) return nullptr;
+    if (!model || !model->m_shared || !Retail::Source().Handles(model->m_shared->m_fileName)) return 0;
     const auto& prefs = character->m_data.m_preferences;
     const auto& map = RaceMap();
     const auto race = map.find(prefs.m_raceID);
-    if (race == map.end()) return nullptr;
-    const uint32_t chrModel = Retail::Appearance::ChrModelFor(race->second, prefs.m_sexID);
+    if (race == map.end()) return 0;
+    retailRace = race->second;
+    return Retail::Appearance::ChrModelFor(race->second, prefs.m_sexID);
+}
+
+// The Retail look of a character with a Retail body, or null for stock bodies and unmapped races.
+std::shared_ptr<Look> RetailLook(CCharacterComponent* character) {
+    uint32_t retailRace = 0;
+    const uint32_t chrModel = RetailModelOf(character, retailRace);
     if (!chrModel) return nullptr;
+    std::vector<ResolvedOption> resolved;
     std::vector<uint32_t> choices;
-    ChoicesFor(chrModel, prefs, choices);
-    return LookFor(race->second, prefs.m_sexID, chrModel, choices);
+    Resolve(character, chrModel, resolved, choices);
+    return LookFor(retailRace, character->m_data.m_preferences.m_sexID, chrModel, choices);
 }
 
 // One equipped item texture in a body section, in the stock compositor's order (Esteria's
@@ -292,6 +334,53 @@ bool RetailCharacterTextures(CCharacterComponent* character) {
     if (!look) return false;
     for (const auto& texture : look->textures) character->m_data.m_model->ReplaceTexture(texture.first, texture.second);
     return true;
+}
+
+bool RetailCustomizationOptions(const CCharacterComponent* character, std::vector<RetailCustomizationOption>& options) {
+    options.clear();
+    uint32_t retailRace = 0;
+    const uint32_t chrModel = RetailModelOf(character, retailRace);
+    if (!chrModel) return false;
+    std::vector<ResolvedOption> resolved;
+    std::vector<uint32_t> choices;
+    Resolve(character, chrModel, resolved, choices);
+    for (const auto& option : resolved)
+        if (!option.driven) options.push_back({option.name, option.index, static_cast<uint32_t>(option.offered.size())});
+    return true;
+}
+
+bool RetailCustomizationCycle(CCharacterComponent* character, uint32_t index, int32_t delta, bool randomize) {
+    uint32_t retailRace = 0;
+    const uint32_t chrModel = RetailModelOf(character, retailRace);
+    if (!chrModel) return false;
+    std::vector<ResolvedOption> resolved;
+    std::vector<uint32_t> choices;
+    Resolve(character, chrModel, resolved, choices);
+    uint32_t extra = 0;
+    bool changed = false;
+    for (const auto& option : resolved) {
+        if (option.driven) continue;
+        const uint32_t count = static_cast<uint32_t>(option.offered.size());
+        if (randomize) {
+            s_extraChoices[character][option.id] = option.offered[static_cast<uint32_t>(std::rand()) % count];
+            changed = true;
+        } else if (extra == index) {
+            const int32_t next = ((static_cast<int32_t>(option.index) + delta) % static_cast<int32_t>(count) + static_cast<int32_t>(count)) % static_cast<int32_t>(count);
+            s_extraChoices[character][option.id] = option.offered[static_cast<uint32_t>(next)];
+            changed = true;
+        }
+        ++extra;
+    }
+    if (!changed) return false;
+    // Geosets, then the hair/eye textures, then the body sheet on the next section pass.
+    character->m_flags |= 0x4;
+    character->SetDirtySections(0xFFFFFFFF);
+    RetailCharacterTextures(character);
+    return true;
+}
+
+void RetailCustomizationForget(const CCharacterComponent* character) {
+    s_extraChoices.erase(character);
 }
 
 void RetailCharacterShutdown() {

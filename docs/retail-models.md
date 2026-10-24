@@ -141,3 +141,17 @@ left half being the 3.3.5 body sections at twice the size and its right half the
 eyes and the other types at the size of their first layer. Equipped items keep their 3.3.5 section
 textures, stretched over the matching Retail sections. `Logs\RetailCharacter.log` lists the
 textures each look composed and any file that could not be read.
+
+## Retail customization rows
+
+The Retail options the 3.3.5 selectors do not drive (Eyebrows, Ears, Eye Color, Mustache, Piercings,
+...) can be set on the character being created, from Lua in GlueXML:
+
+- `GetRetailCustomizationCount()` -> the number of rows (0 when the body is not a Retail model)
+- `GetRetailCustomizationInfo(index)` -> name, current choice, number of choices (1-based)
+- `CycleRetailCustomization(index, delta)` -> steps the row, wrapping
+- `RandomizeCharCustomization()` also randomizes the rows.
+
+The rows follow the character's race, sex and class, and a row only offers choices the other choices
+allow. The console command `retailCustomize` lists them; `retailCustomize <row> <delta>` steps one.
+The choices are kept on the client only for now; they are not yet sent to the server.

@@ -9,6 +9,13 @@
 #include "Engine/Source/lua-5.1/src/lua.h"
 #include "Engine/Source/Storm/H/storm.h"
 #include "WoW/Common/ComponentCore/CharacterComponent.h"
+#if defined(WOWDECOMP_RETAIL_MODELS)
+#include "WoW/Common/ComponentCore/RetailCharacter.h"
+#include "Engine/Source/ConsoleBase/IConsole.h"
+#include "WoW/Source/Glue/CGlueLoading.h"
+#include <cstdlib>
+#include <vector>
+#endif
 #include "WoW/Source/DB/DBClient/DBClient.h"
 #include "WoW/Source/DB/Rec/ChrClassesRec.h"
 #include "WoW/Source/DB/Rec/ChrRacesRec.h"
@@ -506,8 +513,92 @@ static int32_t Script_SetSelectedClass(lua_State* L) {
 // OFFSET: 0x004E1B60
 static int32_t Script_RandomizeCharCustomization(lua_State* L) {
     CCharacterCreation::RandomizeCharCustomization();
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: the Retail rows are randomized with the stock selectors.
+    if (CCharacterCreation::m_character && RetailCustomizationCycle(CCharacterCreation::m_character, 0, 0, true)) {
+        CGlueLoading::StartLoad(CCharacterCreation::m_character, 1);
+    }
+#endif
     return 0;
 }
+
+#if defined(WOWDECOMP_RETAIL_MODELS)
+// Not in the original: the Retail customization rows of the character being created (the options the
+// 3.3.5 selectors do not drive). Indexes are 1-based, as in the stock customization functions.
+
+// GetRetailCustomizationCount() -> number of rows (0 for stock bodies)
+static int32_t Script_GetRetailCustomizationCount(lua_State* L) {
+    std::vector<RetailCustomizationOption> options;
+    if (CCharacterCreation::m_character) RetailCustomizationOptions(CCharacterCreation::m_character, options);
+    lua_pushnumber(L, static_cast<double>(options.size()));
+    return 1;
+}
+
+// GetRetailCustomizationInfo(index) -> name, choice (1-based), choiceCount
+static int32_t Script_GetRetailCustomizationInfo(lua_State* L) {
+    if (!lua_isnumber(L, 1)) {
+        luaL_error(L, "Usage: GetRetailCustomizationInfo(index)");
+        return 0;
+    }
+    std::vector<RetailCustomizationOption> options;
+    if (CCharacterCreation::m_character) RetailCustomizationOptions(CCharacterCreation::m_character, options);
+    const int32_t index = static_cast<int32_t>(lua_tonumber(L, 1)) - 1;
+    if (index < 0 || index >= static_cast<int32_t>(options.size())) {
+        return 0;
+    }
+    lua_pushstring(L, options[index].name.c_str());
+    lua_pushnumber(L, static_cast<double>(options[index].index + 1));
+    lua_pushnumber(L, static_cast<double>(options[index].count));
+    return 3;
+}
+
+// CycleRetailCustomization(index, delta)
+static int32_t Script_CycleRetailCustomization(lua_State* L) {
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) {
+        luaL_error(L, "Usage: CycleRetailCustomization(index, delta)");
+        return 0;
+    }
+    const int32_t index = static_cast<int32_t>(lua_tonumber(L, 1)) - 1;
+    const int32_t delta = static_cast<int32_t>(lua_tonumber(L, 2));
+    if (CCharacterCreation::m_character && index >= 0 && delta &&
+        RetailCustomizationCycle(CCharacterCreation::m_character, static_cast<uint32_t>(index), delta)) {
+        CGlueLoading::StartLoad(CCharacterCreation::m_character, 1);
+    }
+    return 0;
+}
+
+static FrameScript_Method s_retailScriptFunctions[] = {
+    { "GetRetailCustomizationCount", &Script_GetRetailCustomizationCount },
+    { "GetRetailCustomizationInfo", &Script_GetRetailCustomizationInfo },
+    { "CycleRetailCustomization", &Script_CycleRetailCustomization },
+};
+
+// Console command "retailCustomize": lists the rows; "retailCustomize <row> <delta>" steps one (for testing
+// before the create screen has the rows).
+int32_t CCommand_RetailCustomize(const char* command, const char* arguments) {
+    CCharacterComponent* character = CCharacterCreation::m_character;
+    if (!character) {
+        ConsolePrintf("No character is being created.");
+        return 1;
+    }
+    char* end = nullptr;
+    const long row = arguments ? std::strtol(arguments, &end, 10) : 0;
+    const long delta = end ? std::strtol(end, nullptr, 10) : 0;
+    if (row > 0 && delta && RetailCustomizationCycle(character, static_cast<uint32_t>(row - 1), static_cast<int32_t>(delta))) {
+        CGlueLoading::StartLoad(character, 1);
+    }
+    std::vector<RetailCustomizationOption> options;
+    if (!RetailCustomizationOptions(character, options)) {
+        ConsolePrintf("The character does not have a Retail body.");
+        return 1;
+    }
+    for (size_t i = 0; i < options.size(); ++i) {
+        ConsolePrintf("%u. %s: %u of %u", static_cast<unsigned>(i + 1), options[i].name.c_str(),
+            static_cast<unsigned>(options[i].index + 1), static_cast<unsigned>(options[i].count));
+    }
+    return 1;
+}
+#endif
 
 // VERIFY: d87303ff auto
 // OFFSET: 0x004E1B70
@@ -610,6 +701,11 @@ void CharacterCreateRegisterScriptFunctions() {
     for (uint32_t i = 0; i < sizeof(s_scriptFunctions) / sizeof(s_scriptFunctions[0]); i++) {
         FrameScript_RegisterFunction(s_scriptFunctions[i].m_name, s_scriptFunctions[i].m_method);
     }
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    for (const auto& function : s_retailScriptFunctions) {
+        FrameScript_RegisterFunction(function.m_name, function.m_method);
+    }
+#endif
 }
 
 // VERIFY: 50e76597 auto
@@ -618,4 +714,9 @@ void CharacterCreateUnregisterScriptFunctions() {
     for (uint32_t i = 0; i < sizeof(s_scriptFunctions) / sizeof(s_scriptFunctions[0]); i++) {
         FrameScript_UnregisterFunction(s_scriptFunctions[i].m_name);
     }
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    for (const auto& function : s_retailScriptFunctions) {
+        FrameScript_UnregisterFunction(function.m_name);
+    }
+#endif
 }

@@ -1,6 +1,10 @@
 #ifndef WOW_COMMON_COMPONENTCORE_RETAILCHARACTER_H
 #define WOW_COMMON_COMPONENTCORE_RETAILCHARACTER_H
 
+#include <cstdint>
+#include <string>
+#include <vector>
+
 class CCharacterComponent;
 
 // Not in the original: characters whose body is a Retail (MD21) model take their geosets from the
@@ -31,6 +35,22 @@ bool RetailCharacterTextures(CCharacterComponent* character);
 // textures stretched over the matching Retail sections. Called after the stock section pass, before
 // its temporary item textures are released. Does nothing for stock bodies.
 void RetailCharacterBody(CCharacterComponent* character);
+
+// The Retail options of a character that the 3.3.5 selectors do not drive (Eyebrows, Ears, Eye Color,
+// ...), in OrderIndex order, with the choices its class and other choices allow. False for stock bodies.
+struct RetailCustomizationOption {
+    std::string name;
+    uint32_t index;   // the choice taken, 0-based
+    uint32_t count;   // the choices offered
+};
+bool RetailCustomizationOptions(const CCharacterComponent* character, std::vector<RetailCustomizationOption>& options);
+
+// Steps option `index` (0-based, as listed above) by `delta` choices, wrapping, or with `randomize` picks
+// a random choice for every listed option; then refreshes geosets and textures. False for stock bodies.
+bool RetailCustomizationCycle(CCharacterComponent* character, uint32_t index, int32_t delta, bool randomize = false);
+
+// Drops the stored choices of a component that is going away.
+void RetailCustomizationForget(const CCharacterComponent* character);
 
 // Releases every composed texture. Called at shutdown before TextureDestroy: textures still held at
 // process exit would be freed after the graphics device is gone.

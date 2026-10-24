@@ -7,6 +7,7 @@
 #if defined(WOWDECOMP_RETAIL_MODELS)
 #include "Engine/Source/Retail/Tables.h"
 #include "WoW/Common/ComponentCore/RetailCharacter.h"
+#include "WoW/Source/Glue/CharacterCreation.h"
 #endif
 #include "Engine/Source/Base/Base.h"
 #include "Engine/Source/Base/CmdLine.h"
@@ -1757,6 +1758,7 @@ bool InitializeGlobal() {
 #if defined(WOWDECOMP_RETAIL_MODELS)
     // Not in the original: loads the Retail customization DB2s and reports what loaded.
     ConsoleCommandRegister("retailTables", Retail::Db2::tables::CCommand_RetailTables, CATEGORY_DEBUG, "Load the Retail customization tables and list them");
+    ConsoleCommandRegister("retailCustomize", CCommand_RetailCustomize, CATEGORY_DEBUG, "List the Retail customization rows, or step one: retailCustomize <row> <delta>");
 #endif
 
     s_timeTestError = OsTimeGetTestError();

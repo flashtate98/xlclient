@@ -57,5 +57,9 @@ class CCharacterCreation {
 bool IsRaceClassValid(int32_t raceID, int32_t classID);
 void CharacterCreateRegisterScriptFunctions();
 void CharacterCreateUnregisterScriptFunctions();
+#if defined(WOWDECOMP_RETAIL_MODELS)
+// Not in the original: console command "retailCustomize" (lists or steps the Retail customization rows).
+int32_t CCommand_RetailCustomize(const char* command, const char* arguments);
+#endif
 
 #endif
