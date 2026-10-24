@@ -86,3 +86,20 @@ same name keeps loading as before.
 "Model needs its SKEL skeleton file", "Supported Retail M2 versions are 272-274", ...). The first
 lines say how many paths were loaded from listfile.csv and the FilePath DB2s. A reference that
 cannot be found is logged once with the FileDataID or the paths that were tried.
+
+## Retail customization tables
+
+The same build option adds a reader for the Retail customization DB2s (WDC5, from the Esteria fork,
+itself derived from WarcraftXL wxl-db2). Put these in `DBFilesClient` (loose or in a patch MPQ),
+named as in Retail:
+
+`chrracexchrmodel.db2`, `chrmodel.db2`, `chrcustomizationoption.db2`, `chrcustomizationchoice.db2`,
+`chrcustomizationelement.db2`, `chrcustomizationgeoset.db2`, `chrcustomizationskinnedmodel.db2`,
+`chrcustomizationmaterial.db2`, `chrcustomizationcondmodel.db2`, `charcomponenttexturelayouts.db2`,
+`charcomponenttexturesections.db2`, `chrmodeltexturelayer.db2`, `creaturedisplayinfo.db2`,
+`creaturemodeldata.db2`, `creaturedisplayinfogeosetdata.db2`, `texturefiledata.db2`.
+
+They must come from Retail 12.1.5 (`WOWSTATIC_12_1_5_70077`): each table's layout hash is checked,
+and a table from another build is refused rather than misread. They load on first use; the console
+command `retailTables` loads them on demand and lists the row counts. `Logs\RetailTables.log` has
+each table's rows, load time, or error.

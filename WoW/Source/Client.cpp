@@ -4,6 +4,9 @@
 #include <cstring>
 #include "Client.h"
 #include "WarcraftXL/Seams.h"
+#if defined(WOWDECOMP_RETAIL_MODELS)
+#include "Engine/Source/Retail/Tables.h"
+#endif
 #include "Engine/Source/Base/Base.h"
 #include "Engine/Source/Base/CmdLine.h"
 #include "Engine/Source/BlizzardCore/OggDecompress.h"
@@ -1746,6 +1749,10 @@ bool InitializeGlobal() {
     CVar* timingMethod = CVar::Register("timingMethod", "Desired method for game timing", 2, "0", TimingMethodCallback, CATEGORY_DEFAULT, false, timingTestError, false);
     OsTimeStartup(static_cast<OsTimeManager::TimingMethod>(timingMethod->m_intValue));
     ConsoleCommandRegister("timingInfo", CCommand_TimingInfo, CATEGORY_DEBUG, nullptr);
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: loads the Retail customization DB2s and reports what loaded.
+    ConsoleCommandRegister("retailTables", Retail::Db2::tables::CCommand_RetailTables, CATEGORY_DEBUG, "Load the Retail customization tables and list them");
+#endif
 
     s_timeTestError = OsTimeGetTestError();
 

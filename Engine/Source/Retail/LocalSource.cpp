@@ -368,6 +368,10 @@ struct LocalSource::Impl {
     }
 };
 
+bool ReadArchiveFile(const char* path, std::vector<uint8_t>& bytes, std::string& error) {
+    return RawRead(path ? path : "", bytes, error);
+}
+
 LocalSource::LocalSource() : m_impl(new Impl) {}
 LocalSource::~LocalSource() = default;
 

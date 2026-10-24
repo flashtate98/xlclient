@@ -43,6 +43,10 @@ private:
 };
 
 LocalSource& Source();
+
+// Reads a whole file through the client's normal lookup order (loose files, then patch MPQs),
+// bypassing the Retail model hooks. Used for the Retail DB2 tables.
+bool ReadArchiveFile(const char* path, std::vector<uint8_t>& bytes, std::string& error);
 inline LocalSource& SourceForPath(const char*) { return Source(); }
 
 }
