@@ -100,6 +100,7 @@ struct Look {
     std::vector<uint16_t> geosets;           // chosen, then the anatomy defaults
     std::vector<Retail::Appearance::TextureSection> sections;
     std::shared_ptr<const Retail::Image> body;                      // the composed skin sheet (type 1)
+    std::string bodyKey;                                             // its layers (shared by looks)
     std::map<uint32_t, std::shared_ptr<OwnedTexture>> textures;     // every other type (hair, eyes, ...)
 };
 
@@ -241,6 +242,7 @@ std::shared_ptr<Look> LookFor(uint32_t retailRace, uint32_t sex, uint32_t chrMod
             typeKey += ":" + std::to_string(layer.fileDataId) + "." + std::to_string(layer.blendMode) + "." + std::to_string(layer.sectionMask);
         if (type.first == 1) {
             const auto cached = s_composedBodies.find(typeKey);
+            look->bodyKey = typeKey;
             if (cached != s_composedBodies.end()) { look->body = cached->second; ++reused; continue; }
         } else {
             const auto cached = s_composedTextures.find(typeKey);
@@ -605,7 +607,9 @@ void RetailCharacterBody(CCharacterComponent* character) {
     // The 3.3.5 item section grid is the left half of the Retail sheet at twice the size, in the same
     // section order, so each equipped item texture is stretched over its section's rectangle.
     const auto layers = CollectEquipmentLayers(character, (character->m_flags & 0x20) != 0);
-    std::string name = "Retail\\Character\\" + look.key + "\\body";
+    // Named by the skin layers rather than every choice: a new hairstyle or ears keep the same equipped sheet.
+    std::string name = "Retail\\Character\\" + std::to_string(look.chrModel) + "\\" +
+        std::to_string(std::hash<std::string>{}(look.bodyKey)) + "\\body";
     for (const auto& layer : layers) {
         name += "/" + std::to_string(layer.section) + "." + std::to_string(layer.layer) + "." + std::to_string(layer.displayId);
         // Guild tabard layers have display ID zero; their file names tell the emblems and colours apart.
