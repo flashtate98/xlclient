@@ -646,6 +646,22 @@ void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
     if (!model) return;
     model->SetGeometryVisible(1701, 1799, 0);
 
+    // Feet. Retail bodies have a bare foot with toes (2001) and a closed shoe (2002) as separate meshes;
+    // the 3.3.5 boot texture painted on the bare foot showed the toes. With boots on, only the shoe shows
+    // (Esteria's ApplyLegacyFootGeometry). Hoofed races (Tauren, Draenei) keep their feet.
+    const uint32_t race = character->m_data.m_preferences.m_raceID;
+    if (race != 6 && race != 11) {
+        bool hasShoe = false;
+        if ((model->m_fFlags & 1) && model->m_shared && model->m_shared->m_skinData) {
+            const auto& sections = model->m_shared->m_skinData->m_skinSections;
+            for (uint32_t i = 0; i < sections.m_count && !hasShoe; ++i)
+                hasShoe = (sections[i].m_skinSectionId & 0xFFFF) == 2002;
+        }
+        const bool shoe = hasShoe && character->m_itemDisplayID[ITEMSLOT_BOOTS] != 0;
+        model->SetGeometryVisible(2001, 2099, 0);
+        model->SetGeometryVisible(shoe ? 2002 : 2001, shoe ? 2002 : 2001, 1);
+    }
+
     // Helmet hides. AddHelm writes them into the 3.3.5 selector values, which the Retail geometry does
     // not read, so the chosen hair and beard showed through. HelmetGeosetVisData slots 0-6 cover geoset
     // groups 0 (hair), 1-3 (facial hair), 7 (ears), 16 and 17, per race bit, as in the stock AddHelm. On
