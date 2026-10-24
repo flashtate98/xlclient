@@ -19,6 +19,10 @@
 #include "WoW/Source/Magic/MagicClient/Spell_C.h"
 #include "Engine/Source/Model2/M2Model.h"
 #include "WoW/Source/Net/Types.h"
+#if defined(WOWDECOMP_RETAIL_MODELS)
+#include "WoW/Common/ComponentCore/RetailCharacter.h"
+#include "WoW/Source/RetailCustomizationNet.h"
+#endif
 
 // STATIC: 0x00BD19B8
 uint8_t CGBarberShop::m_barberShopEnabled;
@@ -379,6 +383,10 @@ void CGBarberShop::ResetAppearance() {
     component->SetHairColor(player->m_player->m_playerBytes[3], true, nullptr);
     component->SetBeardStyle(player->m_player->m_playerBytes2[0], true, nullptr);
     component->SetSkinColor(player->m_player->m_playerBytes[0], true, true, nullptr);
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: back to the character's stored Retail rows too.
+    RetailCustomizationDiscard(component);
+#endif
     component->m_data.m_model->IsDrawable(1, 1);
 }
 
@@ -530,7 +538,12 @@ void CGBarberShop::ApplyAppearanceChange() {
         return;
     }
 
-    if (player->m_player->m_playerBytes[3] == component->m_data.m_preferences.m_hairColorId && player->m_player->m_playerBytes[2] == CGBarberShop::m_currentHairStyle->m_rec->m_data && player->m_player->m_playerBytes2[0] == CGBarberShop::m_currentFacialHair->m_rec->m_data && (!CGBarberShop::m_currentSkinColor || player->m_player->m_playerBytes[0] == CGBarberShop::m_currentSkinColor->m_rec->m_data)) {
+    if (player->m_player->m_playerBytes[3] == component->m_data.m_preferences.m_hairColorId && player->m_player->m_playerBytes[2] == CGBarberShop::m_currentHairStyle->m_rec->m_data && player->m_player->m_playerBytes2[0] == CGBarberShop::m_currentFacialHair->m_rec->m_data && (!CGBarberShop::m_currentSkinColor || player->m_player->m_playerBytes[0] == CGBarberShop::m_currentSkinColor->m_rec->m_data)
+#if defined(WOWDECOMP_RETAIL_MODELS)
+        // Not in the original: a visit that only changes Retail rows is still a change.
+        && !RetailCustomizationEdited(component)
+#endif
+        ) {
         return;
     }
 
@@ -553,6 +566,10 @@ void CGBarberShop::ApplyAppearanceChange() {
         msg.Put(static_cast<uint32_t>(0));
     }
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: the Retail rows, stored by the server when the visit succeeds.
+    RetailCustomizationNetAppendChoices(msg, component);
+#endif
     msg.Finalize();
     ClientServices::SendPacket(&msg);
 }

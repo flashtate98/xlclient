@@ -46,8 +46,12 @@ void RetailCustomizationNetInitialize() {
 }
 
 void RetailCustomizationNetAppendCreate(CDataStore& msg) {
+    RetailCustomizationNetAppendChoices(msg, CCharacterCreation::m_character);
+}
+
+void RetailCustomizationNetAppendChoices(CDataStore& msg, const CCharacterComponent* character) {
     RetailChoiceList choices;
-    if (!CCharacterCreation::m_character || !RetailCustomizationChoices(CCharacterCreation::m_character, choices) || choices.empty()) return;
+    if (!character || !RetailCustomizationChoices(character, choices) || choices.empty()) return;
     if (choices.size() > kMaxChoices) choices.resize(kMaxChoices);
     msg.Put(kMagic);
     msg.Put(static_cast<uint8_t>(choices.size()));

@@ -377,6 +377,11 @@ bool RetailCustomizationCycle(CCharacterComponent* character, uint32_t index, in
     uint32_t retailRace = 0;
     const uint32_t chrModel = RetailModelOf(character, retailRace);
     if (!chrModel) return false;
+    // A bound character (the barber shop) starts its edits from its stored choices, so the options it
+    // does not touch keep them.
+    if (!s_extraChoices.count(character)) {
+        if (const auto* stored = ExtraChoicesOf(character)) s_extraChoices[character] = *stored;
+    }
     std::vector<ResolvedOption> resolved;
     std::vector<uint32_t> choices;
     Resolve(character, chrModel, resolved, choices);
@@ -398,6 +403,24 @@ bool RetailCustomizationCycle(CCharacterComponent* character, uint32_t index, in
     if (!changed) return false;
     Refresh(character);
     return true;
+}
+
+bool RetailCustomizationEdited(const CCharacterComponent* character) {
+    const auto extras = s_extraChoices.find(character);
+    if (extras == s_extraChoices.end()) return false;
+    RetailChoiceList edited, stored;
+    RetailCustomizationChoices(character, edited);
+    const auto saved = std::move(extras->second);
+    s_extraChoices.erase(extras);
+    RetailCustomizationChoices(character, stored);
+    s_extraChoices[character] = saved;
+    return edited != stored;
+}
+
+void RetailCustomizationDiscard(CCharacterComponent* character) {
+    if (!s_extraChoices.erase(character)) return;
+    uint32_t retailRace = 0;
+    if (RetailModelOf(character, retailRace)) Refresh(character);
 }
 
 void RetailCustomizationTakeExtras(const CCharacterComponent* character, RetailCustomizationExtras& extras) {
