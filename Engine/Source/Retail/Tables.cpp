@@ -217,13 +217,22 @@ constexpr Definition kChrCustomizationReqChoice{
     kChrCustomizationReqChoiceFields, kChrCustomizationReqChoiceRelations,
 };
 
+// A face's bone adjustments: a .bone file (per-bone matrices) for the model it was made for.
+constexpr Field kChrCustomizationBoneSetFields[] = {
+    { "BoneFileDataID" }, { "ModelFileDataID" },
+};
+constexpr Definition kChrCustomizationBoneSet{
+    "chrcustomizationboneset", "DBFilesClient\\chrcustomizationboneset.db2", 0xCC2CFF6Eu,
+    kChrCustomizationBoneSetFields,
+};
+
 constexpr Definition kDefinitions[] = {
     kChrRaceXChrModel, kChrModel, kChrCustomizationOption, kChrCustomizationChoice,
     kChrCustomizationElement, kChrCustomizationGeoset, kChrCustomizationSkinnedModel,
     kChrCustomizationMaterial, kChrCustomizationCondModel, kCharComponentTextureLayouts,
     kChrModelTextureLayer, kCreatureDisplayInfo, kCreatureModelData, kCreatureDisplayInfoGeosetData,
     kCharComponentTextureSections, kTextureFileData, kChrCustomizationReq,
-    kChrCustomizationReqChoice,
+    kChrCustomizationReqChoice, kChrCustomizationBoneSet,
 };
 constexpr size_t kCount = sizeof(kDefinitions) / sizeof(kDefinitions[0]);
 

@@ -36,6 +36,8 @@ public:
     bool Size(const char* name, uint32_t& size);
     // The raw bytes of a file by FileDataID (listfile.csv or the FilePath DB2s, then the archives).
     bool ReadFileDataId(uint32_t id, std::vector<uint8_t>& bytes, std::string& error);
+    // The normalised archive path a FileDataID resolves to (listfile.csv or the FilePath DB2s).
+    bool PathOf(uint32_t id, std::string& path);
     // Drops the published dependency names once the last CM2Shared using the model goes away.
     void ReleaseModel(const char* name);
 

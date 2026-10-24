@@ -1,6 +1,8 @@
 #ifndef ENGINE_SOURCE_MODEL2_M2MODEL_H
 #define ENGINE_SOURCE_MODEL2_M2MODEL_H
 
+#include <utility>
+#include <vector>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -342,6 +344,10 @@ class CM2Model {
     // model is not loaded or the rigs do not match. Null unbinds.
     bool SetSkinParent(CM2Model* parent);
     bool HasSkinParent(const CM2Model* parent) const;
+    // Not in the original: per-bone shape adjustments (Retail .bone files: a face's brow, cheeks, jaw,
+    // ...). Each matrix applies in its bone's frame, around the bone's pivot, before the animated
+    // bone matrix, after every animation step. An empty list clears them.
+    void SetBoneAdjustments(const std::vector<std::pair<uint16_t, C44Matrix>>& adjustments);
 #endif
     void ReplaceTexture(uint32_t type, CTexture* texture);
     void SetAnimating(int32_t animating);

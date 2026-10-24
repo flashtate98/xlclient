@@ -550,6 +550,18 @@ bool LocalSource::ReadFileDataId(uint32_t id, std::vector<uint8_t>& bytes, std::
     return id && m_impl->Fetch(ref, bytes, error);
 }
 
+bool LocalSource::PathOf(uint32_t id, std::string& path) {
+    path.clear();
+    if (!id) return false;
+    m_impl->EnsureTables();
+    Reference ref;
+    ref.id = id;
+    const auto paths = m_impl->CandidatesLocked(ref);
+    if (paths.empty()) return false;
+    path = paths.front();
+    return true;
+}
+
 void LocalSource::ReleaseModel(const char* name) {
     const auto key = Normalize(name);
     std::lock_guard<std::mutex> lock(m_impl->mutex);

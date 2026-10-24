@@ -22,6 +22,7 @@
 #include "WoW/Source/DB/Rec/HelmetGeosetVisDataRec.h"
 #include <deque>
 #include <cctype>
+#include <cstring>
 #include <cmath>
 #include <sstream>
 #include <charconv>
@@ -104,6 +105,7 @@ struct Look {
     std::vector<uint16_t> geosets;           // chosen, then the anatomy defaults
     std::vector<Retail::Appearance::TextureSection> sections;
     std::vector<Retail::Appearance::SkinnedModel> parts;            // collection models (horns, ...)
+    std::vector<Retail::Appearance::BoneSet> boneSets;              // face shapes (.bone files)
     std::shared_ptr<const Retail::Image> body;                      // the composed skin sheet (type 1)
     std::string bodyKey;                                             // its layers (shared by looks)
     std::map<uint32_t, std::shared_ptr<OwnedTexture>> textures;     // every other type (hair, eyes, ...)
@@ -234,6 +236,7 @@ std::shared_ptr<Look> LookFor(uint32_t retailRace, uint32_t sex, uint32_t chrMod
     look->geosets.insert(look->geosets.end(), defaults.begin(), defaults.end());
     Retail::Appearance::Sections(Retail::Appearance::LayoutFor(chrModel), look->sections);
     Retail::Appearance::SkinnedModels(chrModel, choices, look->parts);
+    Retail::Appearance::BoneSets(chrModel, choices, look->boneSets);
     Retail::Appearance::TextureLayers(chrModel, choices, layers);
     const double tables = Since(lookStart);
     Retail::ComposeStats compose;
@@ -561,6 +564,65 @@ void SyncCollections(CCharacterComponent* character, const Look& look) {
     }
 }
 
+// A .bone file: version, then chunks BIDA (uint16 bone indices) and BOMT (one 4x4 matrix per bone, the
+// engine's own row-vector layout). Parsed files are kept by FileDataID.
+using BoneShape = std::vector<std::pair<uint16_t, C44Matrix>>;
+
+const BoneShape* BoneFile(uint32_t fileDataId) {
+    static std::map<uint32_t, BoneShape> files;
+    const auto cached = files.find(fileDataId);
+    if (cached != files.end()) return &cached->second;
+    BoneShape& shape = files[fileDataId];
+    std::vector<uint8_t> bytes;
+    std::string error;
+    if (!Retail::Source().ReadFileDataId(fileDataId, bytes, error)) {
+        Blizzard::Log::Printf(1, kLog, "Bone file %u: %s\n", static_cast<unsigned>(fileDataId), error.c_str());
+        return &shape;
+    }
+    std::vector<uint16_t> ids;
+    std::vector<C44Matrix> matrices;
+    size_t at = 4;
+    while (at + 8 <= bytes.size()) {
+        uint32_t tag = 0, size = 0;
+        std::memcpy(&tag, bytes.data() + at, 4);
+        std::memcpy(&size, bytes.data() + at + 4, 4);
+        at += 8;
+        if (size > bytes.size() - at) break;
+        if (tag == 0x41444942u) {          // "BIDA"
+            ids.resize(size / 2);
+            std::memcpy(ids.data(), bytes.data() + at, ids.size() * 2);
+        } else if (tag == 0x544D4F42u) {   // "BOMT"
+            matrices.resize(size / sizeof(C44Matrix));
+            std::memcpy(static_cast<void*>(matrices.data()), bytes.data() + at, matrices.size() * sizeof(C44Matrix));
+        }
+        at += size;
+    }
+    if (ids.size() != matrices.size()) {
+        Blizzard::Log::Printf(1, kLog, "Bone file %u: %u bones but %u matrices; not used\n", static_cast<unsigned>(fileDataId),
+            static_cast<unsigned>(ids.size()), static_cast<unsigned>(matrices.size()));
+        return &shape;
+    }
+    for (size_t i = 0; i < ids.size(); ++i) shape.emplace_back(ids[i], matrices[i]);
+    return &shape;
+}
+
+// The face shape for the body model in use: the bone set made for this model's file (by path), or the
+// only one offered.
+void ApplyBoneShape(CM2Model* model, const Look& look) {
+    if (!model || !(model->m_fFlags & 1) || !model->m_shared) return;
+    const Retail::Appearance::BoneSet* chosen = look.boneSets.size() == 1 ? &look.boneSets.front() : nullptr;
+    const std::string modelName = NameKey(model->m_shared->m_fileName);
+    for (const auto& set : look.boneSets) {
+        std::string path;
+        if (Retail::Source().PathOf(set.modelFileDataId, path) && NameKey(path.c_str()) == modelName) {
+            chosen = &set;
+            break;
+        }
+    }
+    const BoneShape* shape = chosen ? BoneFile(chosen->boneFileDataId) : nullptr;
+    model->SetBoneAdjustments(shape ? *shape : BoneShape{});
+}
+
 bool RetailCharacterGeometry(CCharacterComponent* character) {
     const auto found = RetailLook(character);
     if (!found) return false;
@@ -580,6 +642,7 @@ bool RetailCharacterGeometry(CCharacterComponent* character) {
 
     // Hair, eyes and the other single-layer types replace the 3.3.5 CharSections textures.
     for (const auto& texture : look.textures) model->ReplaceTexture(texture.first, texture.second->texture);
+    ApplyBoneShape(model, look);
     SyncCollections(character, look);
     ApplyCollections(model);
     return true;

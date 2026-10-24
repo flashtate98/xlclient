@@ -48,6 +48,14 @@ namespace Retail::Appearance
     };
     void SkinnedModels(uint32_t chrModel, const std::vector<uint32_t>& choices, std::vector<SkinnedModel>& parts);
 
+    // The face shapes the choices pick: .bone files (ChrCustomizationBoneSet), each with the FileDataID
+    // of the body model it was made for (Orc males have one per posture model).
+    struct BoneSet {
+        uint32_t boneFileDataId = 0;
+        uint32_t modelFileDataId = 0;
+    };
+    void BoneSets(uint32_t chrModel, const std::vector<uint32_t>& choices, std::vector<BoneSet>& sets);
+
     // Anatomy that no customization choice of a race names, shown unless a choice picks that group:
     // feet (20), torso (22), hands (23), head (32), eyes (33) and eye overlays (51). From Esteria's
     // RaceGeometry.h.

@@ -77,6 +77,28 @@ bool SameSkinPivot(const C3Vector& a, const C3Vector& b) {
         std::fabs(a.x - b.x) <= 0.00001f && std::fabs(a.y - b.y) <= 0.00001f && std::fabs(a.z - b.z) <= 0.00001f;
 }
 
+// Bone shape adjustments (CM2Model::SetBoneAdjustments), as pivot-relative matrices ready to multiply.
+std::map<const CM2Model*, std::vector<std::pair<uint16_t, C44Matrix>>> s_boneAdjustments;
+std::atomic<size_t> s_boneAdjustmentCount{0};
+
+void ApplyBoneAdjustments(CM2Model* model) {
+    if (!s_boneAdjustmentCount.load(std::memory_order_relaxed)) return;
+    std::lock_guard<std::mutex> lock(s_skinParentMutex);
+    const auto found = s_boneAdjustments.find(model);
+    if (found == s_boneAdjustments.end() || !model->m_boneMatrices || !model->m_shared || !model->m_shared->m_data) return;
+    const uint32_t count = model->m_shared->m_data->m_bones.m_count;
+    for (const auto& adjustment : found->second)
+        if (adjustment.first < count)
+            model->m_boneMatrices[adjustment.first] = adjustment.second * model->m_boneMatrices[adjustment.first];
+}
+
+void ClearBoneAdjustments(CM2Model* model) {
+    if (!s_boneAdjustmentCount.load(std::memory_order_relaxed)) return;
+    std::lock_guard<std::mutex> lock(s_skinParentMutex);
+    s_boneAdjustments.erase(model);
+    s_boneAdjustmentCount = s_boneAdjustments.size();
+}
+
 void CopySkinParentPose(CM2Model* child) {
     // A collection that is not following its body yet (a copy made for a model frame such as the
     // character pane, or one whose body finished loading after it) binds as soon as both are ready.
@@ -3959,6 +3981,7 @@ CM2Model::CM2Model() {
 void CM2Model::FreeInternalResources() {
 #if defined(WOWDECOMP_RETAIL_MODELS)
     ClearSkinParents(this);
+    ClearBoneAdjustments(this);
 #endif
     M2ModelBone* bones = this->m_bones;
 
@@ -5623,6 +5646,7 @@ void CM2Model::AnimateMT(const C44Matrix* view, const C3Vector& diffuse, const C
     }
 
 #if defined(WOWDECOMP_RETAIL_MODELS)
+    ApplyBoneAdjustments(this);
     CopySkinParentPose(this);
 #endif
 
@@ -8119,5 +8143,32 @@ bool CM2Model::HasSkinParent(const CM2Model* parent) const {
         (this->m_fFlags & 0x40000) && (this->m_fFlags & 1) && (parent->m_fFlags & 1) && this->m_shared &&
         parent->m_shared && this->m_shared->m_data == binding.childData &&
         parent->m_shared->m_data == binding.parentData && this->m_boneMatrices && parent->m_boneMatrices;
+}
+#endif
+
+#if defined(WOWDECOMP_RETAIL_MODELS)
+void CM2Model::SetBoneAdjustments(const std::vector<std::pair<uint16_t, C44Matrix>>& adjustments) {
+    std::lock_guard<std::mutex> lock(s_skinParentMutex);
+    if (adjustments.empty() || !this->m_shared || !this->m_shared->m_data) {
+        s_boneAdjustments.erase(this);
+    } else {
+        // Around the pivot: move the bone's pivot to the origin, adjust, move back.
+        const auto& bones = this->m_shared->m_data->m_bones;
+        std::vector<std::pair<uint16_t, C44Matrix>> ready;
+        ready.reserve(adjustments.size());
+        for (const auto& adjustment : adjustments) {
+            if (adjustment.first >= bones.m_count) continue;
+            const C3Vector& pivot = bones[adjustment.first].m_pivot;
+            C44Matrix toPivot;
+            toPivot.Identity();
+            toPivot.d0 = -pivot.x; toPivot.d1 = -pivot.y; toPivot.d2 = -pivot.z;
+            C44Matrix fromPivot;
+            fromPivot.Identity();
+            fromPivot.d0 = pivot.x; fromPivot.d1 = pivot.y; fromPivot.d2 = pivot.z;
+            ready.emplace_back(adjustment.first, toPivot * adjustment.second * fromPivot);
+        }
+        s_boneAdjustments[this] = std::move(ready);
+    }
+    s_boneAdjustmentCount = s_boneAdjustments.size();
 }
 #endif
