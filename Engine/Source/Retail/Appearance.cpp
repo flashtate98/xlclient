@@ -124,6 +124,21 @@ bool CreationAllowed(const Index& x, const Row& choice, uint32_t classId) {
 }
 }
 
+// Whether a choice is offered to Demon Hunters only (its requirement's class mask is class 12 alone).
+static bool DemonHunterOnly(const Index& x, uint32_t choiceId) {
+    const Row* choice = x.choice->Find(choiceId);
+    const uint32_t id = choice ? x.choice->Value(*choice, "ChrCustomizationReqID") : 0;
+    const Row* requirement = id && x.requirement ? x.requirement->Find(id) : nullptr;
+    return requirement && x.requirement->Value(*requirement, "ClassMask") == (1u << (12 - 1));
+}
+
+// Whether a choice belongs to an Eye Color option.
+static bool IsEyeColor(const Index& x, uint32_t choiceId) {
+    const Row* choice = x.choice->Find(choiceId);
+    const Row* option = choice ? x.option->Find(x.choice->Value(*choice, "ChrCustomizationOptionID")) : nullptr;
+    return option && x.option->Text(*option, "Name_lang") == "Eye Color";
+}
+
 uint32_t ChrModelFor(uint32_t retailRace, uint32_t sex) {
     Index& x = Ready();
     if (!x.ready) return 0;
@@ -268,12 +283,7 @@ void TextureLayers(uint32_t chrModel, const std::vector<uint32_t>& choices, std:
         if (!option || x.option->Value(*option, "ChrModelID") != chrModel) continue;
         const auto elements = x.elementsByChoice.find(id);
         if (elements == x.elementsByChoice.end()) continue;
-        for (const Row* element : elements->second) {
-            const uint32_t needs = x.element->Value(*element, "RelatedChrCustomizationChoiceID");
-            if (needs && std::find(choices.begin(), choices.end(), needs) == choices.end()) continue;
-            const uint32_t materialId = x.element->Value(*element, "ChrCustomizationMaterialID");
-            const Row* material = materialId ? x.material->Find(materialId) : nullptr;
-            if (!material) continue;
+        const auto paint = [&](const Row* material) {
             const uint32_t target = x.material->Value(*material, "ChrModelTextureTargetID");
             const uint32_t file = MaterialFile(x, x.material->Value(*material, "MaterialResourcesID"));
             for (const Row* layer : layoutLayers->second) {
@@ -281,7 +291,35 @@ void TextureLayers(uint32_t chrModel, const std::vector<uint32_t>& choices, std:
                 layers.push_back({x.textureLayer->Value(*layer, "TextureType"), x.textureLayer->Value(*layer, "Layer"),
                     x.textureLayer->Value(*layer, "BlendMode"), x.textureLayer->Value(*layer, "TextureSectionTypeBitMask"), file});
             }
+        };
+        // A material element may wait for a related choice (a face's texture per skin colour, a tattoo
+        // colour per tattoo). Demon Hunter blindfolds are textured only alongside the Demon Hunter fel
+        // eye colours, which every Demon Hunter has; with Demon Hunter choices open to every class
+        // (CreationAllowed) a blindfold can come with ordinary eyes and would draw untextured. So a
+        // visible Demon Hunter-only choice whose texture waits only on a Demon Hunter-only Eye Color
+        // takes its first such element. Everything else waiting (faces, tattoo colours, the hidden
+        // fel-eye effect options) is skipped as before.
+        const Row* ownOption = x.option->Find(x.choice->Value(*choice, "ChrCustomizationOptionID"));
+        const bool impliesFelEyes = DemonHunterOnly(x, id) && ownOption && !x.option->Text(*ownOption, "Name_lang").empty();
+        std::vector<uint32_t> painted;
+        std::vector<std::pair<uint32_t, const Row*>> waiting;    // target, first material for it
+        for (const Row* element : elements->second) {
+            const uint32_t materialId = x.element->Value(*element, "ChrCustomizationMaterialID");
+            const Row* material = materialId ? x.material->Find(materialId) : nullptr;
+            if (!material) continue;
+            const uint32_t target = x.material->Value(*material, "ChrModelTextureTargetID");
+            const uint32_t needs = x.element->Value(*element, "RelatedChrCustomizationChoiceID");
+            if (needs && std::find(choices.begin(), choices.end(), needs) == choices.end()) {
+                if (impliesFelEyes && DemonHunterOnly(x, needs) && IsEyeColor(x, needs) &&
+                    std::find_if(waiting.begin(), waiting.end(), [target](const auto& w) { return w.first == target; }) == waiting.end())
+                    waiting.emplace_back(target, material);
+                continue;
+            }
+            painted.push_back(target);
+            paint(material);
         }
+        for (const auto& w : waiting)
+            if (std::find(painted.begin(), painted.end(), w.first) == painted.end()) paint(w.second);
     }
     std::stable_sort(layers.begin(), layers.end(), [](const TextureLayer& a, const TextureLayer& b) { return a.layer < b.layer; });
 }
