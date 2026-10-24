@@ -14,4 +14,9 @@ class CCharacterComponent;
 // nothing, for stock models and unmapped races.
 bool RetailCharacterGeometry(CCharacterComponent* character);
 
+// Called after the stock pass has shown its one geoset per group (only when RetailCharacterGeometry
+// returned true). Group 17 is the 3.3.5 eye-glow slot; on Retail bodies 1701-1705 are eye-area
+// effect meshes (masks, glows) that the stock facial-hair and Death Knight rules would switch on.
+void RetailCharacterAfterStockGeometry(CCharacterComponent* character);
+
 #endif

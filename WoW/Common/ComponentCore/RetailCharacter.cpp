@@ -126,4 +126,9 @@ bool RetailCharacterGeometry(CCharacterComponent* character) {
     return true;
 }
 
+void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
+    CM2Model* model = character->m_data.m_model;
+    if (model) model->SetGeometryVisible(1701, 1799, 0);
+}
+
 #endif

@@ -3450,7 +3450,7 @@ void CCharacterComponent::GeosRenderPrep() {
 
 #if defined(WOWDECOMP_RETAIL_MODELS)
     // Not in the original: a Retail body takes its geosets from the Retail customization tables.
-    RetailCharacterGeometry(this);
+    const bool retailBody = RetailCharacterGeometry(this);
 #endif
 
     for (int32_t i = 0; i < 19; i++) {
@@ -3460,6 +3460,11 @@ void CCharacterComponent::GeosRenderPrep() {
             this->m_data.m_model->SetGeometryVisible(this->m_data.m_geosets[i], this->m_data.m_geosets[i], 1);
         }
     }
+
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: undo the stock picks a Retail body must not show (eye effects).
+    if (retailBody) RetailCharacterAfterStockGeometry(this);
+#endif
 
     ItemDisplayInfoRec rec;
 
