@@ -85,20 +85,22 @@ const std::map<uint32_t, uint32_t>& RaceMap() {
     return map;
 }
 
+// A client texture made from a composed image, shared by every look that paints the same layers.
+struct OwnedTexture {
+    CTexture* texture = nullptr;
+    explicit OwnedTexture(CTexture* made) : texture(made) {}
+    OwnedTexture(const OwnedTexture&) = delete;
+    OwnedTexture& operator=(const OwnedTexture&) = delete;
+    ~OwnedTexture() { if (texture) HandleClose(reinterpret_cast<HOBJECT>(texture)); }
+};
+
 struct Look {
     uint32_t chrModel = 0;
     std::string key;                         // names its textures: race, sex and choices
     std::vector<uint16_t> geosets;           // chosen, then the anatomy defaults
     std::vector<Retail::Appearance::TextureSection> sections;
-    Retail::Image body;                      // the composed skin sheet (texture type 1)
-    std::map<uint32_t, CTexture*> textures;  // every other composed type (hair, eyes, ...)
-
-    Look() = default;
-    Look(const Look&) = delete;
-    Look& operator=(const Look&) = delete;
-    ~Look() {
-        for (auto& texture : textures) HandleClose(reinterpret_cast<HOBJECT>(texture.second));
-    }
+    std::shared_ptr<const Retail::Image> body;                      // the composed skin sheet (type 1)
+    std::map<uint32_t, std::shared_ptr<OwnedTexture>> textures;     // every other type (hair, eyes, ...)
 };
 
 bool FetchBlp(uint32_t fileDataId, std::vector<uint8_t>& bytes, void*) {
@@ -180,6 +182,26 @@ std::mutex s_lookMutex;
 std::map<std::string, CTexture*> s_bodies;
 std::deque<std::string> s_bodyOrder;
 
+// Each texture type is composed from its own layers only, so a change that leaves a type's layers
+// alone (a new hair colour leaves the skin; Ears changes no texture at all) reuses what was composed.
+// Keyed by the model, the type and its layers in paint order.
+std::map<std::string, std::shared_ptr<const Retail::Image>> s_composedBodies;
+std::deque<std::string> s_composedBodyOrder;
+std::map<std::string, std::shared_ptr<OwnedTexture>> s_composedTextures;
+std::deque<std::string> s_composedTextureOrder;
+
+template <typename Map>
+void Trim(Map& map, std::deque<std::string>& order, size_t keep) {
+    while (order.size() > keep) {
+        map.erase(order.front());   // a look still showing it keeps its own reference
+        order.pop_front();
+    }
+}
+
+// Decoded equipment textures for the body sheet, by display, section and layer.
+std::map<std::string, std::shared_ptr<const Retail::Image>> s_itemImages;
+std::deque<std::string> s_itemImageOrder;
+
 // A composed look per Retail race, sex and choices. The most recent ones are kept; each holds a full
 // skin sheet, so the cache is bounded.
 std::shared_ptr<Look> LookFor(uint32_t retailRace, uint32_t sex, uint32_t chrModel, const std::vector<uint32_t>& choices) {
@@ -208,22 +230,47 @@ std::shared_ptr<Look> LookFor(uint32_t retailRace, uint32_t sex, uint32_t chrMod
     Retail::Appearance::TextureLayers(chrModel, choices, layers);
     const double tables = Since(lookStart);
     Retail::ComposeStats compose;
-    auto start = Clock::now();
-    Retail::ComposeTextures(chrModel, layers, FetchBlp, nullptr, composed, warnings, &compose);
-    const double composeTotal = Since(start);
+    double composeTotal = 0;
     MakeStats make;
-    for (auto& texture : composed) {
-        if (texture.textureType == 1) {
-            look->body = std::move(texture.image);
-            continue;
+    uint32_t reused = 0;
+    std::map<uint32_t, std::vector<Retail::Appearance::TextureLayer>> byType;
+    for (const auto& layer : layers) byType[layer.textureType].push_back(layer);
+    for (const auto& type : byType) {
+        std::string typeKey = std::to_string(chrModel) + "/" + std::to_string(type.first);
+        for (const auto& layer : type.second)
+            typeKey += ":" + std::to_string(layer.fileDataId) + "." + std::to_string(layer.blendMode) + "." + std::to_string(layer.sectionMask);
+        if (type.first == 1) {
+            const auto cached = s_composedBodies.find(typeKey);
+            if (cached != s_composedBodies.end()) { look->body = cached->second; ++reused; continue; }
+        } else {
+            const auto cached = s_composedTextures.find(typeKey);
+            if (cached != s_composedTextures.end()) { look->textures[type.first] = cached->second; ++reused; continue; }
         }
-        CTexture* made = MakeTexture("Retail\\Character\\" + key + "\\" + std::to_string(texture.textureType), texture.image, &make);
-        if (made) look->textures[texture.textureType] = made;
+        auto start = Clock::now();
+        composed.clear();
+        Retail::ComposeTextures(chrModel, type.second, FetchBlp, nullptr, composed, warnings, &compose);
+        composeTotal += Since(start);
+        for (auto& texture : composed) {
+            if (texture.textureType == 1) {
+                look->body = std::make_shared<const Retail::Image>(std::move(texture.image));
+                s_composedBodies[typeKey] = look->body;
+                s_composedBodyOrder.push_back(typeKey);
+                Trim(s_composedBodies, s_composedBodyOrder, 6);
+                continue;
+            }
+            CTexture* made = MakeTexture("Retail\\Character\\" + std::to_string(std::hash<std::string>{}(typeKey)), texture.image, &make);
+            if (!made) continue;
+            auto owned = std::make_shared<OwnedTexture>(made);
+            look->textures[texture.textureType] = owned;
+            s_composedTextures[typeKey] = owned;
+            s_composedTextureOrder.push_back(typeKey);
+            Trim(s_composedTextures, s_composedTextureOrder, 48);
+        }
     }
     Blizzard::Log::Printf(1, kLog,
-        "Timing look: total %.1f ms | tables %.1f | compose %.1f (read %.1f for %u files, decode %.1f, paint %.1f) | "
+        "Timing look: total %.1f ms | tables %.1f | %u texture types reused | compose %.1f (read %.1f for %u files, decode %.1f, paint %.1f) | "
         "textures %u: build %.1f, create %.1f, %.1f MB\n",
-        Since(lookStart), tables, composeTotal, compose.fetch, compose.files, compose.decode, compose.paint,
+        Since(lookStart), tables, reused, composeTotal, compose.fetch, compose.files, compose.decode, compose.paint,
         make.count, make.build, make.upload, make.bytes / 1048576.0);
 
     std::string text;
@@ -231,7 +278,7 @@ std::shared_ptr<Look> LookFor(uint32_t retailRace, uint32_t sex, uint32_t chrMod
     text += " | geosets";
     for (const uint16_t id : look->geosets) text += " " + std::to_string(id);
     text += " | textures";
-    if (look->body.width) text += " 1 (" + std::to_string(look->body.width) + "x" + std::to_string(look->body.height) + ")";
+    if (look->body && look->body->width) text += " 1 (" + std::to_string(look->body->width) + "x" + std::to_string(look->body->height) + ")";
     for (const auto& texture : look->textures) text += " " + std::to_string(texture.first);
     Blizzard::Log::Printf(1, kLog, "Retail race %u sex %u: ChrModel %u, choices%s\n%s",
         static_cast<unsigned>(retailRace), static_cast<unsigned>(sex), static_cast<unsigned>(chrModel), text.c_str(), warnings.c_str());
@@ -387,14 +434,14 @@ bool RetailCharacterGeometry(CCharacterComponent* character) {
     }
 
     // Hair, eyes and the other single-layer types replace the 3.3.5 CharSections textures.
-    for (const auto& texture : look.textures) model->ReplaceTexture(texture.first, texture.second);
+    for (const auto& texture : look.textures) model->ReplaceTexture(texture.first, texture.second->texture);
     return true;
 }
 
 bool RetailCharacterTextures(CCharacterComponent* character) {
     const auto look = RetailLook(character);
     if (!look) return false;
-    for (const auto& texture : look->textures) character->m_data.m_model->ReplaceTexture(texture.first, texture.second);
+    for (const auto& texture : look->textures) character->m_data.m_model->ReplaceTexture(texture.first, texture.second->texture);
     return true;
 }
 
@@ -535,6 +582,12 @@ void RetailCharacterShutdown() {
         s_looks.clear();
         s_lookOrder.clear();
     }
+    s_composedBodies.clear();
+    s_composedBodyOrder.clear();
+    s_composedTextures.clear();
+    s_composedTextureOrder.clear();
+    s_itemImages.clear();
+    s_itemImageOrder.clear();
     for (auto& body : s_bodies) HandleClose(reinterpret_cast<HOBJECT>(body.second));
     s_bodies.clear();
     s_bodyOrder.clear();
@@ -546,7 +599,7 @@ void RetailCharacterShutdown() {
 void RetailCharacterBody(CCharacterComponent* character) {
     RetailCharacterFitHelmet(character);
     const auto found = RetailLook(character);
-    if (!found || !found->body.width) return;
+    if (!found || !found->body || !found->body->width) return;
     const Look& look = *found;
 
     // The 3.3.5 item section grid is the left half of the Retail sheet at twice the size, in the same
@@ -566,13 +619,32 @@ void RetailCharacterBody(CCharacterComponent* character) {
         LogBuildType();
         const auto bodyStart = Clock::now();
         double itemRead = 0, itemDecode = 0, itemPaint = 0;
+        uint32_t itemsReused = 0;
         auto start = Clock::now();
-        Retail::Image sheet = look.body;
+        Retail::Image sheet = *look.body;
         const double copy = Since(start);
+        const auto& prefs = character->m_data.m_preferences;
         for (const auto& layer : layers) {
             void* handle = layer.texture;
             // Only dirty sections reload their item textures; the others were released by the last pass.
             const bool reload = !handle;
+            // An item's section texture depends on the display, section and the wearer's race and sex
+            // (its _M/_F/_U file). Guild tabards (display zero) are not kept: their emblems vary.
+            std::string itemKey;
+            if (layer.displayId) {
+                itemKey = std::to_string(layer.displayId) + "/" + std::to_string(layer.section) + "/" + std::to_string(layer.layer)
+                    + "/" + std::to_string(prefs.m_raceID) + "/" + std::to_string(prefs.m_sexID);
+                const auto cached = s_itemImages.find(itemKey);
+                if (cached != s_itemImages.end()) {
+                    start = Clock::now();
+                    for (const auto& section : look.sections)
+                        if (section.sectionType == layer.section)
+                            Retail::PaintImage(sheet, *cached->second, section.x, section.y, section.width, section.height, 2);
+                    itemPaint += Since(start);
+                    ++itemsReused;
+                    continue;
+                }
+            }
             if (reload) {
                 ItemDisplayInfoRec display;
                 if (g_itemDisplayInfoDB.GetRecord(layer.displayId, &display))
@@ -604,12 +676,17 @@ void RetailCharacterBody(CCharacterComponent* character) {
                 if (section.sectionType == layer.section)
                     Retail::PaintImage(sheet, item, section.x, section.y, section.width, section.height, 2);
             itemPaint += Since(start);
+            if (!itemKey.empty()) {
+                s_itemImages[itemKey] = std::make_shared<const Retail::Image>(std::move(item));
+                s_itemImageOrder.push_back(itemKey);
+                Trim(s_itemImages, s_itemImageOrder, 64);
+            }
         }
         MakeStats make;
         CTexture* texture = MakeTexture(name, sheet, &make);
         Blizzard::Log::Printf(1, kLog,
-            "Timing body: total %.1f ms | copy %.1f | %u item layers: read %.1f, decode %.1f, paint %.1f | build %.1f, create %.1f, %.1f MB\n",
-            Since(bodyStart), copy, static_cast<unsigned>(layers.size()), itemRead, itemDecode, itemPaint,
+            "Timing body: total %.1f ms | copy %.1f | %u item layers (%u reused): read %.1f, decode %.1f, paint %.1f | build %.1f, create %.1f, %.1f MB\n",
+            Since(bodyStart), copy, static_cast<unsigned>(layers.size()), itemsReused, itemRead, itemDecode, itemPaint,
             make.build, make.upload, make.bytes / 1048576.0);
         if (!texture) return;
         cached = bodies.emplace(name, texture).first;

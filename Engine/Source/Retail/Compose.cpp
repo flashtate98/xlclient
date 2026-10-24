@@ -2,6 +2,8 @@
 // (Engine/Source/Retail/Compose.cpp there).
 #include "Engine/Source/Retail/Compose.h"
 #include <algorithm>
+#include <array>
+#include <thread>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -111,33 +113,64 @@ bool DecodeBlp(const std::vector<uint8_t>& b, Image& out, std::string& error) {
 }
 
 void BuildBlp(const Image& image, std::vector<uint8_t>& blp) {
-    blp.assign(1172, 0);
+    // Header, then every mip level as BGRA. Each level is the 2x2 box average of the one above (edge
+    // texels repeat on odd sizes). The whole file is sized up front and each level is written straight
+    // into it; the averaging runs in row bands on several threads for the large levels.
+    std::vector<std::pair<uint32_t, uint32_t>> sizes;
+    for (uint32_t width = image.width, height = image.height;;) {
+        sizes.emplace_back(width, height);
+        if ((width == 1 && height == 1) || sizes.size() == 16) break;
+        width = std::max(1u, width / 2);
+        height = std::max(1u, height / 2);
+    }
+    size_t total = 1172;
+    for (const auto& size : sizes) total += size_t(size.first) * size.second * 4;
+    blp.assign(total, 0);
     std::memcpy(blp.data(), "BLP2", 4);
     auto put = [&](size_t at, uint32_t v) { for (int i = 0; i < 4; ++i) blp[at + i] = uint8_t(v >> (8 * i)); };
     put(4, 1);
     blp[8] = 3; blp[9] = 8; blp[10] = 8; blp[11] = 1; // raw BGRA, 8-bit alpha, preferred format 8 below, mips present
     put(12, image.width); put(16, image.height);
-    std::vector<uint8_t> level = image.rgba;
-    uint32_t width = image.width, height = image.height;
-    for (uint32_t mip = 0; mip < 16; ++mip) {
-        std::vector<uint8_t> bgra = level;
-        for (size_t i = 0; i + 3 < bgra.size(); i += 4) std::swap(bgra[i], bgra[i + 2]);
-        put(20 + mip * 4, uint32_t(blp.size()));
-        put(84 + mip * 4, uint32_t(bgra.size()));
-        blp.insert(blp.end(), bgra.begin(), bgra.end());
-        if (width == 1 && height == 1) break;
-        const uint32_t nextWidth = std::max(1u, width / 2), nextHeight = std::max(1u, height / 2);
-        std::vector<uint8_t> next(size_t(nextWidth) * nextHeight * 4);
-        for (uint32_t y = 0; y < nextHeight; ++y)
-            for (uint32_t x = 0; x < nextWidth; ++x)
-                for (uint32_t c = 0; c < 4; ++c) {
-                    uint32_t sum = 0;
-                    for (uint32_t dy = 0; dy < 2; ++dy)
-                        for (uint32_t dx = 0; dx < 2; ++dx)
-                            sum += level[(size_t(std::min(y * 2 + dy, height - 1)) * width + std::min(x * 2 + dx, width - 1)) * 4 + c];
-                    next[(size_t(y) * nextWidth + x) * 4 + c] = uint8_t(sum / 4);
+
+    std::vector<uint8_t> level = image.rgba, next;
+    size_t offset = 1172;
+    for (size_t mip = 0; mip < sizes.size(); ++mip) {
+        const uint32_t width = sizes[mip].first, height = sizes[mip].second;
+        const size_t bytes = size_t(width) * height * 4;
+        put(20 + mip * 4, uint32_t(offset));
+        put(84 + mip * 4, uint32_t(bytes));
+        uint8_t* out = blp.data() + offset;
+        for (size_t i = 0; i < bytes; i += 4) {
+            out[i] = level[i + 2]; out[i + 1] = level[i + 1]; out[i + 2] = level[i]; out[i + 3] = level[i + 3];
+        }
+        offset += bytes;
+        if (mip + 1 == sizes.size()) break;
+
+        const uint32_t nextWidth = sizes[mip + 1].first, nextHeight = sizes[mip + 1].second;
+        next.assign(size_t(nextWidth) * nextHeight * 4, 0);
+        auto rows = [&, width, height, nextWidth](uint32_t first, uint32_t end) {
+            for (uint32_t y = first; y < end; ++y) {
+                const uint8_t* r0 = level.data() + size_t(std::min(y * 2, height - 1)) * width * 4;
+                const uint8_t* r1 = level.data() + size_t(std::min(y * 2 + 1, height - 1)) * width * 4;
+                uint8_t* o = next.data() + size_t(y) * nextWidth * 4;
+                for (uint32_t x = 0; x < nextWidth; ++x) {
+                    const size_t c0 = size_t(std::min(x * 2, width - 1)) * 4, c1 = size_t(std::min(x * 2 + 1, width - 1)) * 4;
+                    for (uint32_t c = 0; c < 4; ++c)
+                        o[x * 4 + c] = uint8_t((uint32_t(r0[c0 + c]) + r0[c1 + c] + r1[c0 + c] + r1[c1 + c]) / 4);
                 }
-        level = std::move(next); width = nextWidth; height = nextHeight;
+            }
+        };
+        const uint32_t hardware = std::max(1u, std::thread::hardware_concurrency());
+        const uint32_t bands = uint64_t(nextWidth) * nextHeight < 64 * 1024 ? 1 : std::min({hardware, 8u, nextHeight});
+        std::vector<std::thread> threads;
+        const uint32_t per = (nextHeight + bands - 1) / bands;
+        for (uint32_t band = 1; band < bands; ++band) {
+            const uint32_t first = band * per, end = std::min(nextHeight, first + per);
+            if (first < end) threads.emplace_back(rows, first, end);
+        }
+        rows(0, std::min(nextHeight, per));
+        for (auto& thread : threads) thread.join();
+        level.swap(next);
     }
 }
 
@@ -146,25 +179,45 @@ namespace {
 struct Rect { uint32_t x, y, w, h; };
 
 // Stretches `src` over `rect` of `dst` with bilinear sampling and the given blend.
-void Paint(Image& dst, const Image& src, const Rect& rect, uint32_t blend, bool legacyAlphaOver = false) {
-    if (!rect.w || !rect.h || rect.x + rect.w > dst.width || rect.y + rect.h > dst.height) return;
-    for (uint32_t y = 0; y < rect.h; ++y) {
+//
+// The arithmetic is the reference painter's, operation for operation, so the result is identical to
+// the byte; only the bookkeeping is cheaper: the horizontal sample positions are worked out once per
+// column instead of once per pixel, n/255 comes from a table holding the same float values, source
+// texels with zero alpha are skipped where the blend leaves the destination unchanged, and large
+// rectangles are split into row bands painted on several threads (rows are independent).
+struct Column { int x0, x1; float tx; };
+
+void PaintRows(Image& dst, const Image& src, const Rect& rect, uint32_t blend, bool legacyAlphaOver,
+    const std::vector<Column>& columns, const float* unit, uint32_t firstRow, uint32_t endRow) {
+    auto byte = [](float value) { return uint8_t(std::min(255.0f, std::max(0.0f, value)) + 0.5f); };
+    // Blends whose result equals the destination when the source alpha is zero: alpha-over, and the
+    // compositor modes (fa = 0 leaves RGB and alpha as they were).
+    const bool skipClear = blend != 0 && blend != 1;
+    const uint8_t* const texels = src.rgba.data();
+    const size_t stride = size_t(src.width) * 4;
+    for (uint32_t y = firstRow; y < endRow; ++y) {
         const float fy = (float(y) + 0.5f) * src.height / rect.h - 0.5f;
         const int y0 = std::max(0, int(std::floor(fy))), y1 = std::min(int(src.height) - 1, y0 + 1);
         const float ty = std::min(1.0f, std::max(0.0f, fy - float(y0)));
-        for (uint32_t x = 0; x < rect.w; ++x) {
-            const float fx = (float(x) + 0.5f) * src.width / rect.w - 0.5f;
-            const int x0 = std::max(0, int(std::floor(fx))), x1 = std::min(int(src.width) - 1, x0 + 1);
-            const float tx = std::min(1.0f, std::max(0.0f, fx - float(x0)));
+        const uint8_t* const row0 = texels + size_t(y0) * stride;
+        const uint8_t* const row1 = texels + size_t(y1) * stride;
+        uint8_t* d = &dst.rgba[(size_t(rect.y + y) * dst.width + rect.x) * 4];
+        for (uint32_t x = 0; x < rect.w; ++x, d += 4) {
+            const Column& column = columns[x];
+            const uint8_t* const a0 = row0 + size_t(column.x0) * 4;
+            const uint8_t* const a1 = row0 + size_t(column.x1) * 4;
+            const uint8_t* const b0 = row1 + size_t(column.x0) * 4;
+            const uint8_t* const b1 = row1 + size_t(column.x1) * 4;
+            const float tx = column.tx;
             float s[4];
             for (int c = 0; c < 4; ++c) {
-                const float top = src.rgba[(size_t(y0) * src.width + x0) * 4 + c] * (1 - tx) + src.rgba[(size_t(y0) * src.width + x1) * 4 + c] * tx;
-                const float bottom = src.rgba[(size_t(y1) * src.width + x0) * 4 + c] * (1 - tx) + src.rgba[(size_t(y1) * src.width + x1) * 4 + c] * tx;
+                const float top = a0[c] * (1 - tx) + a1[c] * tx;
+                const float bottom = b0[c] * (1 - tx) + b1[c] * tx;
                 s[c] = top * (1 - ty) + bottom * ty;
             }
-            uint8_t* d = &dst.rgba[(size_t(rect.y + y) * dst.width + rect.x + x) * 4];
-            const float a = s[3] / 255.0f, da = d[3] / 255.0f;
-            auto byte = [](float value) { return uint8_t(std::min(255.0f, std::max(0.0f, value)) + 0.5f); };
+            // Straight alpha-over onto a fully transparent texel zeroes its RGB, so that case still paints.
+            if (skipClear && s[3] == 0.0f && (!legacyAlphaOver || d[3] != 0)) continue;
+            const float a = s[3] / 255.0f, da = unit[d[3]];
             if (blend == 0 || blend == 1) { // DB2 blit preserves RGB even under zero alpha.
                 for (int c = 0; c < 4; ++c) d[c] = byte(s[c]);
             } else if (legacyAlphaOver) { // Legacy equipment PaintImage callers use straight alpha-over.
@@ -179,7 +232,7 @@ void Paint(Image& dst, const Image& src, const Rect& rect, uint32_t blend, bool 
                 // In particular, opaque white tattoo texels multiply to unchanged skin.
                 const float fa = blend == 4 ? da * a : a;
                 for (int c = 0; c < 3; ++c) {
-                    const float base = d[c] / 255.0f, src = s[c] / 255.0f;
+                    const float base = unit[d[c]], src = s[c] / 255.0f;
                     float result = src;
                     if (blend == 4) result = base * src; // Multiply
                     else if (blend == 6) // Overlay, thresholded by the source.
@@ -193,6 +246,40 @@ void Paint(Image& dst, const Image& src, const Rect& rect, uint32_t blend, bool 
             }
         }
     }
+}
+
+void Paint(Image& dst, const Image& src, const Rect& rect, uint32_t blend, bool legacyAlphaOver = false) {
+    if (!rect.w || !rect.h || rect.x + rect.w > dst.width || rect.y + rect.h > dst.height) return;
+    if (!src.width || !src.height || src.rgba.size() < size_t(src.width) * src.height * 4) return;
+    static const auto unit = [] {
+        std::array<float, 256> table{};
+        for (int i = 0; i < 256; ++i) table[i] = i / 255.0f;
+        return table;
+    }();
+    std::vector<Column> columns(rect.w);
+    for (uint32_t x = 0; x < rect.w; ++x) {
+        const float fx = (float(x) + 0.5f) * src.width / rect.w - 0.5f;
+        const int x0 = std::max(0, int(std::floor(fx))), x1 = std::min(int(src.width) - 1, x0 + 1);
+        columns[x] = {x0, x1, std::min(1.0f, std::max(0.0f, fx - float(x0)))};
+    }
+    const uint64_t pixels = uint64_t(rect.w) * rect.h;
+    const uint32_t hardware = std::max(1u, std::thread::hardware_concurrency());
+    const uint32_t bands = pixels < 128 * 1024 ? 1 : std::min({hardware, 8u, rect.h});
+    if (bands <= 1) {
+        PaintRows(dst, src, rect, blend, legacyAlphaOver, columns, unit.data(), 0, rect.h);
+        return;
+    }
+    std::vector<std::thread> threads;
+    threads.reserve(bands - 1);
+    const uint32_t per = (rect.h + bands - 1) / bands;
+    for (uint32_t band = 1; band < bands; ++band) {
+        const uint32_t first = band * per, end = std::min(rect.h, first + per);
+        if (first >= end) break;
+        threads.emplace_back(PaintRows, std::ref(dst), std::cref(src), std::cref(rect), blend, legacyAlphaOver,
+            std::cref(columns), unit.data(), first, end);
+    }
+    PaintRows(dst, src, rect, blend, legacyAlphaOver, columns, unit.data(), 0, std::min(rect.h, per));
+    for (auto& thread : threads) thread.join();
 }
 
 }
