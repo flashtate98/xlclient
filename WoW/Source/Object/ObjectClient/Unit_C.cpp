@@ -143,6 +143,9 @@
 #include "WoW/Source/WorldClient/FrameTime.h"
 #include "WoW/Source/WorldClient/Map.h"
 #include "WoW/Source/WowSvcs/WowSvcsClient/ClientServices.h"
+#if defined(WOWDECOMP_RETAIL_MODELS)
+#include "WoW/Source/RetailCustomizationNet.h"
+#endif
 #include "WarcraftXL/Seams.h"
 
 // STATIC: 0x00ADAC04
@@ -13821,6 +13824,12 @@ void CGUnit_C::SetLocalClientControl(bool control) {
 // OFFSET: 0x0071D010
 int32_t CGUnit_C::InitializeExtendedDisplay(CGPlayer_C* player, int32_t hasDisplayInfo) {
     this->m_characterComponent = CCharacterComponent::AllocComponent();
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: players show their stored Retail choices, asked for once per character.
+    if (player) {
+        RetailCustomizationNetBind(this->m_characterComponent, this->m_obj->m_guid.m_guid, true);
+    }
+#endif
     ComponentData data;
 
     if (hasDisplayInfo) {

@@ -51,6 +51,9 @@
 #include "Engine/Source/Storm/Source/MD5.h"
 #include "Engine/Source/Tempest/CRandom.h"
 #include "WoW/Common/ComponentCore/CharacterComponent.h"
+#if defined(WOWDECOMP_RETAIL_MODELS)
+#include "WoW/Source/RetailCustomizationNet.h"
+#endif
 #include "WoW/Source/Console/ConsoleClient.h"
 #include "WoW/Source/ConsoleDevice/ConsoleDevice.h"
 #include "WoW/Source/DB/DBClient/DBCacheInstances.h"
@@ -1029,6 +1032,10 @@ static void InitializeClient() {
     CCharacterComponent::Initialize();
     ClientServices::Initialize();
     ClientServices::SetMessageHandler(SMSG_TUTORIAL_FLAGS, CGTutorial::OnTutorialFlags, nullptr);
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: characters' Retail customization choices from the server.
+    RetailCustomizationNetInitialize();
+#endif
 
     CVar* voiceChat = CVar::Lookup("EnableVoiceChat");
 

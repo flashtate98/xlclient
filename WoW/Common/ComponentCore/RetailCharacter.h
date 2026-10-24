@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 class CCharacterComponent;
@@ -51,6 +52,24 @@ bool RetailCustomizationCycle(CCharacterComponent* character, uint32_t index, in
 
 // Drops the stored choices of a component that is going away.
 void RetailCustomizationForget(const CCharacterComponent* character);
+
+// Saving. A character's choices of the options above live on the server (mod-retail-customization)
+// as (ChrCustomizationOption ID, ChrCustomizationChoice ID) pairs; RetailCustomizationNet.cpp carries
+// them. A component bound to a character takes these stored choices wherever the create screen has
+// not set any.
+using RetailChoiceList = std::vector<std::pair<uint32_t, uint32_t>>;
+
+// The choices the component shows for the options listed above, for a new character. False for
+// stock bodies.
+bool RetailCustomizationChoices(const CCharacterComponent* character, RetailChoiceList& choices);
+
+// Binds a component to the character (GUID) it shows. True when that character's choices are not
+// known yet and have not been asked for, so the caller should ask the server.
+bool RetailCustomizationBind(const CCharacterComponent* character, uint64_t guid);
+
+// A character's choices as the server stores them (empty: none stored). Bound components showing
+// that character are refreshed.
+void RetailCustomizationStore(uint64_t guid, const RetailChoiceList& choices);
 
 // Releases every composed texture. Called at shutdown before TextureDestroy: textures still held at
 // process exit would be freed after the graphics device is gone.

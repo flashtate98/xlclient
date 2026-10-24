@@ -28,6 +28,9 @@
 #include "WoW/Source/ObjectMgrClient/ObjectMgrClient.h"
 #include "WoW/Source/Ui/AddOns.h"
 #include "WoW/Source/Ui/GameUI.h"
+#if defined(WOWDECOMP_RETAIL_MODELS)
+#include "WoW/Source/RetailCustomizationNet.h"
+#endif
 #include "WoW/Source/Ui/Types.h"
 #include "WoW/Source/UIUtil/PortraitButton.h"
 #include "WoW/Source/WowServices/BattlenetLogin.h"
@@ -1366,6 +1369,10 @@ void ClientConnection::RequestCharacterCreate(const CHARACTER_CREATE_INFO& info)
     msg.Put(info.m_hairColorID);
     msg.Put(info.m_facialHairStyleID);
     msg.Put(info.m_outfitID);
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: the Retail customization choices the stock fields cannot hold.
+    RetailCustomizationNetAppendCreate(msg);
+#endif
     msg.Finalize();
     this->Send(&msg);
 }

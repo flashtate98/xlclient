@@ -206,6 +206,23 @@ std::shared_ptr<Look> LookFor(uint32_t retailRace, uint32_t sex, uint32_t chrMod
 // stored choice is not offered any more, takes its default choice.
 std::unordered_map<const CCharacterComponent*, std::map<uint32_t, uint32_t>> s_extraChoices;
 
+// The server's choices per character GUID (RetailCustomizationStore), the character each component
+// shows (RetailCustomizationBind), and the GUIDs already asked for.
+std::unordered_map<uint64_t, std::map<uint32_t, uint32_t>> s_storedChoices;
+std::unordered_map<const CCharacterComponent*, uint64_t> s_boundGuids;
+std::set<uint64_t> s_askedGuids;
+
+// The choices a component takes for options the 3.3.5 selectors do not drive: the create screen's,
+// else those stored for the character it is bound to; null when there are none.
+const std::map<uint32_t, uint32_t>* ExtraChoicesOf(const CCharacterComponent* character) {
+    const auto extras = s_extraChoices.find(character);
+    if (extras != s_extraChoices.end()) return &extras->second;
+    const auto bound = s_boundGuids.find(character);
+    if (bound == s_boundGuids.end()) return nullptr;
+    const auto stored = s_storedChoices.find(bound->second);
+    return stored != s_storedChoices.end() ? &stored->second : nullptr;
+}
+
 // One option as a character sees it: the choices offered given the class and the choices taken before
 // it, and the one taken.
 struct ResolvedOption {
@@ -235,7 +252,7 @@ uint32_t Resolve(const CCharacterComponent* character, uint32_t chrModel, std::v
                     found = true;
                 }
     }
-    const auto extras = s_extraChoices.find(character);
+    const auto* extras = ExtraChoicesOf(character);
     resolved.clear();
     choices.clear();
     for (size_t i = 0; i < options.size(); ++i) {
@@ -248,9 +265,9 @@ uint32_t Resolve(const CCharacterComponent* character, uint32_t chrModel, std::v
         if (option.offered.empty()) option.offered = options[i].choices;
         if (option.driven) {
             option.index = StockValue(prefs, static_cast<Stock>(driven[i])) % option.offered.size();
-        } else if (extras != s_extraChoices.end()) {
-            const auto stored = extras->second.find(option.id);
-            if (stored != extras->second.end()) {
+        } else if (extras) {
+            const auto stored = extras->find(option.id);
+            if (stored != extras->end()) {
                 const auto at = std::find(option.offered.begin(), option.offered.end(), stored->second);
                 if (at != option.offered.end()) option.index = static_cast<uint32_t>(at - option.offered.begin());
             }
@@ -336,6 +353,13 @@ bool RetailCharacterTextures(CCharacterComponent* character) {
     return true;
 }
 
+// Geosets, then the hair/eye textures, then the body sheet on the next section pass.
+static void Refresh(CCharacterComponent* character) {
+    character->m_flags |= 0x4;
+    character->SetDirtySections(0xFFFFFFFF);
+    RetailCharacterTextures(character);
+}
+
 bool RetailCustomizationOptions(const CCharacterComponent* character, std::vector<RetailCustomizationOption>& options) {
     options.clear();
     uint32_t retailRace = 0;
@@ -372,15 +396,46 @@ bool RetailCustomizationCycle(CCharacterComponent* character, uint32_t index, in
         ++extra;
     }
     if (!changed) return false;
-    // Geosets, then the hair/eye textures, then the body sheet on the next section pass.
-    character->m_flags |= 0x4;
-    character->SetDirtySections(0xFFFFFFFF);
-    RetailCharacterTextures(character);
+    Refresh(character);
     return true;
 }
 
 void RetailCustomizationForget(const CCharacterComponent* character) {
     s_extraChoices.erase(character);
+    s_boundGuids.erase(character);
+}
+
+bool RetailCustomizationChoices(const CCharacterComponent* character, RetailChoiceList& choices) {
+    choices.clear();
+    uint32_t retailRace = 0;
+    const uint32_t chrModel = RetailModelOf(character, retailRace);
+    if (!chrModel) return false;
+    std::vector<ResolvedOption> resolved;
+    std::vector<uint32_t> taken;
+    Resolve(character, chrModel, resolved, taken);
+    for (const auto& option : resolved)
+        if (!option.driven) choices.emplace_back(option.id, option.offered[option.index]);
+    return true;
+}
+
+bool RetailCustomizationBind(const CCharacterComponent* character, uint64_t guid) {
+    if (!character || !guid) return false;
+    s_boundGuids[character] = guid;
+    if (s_storedChoices.count(guid)) return false;
+    return s_askedGuids.insert(guid).second;
+}
+
+void RetailCustomizationStore(uint64_t guid, const RetailChoiceList& choices) {
+    std::map<uint32_t, uint32_t> next(choices.begin(), choices.end());
+    const auto known = s_storedChoices.find(guid);
+    if (known != s_storedChoices.end() && known->second == next) return;
+    s_storedChoices[guid] = std::move(next);
+    for (const auto& bound : s_boundGuids) {
+        if (bound.second != guid || s_extraChoices.count(bound.first)) continue;
+        auto* character = const_cast<CCharacterComponent*>(bound.first);
+        uint32_t retailRace = 0;
+        if (RetailModelOf(character, retailRace)) Refresh(character);
+    }
 }
 
 void RetailCharacterShutdown() {
@@ -392,6 +447,9 @@ void RetailCharacterShutdown() {
     for (auto& body : s_bodies) HandleClose(reinterpret_cast<HOBJECT>(body.second));
     s_bodies.clear();
     s_bodyOrder.clear();
+    s_storedChoices.clear();
+    s_boundGuids.clear();
+    s_askedGuids.clear();
 }
 
 void RetailCharacterBody(CCharacterComponent* character) {

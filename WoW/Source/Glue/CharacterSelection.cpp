@@ -34,6 +34,9 @@
 #include "WoW/Source/WorldClient/DayNight__DNInfo.h"
 #include "WoW/Source/WorldClient/World.h"
 #include "WoW/Source/WowSvcs/WowSvcsClient/ClientServices.h"
+#if defined(WOWDECOMP_RETAIL_MODELS)
+#include "WoW/Source/RetailCustomizationNet.h"
+#endif
 
 // STATIC: 0x009F3CD0
 const int32_t g_scriptSexIndex[3] = { 2, 3, 1 };
@@ -443,6 +446,10 @@ void CCharacterSelection::ShowCharacter() {
         CCharacterSelection::s_characterList[CCharacterSelection::s_selectionIndex].m_component = CCharacterComponent::AllocComponent();
 
         CHARACTER_INFO& info = CCharacterSelection::s_characterList[CCharacterSelection::s_selectionIndex].m_characterInfo;
+#if defined(WOWDECOMP_RETAIL_MODELS)
+        // Not in the original: the character's stored Retail choices came with the character list.
+        RetailCustomizationNetBind(CCharacterSelection::s_characterList[CCharacterSelection::s_selectionIndex].m_component, info.m_guid.m_guid, false);
+#endif
         data.m_preferences.m_raceID = info.m_raceID;
         data.m_preferences.m_sexID = info.m_sexID;
         data.m_preferences.m_classId = info.m_classID;
