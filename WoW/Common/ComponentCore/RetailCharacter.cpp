@@ -431,8 +431,12 @@ constexpr uint32_t kCollectionSocket = 0xFFFFFFFEu;
 struct Collection {
     CM2Model* parent = nullptr;
     std::vector<uint16_t> geosets;
+    // The look's composed textures (hair, eyes, blindfold (9), ...). Bound from here rather than from
+    // the body's slots, which still hold placeholders while the body loads (character select, world).
+    std::map<uint32_t, std::shared_ptr<OwnedTexture>> textures;
     bool reported = false;
     bool described = false;
+    std::string lastDescribed;
 };
 std::unordered_map<CM2Model*, Collection> s_collections;    // by collection model
 
@@ -485,13 +489,23 @@ void ApplyCollection(CM2Model* child) {
     for (uint32_t i = 0; i < wants.m_count; ++i) {
         const uint32_t type = wants[i].m_type;
         CTexture* texture = nullptr;
-        for (uint32_t j = 0; type && parent->m_textures && j < has.m_count && !texture; ++j)
+        const char* from = "body";
+        const auto composed = type ? state.textures.find(type) : state.textures.end();
+        if (composed != state.textures.end() && composed->second && composed->second->texture) {
+            texture = composed->second->texture;
+            from = "look";
+        }
+        for (uint32_t j = 0; !texture && type && parent->m_textures && j < has.m_count; ++j)
             if (has[j].m_type == type) texture = parent->m_textures[j];
         if (texture) child->ReplaceTexture(type, texture);
-        described += " " + std::to_string(type) + (type == 0 ? "(file)" : texture ? "(body)" : "(none on the body)");
+        described += " " + std::to_string(type);
+        if (!type) described += "(file)";
+        else if (!texture) described += "(none on the body)";
+        else described += "(" + std::string(from) + ": " + texture->m_filename + ")";
     }
-    if (!state.described) {
+    if (!state.described || described != state.lastDescribed) {
         state.described = true;
+        state.lastDescribed = described;
         Blizzard::Log::Printf(1, kLog, "Collection %s bound to %s, geosets %u, textures:%s\n", child->m_shared->m_fileName,
             parent->m_shared->m_fileName, static_cast<unsigned>(state.geosets.size()), described.c_str());
     }
@@ -521,6 +535,7 @@ void SyncCollections(CCharacterComponent* character, const Look& look) {
                 Collection& state = s_collections[child];
                 state.parent = parent;
                 state.geosets = want->second;
+                state.textures = look.textures;
                 ApplyCollection(child);
                 wanted.erase(want);
             }
@@ -538,6 +553,7 @@ void SyncCollections(CCharacterComponent* character, const Look& look) {
         Collection& state = s_collections[child];
         state.parent = parent;
         state.geosets = want.second;
+        state.textures = look.textures;
         child->SetLoadedCallback(OnCollectionLoadedThunk, nullptr);
         child->Release();   // the attachment holds the body's reference
     }
@@ -571,6 +587,8 @@ bool RetailCharacterTextures(CCharacterComponent* character) {
     const auto look = RetailLook(character);
     if (!look) return false;
     for (const auto& texture : look->textures) character->m_data.m_model->ReplaceTexture(texture.first, texture.second->texture);
+    for (auto& collection : s_collections)
+        if (collection.second.parent == character->m_data.m_model) collection.second.textures = look->textures;
     ApplyCollections(character->m_data.m_model);
     return true;
 }
