@@ -24,6 +24,7 @@
 #include "WoW/Source/Object/Types.h"
 #include "WoW/Source/ObjectMgrClient/ObjectMgrClient.h"
 #include <deque>
+#include <cstdio>
 #include <cctype>
 #include <cstring>
 #include <cmath>
@@ -812,16 +813,32 @@ static bool SyncBodyModel(CCharacterComponent* character, const Look& look) {
 }
 
 float RetailCharacterGlueScale(const CCharacterComponent* character) {
-    uint32_t retailRace = 0;
-    if (!character || !RetailModelOf(character, retailRace)) return 1.0f;
+    if (!character) return 1.0f;
     const auto& prefs = character->m_data.m_preferences;
+    const CM2Model* model = character->m_data.m_model;
+    uint32_t retailRace = 0;
+    const bool retail = RetailModelOf(character, retailRace) != 0;
     const ChrRacesRec* race = g_chrRacesDB.GetRecord(prefs.m_raceID);
-    const CreatureDisplayInfoRec* display = race
-        ? g_creatureDisplayInfoDB.GetRecord(prefs.m_sexID ? race->m_femaleDisplayID : race->m_maleDisplayID) : nullptr;
+    const int32_t displayId = race ? (prefs.m_sexID ? race->m_femaleDisplayID : race->m_maleDisplayID) : 0;
+    const CreatureDisplayInfoRec* display = displayId ? g_creatureDisplayInfoDB.GetRecord(displayId) : nullptr;
     const CreatureModelDataRec* modelData = display ? g_creatureModelDataDB.GetRecord(display->m_modelID) : nullptr;
-    if (!modelData) return 1.0f;
-    const float scale = display->m_creatureModelScale * modelData->m_modelScale;
-    return std::isfinite(scale) && scale > 0.1f && scale < 10.0f ? scale : 1.0f;
+    float scale = modelData ? display->m_creatureModelScale * modelData->m_modelScale : 1.0f;
+    if (!retail || !std::isfinite(scale) || scale <= 0.1f || scale >= 10.0f) scale = 1.0f;
+
+    // Logged once per race and sex (and whenever the answer changes), to show where a size comes from.
+    static std::map<uint32_t, std::string> reported;
+    char line[512];
+    std::snprintf(line, sizeof(line), "Glue scale race %u sex %u: body %s (%s), ChrRaces display %d -> %s, CreatureDisplayInfo scale %.4f, "
+        "model data %d (%s) scale %.4f -> %.4f\n", static_cast<unsigned>(prefs.m_raceID), static_cast<unsigned>(prefs.m_sexID),
+        model && model->m_shared ? model->m_shared->m_fileName : "(none)", retail ? "Retail" : "not Retail", displayId,
+        display ? "found" : "missing", display ? display->m_creatureModelScale : 0.0f, display ? display->m_modelID : 0,
+        modelData ? (modelData->m_modelName ? modelData->m_modelName : "") : "missing", modelData ? modelData->m_modelScale : 0.0f, scale);
+    std::string& last = reported[prefs.m_raceID * 2 + (prefs.m_sexID ? 1 : 0)];
+    if (last != line) {
+        last = line;
+        Blizzard::Log::Printf(1, kLog, "%s", line);
+    }
+    return scale;
 }
 
 void RetailCharacterSetBodyOwner(const CCharacterComponent* character, RetailBodyOwner swap, void* owner) {
