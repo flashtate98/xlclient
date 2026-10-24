@@ -432,6 +432,7 @@ struct Collection {
     CM2Model* parent = nullptr;
     std::vector<uint16_t> geosets;
     bool reported = false;
+    bool described = false;
 };
 std::unordered_map<CM2Model*, Collection> s_collections;    // by collection model
 
@@ -446,6 +447,9 @@ bool IsCollection(const CM2Model* child, const CM2Model* parent) {
     return child && child->m_attachParent == parent && child->m_attachmentId == kCollectionSocket;
 }
 
+void ApplyCollection(CM2Model* child);
+void OnCollectionLoadedThunk(CM2Model* child, void*) { ApplyCollection(child); }
+
 // Binds a loaded collection to its body and shows its geosets and the body's textures.
 void ApplyCollection(CM2Model* child) {
     const auto found = s_collections.find(child);
@@ -453,7 +457,14 @@ void ApplyCollection(CM2Model* child) {
     Collection& state = found->second;
     CM2Model* parent = state.parent;
     if (!IsCollection(child, parent)) { s_collections.erase(found); return; }
-    if (!(child->m_fFlags & 1) || !(parent->m_fFlags & 1)) return;   // the loaded callback comes back
+    if (!(child->m_fFlags & 1) || !(parent->m_fFlags & 1)) {
+        // Not loaded yet: come back when it is (the body, texture and geometry passes also retry).
+        if (!child->m_loadedCallback) {
+            child->m_loadedCallback = OnCollectionLoadedThunk;
+            child->m_loadedArg = nullptr;
+        }
+        return;
+    }
     if (!child->HasSkinParent(parent) && !child->SetSkinParent(parent)) {
         child->SetGeometryVisible(0, 65535, 0);
         if (!state.reported) {
@@ -465,15 +476,25 @@ void ApplyCollection(CM2Model* child) {
     }
     child->SetGeometryVisible(0, 65535, 0);
     for (const uint16_t geoset : state.geosets) child->SetGeometryVisible(geoset, geoset, 1);
-    if (parent->m_textures) {
-        const auto& textures = parent->m_shared->m_data->m_textures;
-        for (uint32_t i = 0; i < textures.m_count; ++i)
-            if (textures[i].m_type && parent->m_textures[i]) child->ReplaceTexture(textures[i].m_type, parent->m_textures[i]);
-    }
-}
 
-void OnCollectionLoaded(CM2Model* child, void*) {
-    ApplyCollection(child);
+    // The collection's replaceable textures take the body's of the same type (the body's slots hold
+    // the composed hair, skin, blindfold (9), ... textures).
+    std::string described;
+    const auto& wants = child->m_shared->m_data->m_textures;
+    const auto& has = parent->m_shared->m_data->m_textures;
+    for (uint32_t i = 0; i < wants.m_count; ++i) {
+        const uint32_t type = wants[i].m_type;
+        CTexture* texture = nullptr;
+        for (uint32_t j = 0; type && parent->m_textures && j < has.m_count && !texture; ++j)
+            if (has[j].m_type == type) texture = parent->m_textures[j];
+        if (texture) child->ReplaceTexture(type, texture);
+        described += " " + std::to_string(type) + (type == 0 ? "(file)" : texture ? "(body)" : "(none on the body)");
+    }
+    if (!state.described) {
+        state.described = true;
+        Blizzard::Log::Printf(1, kLog, "Collection %s bound to %s, geosets %u, textures:%s\n", child->m_shared->m_fileName,
+            parent->m_shared->m_fileName, static_cast<unsigned>(state.geosets.size()), described.c_str());
+    }
 }
 
 void ApplyCollections(CM2Model* parent) {
@@ -517,7 +538,7 @@ void SyncCollections(CCharacterComponent* character, const Look& look) {
         Collection& state = s_collections[child];
         state.parent = parent;
         state.geosets = want.second;
-        child->SetLoadedCallback(OnCollectionLoaded, nullptr);
+        child->SetLoadedCallback(OnCollectionLoadedThunk, nullptr);
         child->Release();   // the attachment holds the body's reference
     }
 }
@@ -542,6 +563,7 @@ bool RetailCharacterGeometry(CCharacterComponent* character) {
     // Hair, eyes and the other single-layer types replace the 3.3.5 CharSections textures.
     for (const auto& texture : look.textures) model->ReplaceTexture(texture.first, texture.second->texture);
     SyncCollections(character, look);
+    ApplyCollections(model);
     return true;
 }
 
@@ -893,6 +915,7 @@ void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
     CM2Model* model = character->m_data.m_model;
     if (!model) return;
     model->SetGeometryVisible(1701, 1799, 0);
+    ApplyCollections(model);
 
     // Feet. Retail bodies have a bare foot with toes (2001) and a closed shoe (2002) as separate meshes;
     // the 3.3.5 boot texture painted on the bare foot showed the toes. With boots on, only the shoe shows
