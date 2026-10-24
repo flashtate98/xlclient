@@ -18,6 +18,7 @@
 #include "WoW/Common/TextureCache.h"
 #include "WoW/Source/DB/DBClient/DBClient.h"
 #include "WoW/Source/DB/Rec/ItemDisplayInfoRec.h"
+#include "WoW/Source/DB/Rec/HelmetGeosetVisDataRec.h"
 #include <deque>
 #include <charconv>
 #include <cstdlib>
@@ -642,7 +643,30 @@ void RetailCharacterFitHelmet(CCharacterComponent* character) {
 
 void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
     CM2Model* model = character->m_data.m_model;
-    if (model) model->SetGeometryVisible(1701, 1799, 0);
+    if (!model) return;
+    model->SetGeometryVisible(1701, 1799, 0);
+
+    // Helmet hides. AddHelm writes them into the 3.3.5 selector values, which the Retail geometry does
+    // not read, so the chosen hair and beard showed through. HelmetGeosetVisData slots 0-6 cover geoset
+    // groups 0 (hair), 1-3 (facial hair), 7 (ears), 16 and 17, per race bit, as in the stock AddHelm. On
+    // Retail bodies group 0's 1-99 are the hairstyles (0 itself is the scalp), so those go.
+    const auto& prefs = character->m_data.m_preferences;
+    const uint32_t displayId = character->m_itemDisplayID[ITEMSLOT_HEAD];
+    if (!displayId || prefs.m_sexID > 1 || prefs.m_raceID >= 32) return;
+    CM2Model* helmet = model->m_attachList;
+    while (helmet && helmet->m_attachmentId != ATTACH_HELM) helmet = helmet->m_attachNext;
+    if (!helmet) return;    // hidden helm, barber shop
+    ItemDisplayInfoRec display;
+    if (!g_itemDisplayInfoDB.GetRecord(displayId, &display)) return;
+    const auto* visibility = g_helmetGeosetVisDataDB.GetRecord(display.m_helmetGeosetVisID[prefs.m_sexID]);
+    if (!visibility) return;
+    static const uint32_t kGroups[7] = {0, 1, 2, 3, 7, 16, 17};
+    const uint32_t raceBit = uint32_t{1} << prefs.m_raceID;
+    for (uint32_t slot = 0; slot < 7; ++slot) {
+        if (!(static_cast<uint32_t>(visibility->m_hideGeoset[slot]) & raceBit)) continue;
+        const uint32_t group = kGroups[slot];
+        model->SetGeometryVisible(group ? group * 100 : 1, group * 100 + 99, 0);
+    }
 }
 
 #endif
