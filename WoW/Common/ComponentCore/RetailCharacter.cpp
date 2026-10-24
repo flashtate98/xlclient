@@ -746,6 +746,16 @@ static bool SyncBodyModel(CCharacterComponent* character, const Look& look) {
             sequence.m_time, sequence.m_speed, 0, 1);
     else
         replacement->SetBoneSequence(UINT32_MAX, 0, UINT32_MAX, 0, 1.0f, 0, 1);
+    // Key bones playing their own sequence carry over too: the closed fingers holding a weapon
+    // (ComponentCloseFingers, key bones 8-17), torso animations, ...
+    const uint32_t keyBones = std::min(old->m_shared->m_data->m_boneIndicesById.m_count,
+        replacement->m_shared->m_data->m_boneIndicesById.m_count);
+    for (uint32_t bone = 0; bone < keyBones; ++bone) {
+        M2BoneSequenceInfo own{};
+        if (!old->GetBoneSequenceInfo(bone, own)) continue;
+        if (own.m_sequenceId == sequence.m_sequenceId && own.m_variationIndex == sequence.m_variationIndex) continue;
+        replacement->SetBoneSequence(bone, own.m_sequenceId, own.m_variationIndex, own.m_time, own.m_speed, 0, 1);
+    }
 
     if (old->m_attachParent) {
         replacement->AttachToParent(old->m_attachParent, old->m_attachmentId, nullptr, (old->m_fFlags & 0x40000) != 0);
