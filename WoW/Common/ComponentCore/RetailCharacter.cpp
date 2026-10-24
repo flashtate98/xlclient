@@ -662,8 +662,12 @@ void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
     if (!visibility) return;
     static const uint32_t kGroups[7] = {0, 1, 2, 3, 7, 16, 17};
     const uint32_t raceBit = uint32_t{1} << prefs.m_raceID;
+    const auto hides = [&](uint32_t slot) { return (static_cast<uint32_t>(visibility->m_hideGeoset[slot]) & raceBit) != 0; };
+    // Facial hair goes only under helmets that hide all of it (full-face helms). Hoods and half helms
+    // that hid one piece of the small 3.3.5 facial hair would take a whole Retail mustache or sideburns.
+    const bool wholeFace = hides(1) && hides(2) && hides(3);
     for (uint32_t slot = 0; slot < 7; ++slot) {
-        if (!(static_cast<uint32_t>(visibility->m_hideGeoset[slot]) & raceBit)) continue;
+        if (!hides(slot) || (slot >= 1 && slot <= 3 && !wholeFace)) continue;
         const uint32_t group = kGroups[slot];
         model->SetGeometryVisible(group ? group * 100 : 1, group * 100 + 99, 0);
     }
