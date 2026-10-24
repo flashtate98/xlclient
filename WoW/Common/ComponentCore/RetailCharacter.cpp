@@ -1201,8 +1201,18 @@ const HelmetTuning* HelmetTuningFor(uint32_t race, uint32_t sex) {
 const Retail::HelmetAnchor* StockAnchor(uint32_t raceId, uint32_t sexId) {
     static const char* const kStock[] = {nullptr, "Human", "Orc", "Dwarf", "NightElf", "Scourge", "Tauren", "Gnome",
         "Troll", nullptr, "BloodElf", "Draenei"};
-    if (raceId >= sizeof(kStock) / sizeof(kStock[0]) || !kStock[raceId] || sexId > 1) return nullptr;
-    const std::string race = kStock[raceId], sex = sexId ? "Female" : "Male";
+    // A new race wears the helmets of the race whose ChrRaces client prefix it shares (Void Elf "Be": Blood Elf
+    // helmet models), so that race's 3.3.5 body is its donor too.
+    static const std::pair<const char*, const char*> kByPrefix[] = {{"Hu", "Human"}, {"Or", "Orc"}, {"Dw", "Dwarf"},
+        {"Ni", "NightElf"}, {"Sc", "Scourge"}, {"Ta", "Tauren"}, {"Gn", "Gnome"}, {"Tr", "Troll"}, {"Be", "BloodElf"},
+        {"Dr", "Draenei"}};
+    if (sexId > 1) return nullptr;
+    const char* stock = raceId < sizeof(kStock) / sizeof(kStock[0]) ? kStock[raceId] : nullptr;
+    if (const ChrRacesRec* rec = g_chrRacesDB.GetRecord(raceId); rec && rec->m_clientPrefix)
+        for (const auto& entry : kByPrefix)
+            if (!_stricmp(rec->m_clientPrefix, entry.first)) stock = entry.second;
+    if (!stock) return nullptr;
+    const std::string race = stock, sex = sexId ? "Female" : "Male";
     const std::string donorPath = "Character\\" + race + "\\" + sex + "\\" + race + sex + ".m2";
 
     struct Donor { bool tried = false, valid = false; Retail::HelmetAnchor anchor; };
