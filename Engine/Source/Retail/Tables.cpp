@@ -194,12 +194,23 @@ constexpr const char* kLog = "Logs/RetailTables.log";
         "texturefiledata", "DBFilesClient\\texturefiledata.db2", 0xBD7C74C2u, kTextureFileDataFields,
     };
 
+// Not in Esteria: the layout read from 12.1.5's own file (column widths and compression). Field 1 holds
+// 2 for NPC-only choices, 3 for player choices and 4 for the Transmog placeholder; field 2 is the class
+// mask (bit N-1 for class N, -1 or 0 for every class). Fields 3 and 6 are unused by the client.
+constexpr Field kChrCustomizationReqFields[] = {
+    { "ReqSource_lang", 1, true }, { "ReqType" }, { "ClassMask" }, { "Field_3" }, { "AchievementID" },
+    { "QuestID" }, { "Field_6" }, { "ItemModifiedAppearanceID" }, { "RaceMask", 2 },
+};
+constexpr Definition kChrCustomizationReq{
+    "chrcustomizationreq", "DBFilesClient\\chrcustomizationreq.db2", 0xCA154412u, kChrCustomizationReqFields,
+};
+
 constexpr Definition kDefinitions[] = {
     kChrRaceXChrModel, kChrModel, kChrCustomizationOption, kChrCustomizationChoice,
     kChrCustomizationElement, kChrCustomizationGeoset, kChrCustomizationSkinnedModel,
     kChrCustomizationMaterial, kChrCustomizationCondModel, kCharComponentTextureLayouts,
     kChrModelTextureLayer, kCreatureDisplayInfo, kCreatureModelData, kCreatureDisplayInfoGeosetData,
-    kCharComponentTextureSections, kTextureFileData,
+    kCharComponentTextureSections, kTextureFileData, kChrCustomizationReq,
 };
 constexpr size_t kCount = sizeof(kDefinitions) / sizeof(kDefinitions[0]);
 

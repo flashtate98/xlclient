@@ -20,6 +20,7 @@ struct Index {
     const Table* choice = nullptr;
     const Table* element = nullptr;
     const Table* geoset = nullptr;
+    const Table* requirement = nullptr;
     const Table* chrModel = nullptr;
     const Table* material = nullptr;
     const Table* textureLayer = nullptr;
@@ -56,6 +57,7 @@ void Build(Index& x) {
     x.element = Db2::tables::Get("chrcustomizationelement");
     x.geoset = Db2::tables::Get("chrcustomizationgeoset");
     x.chrModel = Db2::tables::Get("chrmodel");
+    x.requirement = Db2::tables::Get("chrcustomizationreq");
     x.material = Db2::tables::Get("chrcustomizationmaterial");
     x.textureLayer = Db2::tables::Get("chrmodeltexturelayer");
     x.layout = Db2::tables::Get("charcomponenttexturelayouts");
@@ -94,9 +96,20 @@ Index& Ready() {
     return index;
 }
 
-// Requirement 10 is the internal Transmog placeholder (Esteria's CreationPolicy.h).
-bool CreationAllowed(const Table& choices, const Row& choice) {
-    return choices.Value(choice, "ChrCustomizationReqID") != 10 && choices.Text(choice, "Name_lang") != "Transmog";
+// Whether a character of the class may take the choice: its ChrCustomizationReq must be a player
+// requirement (NPC-only and Transmog choices are left out) whose class mask includes the class.
+// Achievement, quest and item unlocks are not checked. Without the requirement table only the Transmog
+// placeholders are skipped (Esteria's CreationPolicy.h).
+bool CreationAllowed(const Index& x, const Row& choice, uint32_t classId) {
+    const uint32_t id = x.choice->Value(choice, "ChrCustomizationReqID");
+    if (id == 10 || x.choice->Text(choice, "Name_lang") == "Transmog") return false;
+    if (!id || !x.requirement) return true;
+    const Row* requirement = x.requirement->Find(id);
+    if (!requirement) return true;
+    if (x.requirement->Value(*requirement, "ReqType") != 3) return false;
+    const uint32_t classes = x.requirement->Value(*requirement, "ClassMask");
+    if (!classes || classes == 0xFFFFFFFFu || !classId || classId > 32) return true;
+    return (classes >> (classId - 1)) & 1;
 }
 }
 
@@ -107,7 +120,7 @@ uint32_t ChrModelFor(uint32_t retailRace, uint32_t sex) {
     return found == x.modelByRaceSex.end() ? 0 : found->second;
 }
 
-void Options(uint32_t chrModel, std::vector<Option>& options) {
+void Options(uint32_t chrModel, uint32_t classId, std::vector<Option>& options) {
     options.clear();
     Index& x = Ready();
     if (!x.ready) return;
@@ -120,15 +133,15 @@ void Options(uint32_t chrModel, std::vector<Option>& options) {
         const auto list = x.choicesByOption.find(row->id);
         if (list != x.choicesByOption.end())
             for (const Row* choice : list->second)
-                if (CreationAllowed(*x.choice, *choice)) option.choices.push_back(choice->id);
+                if (CreationAllowed(x, *choice, classId)) option.choices.push_back(choice->id);
         if (!option.choices.empty()) options.push_back(std::move(option));
     }
 }
 
-void DefaultChoices(uint32_t chrModel, std::vector<uint32_t>& choices) {
+void DefaultChoices(uint32_t chrModel, uint32_t classId, std::vector<uint32_t>& choices) {
     choices.clear();
     std::vector<Option> options;
-    Options(chrModel, options);
+    Options(chrModel, classId, options);
     for (const Option& option : options) choices.push_back(option.choices.front());
 }
 

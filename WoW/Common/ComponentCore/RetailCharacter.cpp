@@ -140,7 +140,7 @@ uint32_t StockValue(const CharacterPreferences& prefs, Stock stock) {
 // character's value picks the Nth choice (wrapping when the 3.3.5 range is longer).
 void ChoicesFor(uint32_t chrModel, const CharacterPreferences& prefs, std::vector<uint32_t>& choices) {
     std::vector<Retail::Appearance::Option> options;
-    Retail::Appearance::Options(chrModel, options);
+    Retail::Appearance::Options(chrModel, prefs.m_classId, options);
     std::vector<int32_t> driven(options.size(), -1);
     for (const Stock stock : {Stock::Skin, Stock::Face, Stock::HairStyle, Stock::HairColor, Stock::Facial}) {
         bool found = false;

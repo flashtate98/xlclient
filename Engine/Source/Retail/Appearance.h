@@ -14,18 +14,18 @@ namespace Retail::Appearance
     // The ChrModel for a Retail ChrRaces ID and sex (ChrRaceXChrModel), or 0.
     uint32_t ChrModelFor(uint32_t retailRace, uint32_t sex);
 
-    // A customization option of a model and the choices a new character may take, in OrderIndex order
-    // (the internal "Transmog" placeholders are skipped). Options without such choices are left out.
+    // A customization option of a model and the choices a new character of the class may take, in
+    // OrderIndex order: NPC-only choices, Transmog placeholders and choices whose ChrCustomizationReq
+    // names other classes are left out (class 0: any class). Options without such choices are left out.
     struct Option {
         uint32_t id = 0;
         std::string name;              // "Skin Color", "Hair Style", ...
         std::vector<uint32_t> choices;
     };
-    void Options(uint32_t chrModel, std::vector<Option>& options);
+    void Options(uint32_t chrModel, uint32_t classId, std::vector<Option>& options);
 
-    // One choice per option of the model: the first by OrderIndex that a new character may take
-    // (the internal "Transmog" placeholders are skipped). Options appear in their OrderIndex order.
-    void DefaultChoices(uint32_t chrModel, std::vector<uint32_t>& choices);
+    // One choice per option of the model: the first that a new character of the class may take.
+    void DefaultChoices(uint32_t chrModel, uint32_t classId, std::vector<uint32_t>& choices);
 
     // The geosets the choices select on the model, in choice order. Choices of another model are
     // ignored.

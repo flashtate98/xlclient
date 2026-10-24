@@ -97,7 +97,8 @@ named as in Retail:
 `chrcustomizationelement.db2`, `chrcustomizationgeoset.db2`, `chrcustomizationskinnedmodel.db2`,
 `chrcustomizationmaterial.db2`, `chrcustomizationcondmodel.db2`, `charcomponenttexturelayouts.db2`,
 `charcomponenttexturesections.db2`, `chrmodeltexturelayer.db2`, `creaturedisplayinfo.db2`,
-`creaturemodeldata.db2`, `creaturedisplayinfogeosetdata.db2`, `texturefiledata.db2`.
+`creaturemodeldata.db2`, `creaturedisplayinfogeosetdata.db2`, `texturefiledata.db2`, and
+`chrcustomizationreq.db2` (choice requirements).
 
 They must come from Retail 12.1.5 (`WOWSTATIC_12_1_5_70077`): each table's layout hash is checked,
 and a table from another build is refused rather than misread. They load on first use; the console
@@ -118,7 +119,10 @@ geosets from the customization tables instead of the 3.3.5 hair and facial-hair 
    selectors work on Retail bodies: skin colour, face, hair style, hair colour, and beard (men) or
    makeup/earrings (women). Value N picks the Nth choice, wrapping when the 3.3.5 range is longer.
    Every other option uses its default choice (the first by OrderIndex that a new character may
-   take) until the full Retail choices are stored per character.
+   take) until the full Retail choices are stored per character. A character only gets choices its
+   class may take (ChrCustomizationReq): NPC-only looks are left out, and Death Knight skins and eye
+   glows are kept for Death Knights, whose eye colour defaults to the glow. Achievement, quest and
+   item unlocks are not checked.
 4. The choices' ChrCustomizationElement rows give the geosets (an element tied to a related choice
    applies only when that choice is taken too). Feet, torso, hands, head, eyes and eye overlays get
    their base geoset when no choice names them.
