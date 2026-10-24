@@ -11,6 +11,9 @@
 #include <alloca.h>
 #endif
 #include "WoW/Common/ComponentCore/CharacterComponent.h"
+#if defined(WOWDECOMP_RETAIL_MODELS)
+#include "WoW/Common/ComponentCore/RetailCharacter.h"
+#endif
 #include "Engine/Source/Base/Handle.h"
 #include "Engine/Source/Base/ObjectAlloc.h"
 #include "Engine/Source/Base/Prop.h"
@@ -3444,6 +3447,11 @@ void CCharacterComponent::GeosRenderPrep() {
     CM2Model* model = this->m_data.m_model;
     model->SetGeometryVisible(0, 2000, 0);
     model->SetGeometryVisible(0, 0, 1);
+
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: a Retail body takes its geosets from the Retail customization tables.
+    RetailCharacterGeometry(this);
+#endif
 
     for (int32_t i = 0; i < 19; i++) {
         if (i == 17 && eyeGlow) {

@@ -11,6 +11,7 @@ if (WOWDECOMP_RETAIL_MODELS)
         ${CMAKE_SOURCE_DIR}/Engine/Source/Retail/RetailModel.cpp
         ${CMAKE_SOURCE_DIR}/Engine/Source/Retail/Db2.cpp
         ${CMAKE_SOURCE_DIR}/Engine/Source/Retail/Tables.cpp
+        ${CMAKE_SOURCE_DIR}/Engine/Source/Retail/Appearance.cpp
     )
 endif()
 

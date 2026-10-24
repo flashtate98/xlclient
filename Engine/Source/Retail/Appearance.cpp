@@ -1,0 +1,132 @@
+#include "Engine/Source/Retail/Appearance.h"
+#include "Engine/Source/Retail/Db2.h"
+#include "Engine/Source/Retail/Tables.h"
+#include <algorithm>
+#include <mutex>
+#include <unordered_map>
+
+namespace Retail::Appearance
+{
+namespace
+{
+using Db2::Table;
+using Db2::wdc5::Row;
+
+struct Index {
+    std::once_flag once;
+    bool ready = false;
+    const Table* raceModel = nullptr;
+    const Table* option = nullptr;
+    const Table* choice = nullptr;
+    const Table* element = nullptr;
+    const Table* geoset = nullptr;
+    std::unordered_map<uint64_t, uint32_t> modelByRaceSex;
+    std::unordered_map<uint32_t, std::vector<const Row*>> optionsByModel;
+    std::unordered_map<uint32_t, std::vector<const Row*>> choicesByOption;
+    std::unordered_map<uint32_t, std::vector<const Row*>> elementsByChoice;
+};
+
+constexpr uint64_t RaceSexKey(uint32_t race, uint32_t sex) {
+    return (static_cast<uint64_t>(race) << 32) | sex;
+}
+
+// Ties on OrderIndex break on the row ID, so the order never changes between runs.
+void SortByOrderIndex(std::unordered_map<uint32_t, std::vector<const Row*>>& index, const Table& table) {
+    for (auto& entry : index) {
+        std::sort(entry.second.begin(), entry.second.end(), [&table](const Row* a, const Row* b) {
+            const uint32_t oa = table.Value(*a, "OrderIndex"), ob = table.Value(*b, "OrderIndex");
+            return oa != ob ? oa < ob : a->id < b->id;
+        });
+    }
+}
+
+void Build(Index& x) {
+    x.raceModel = Db2::tables::Get("chrracexchrmodel");
+    x.option = Db2::tables::Get("chrcustomizationoption");
+    x.choice = Db2::tables::Get("chrcustomizationchoice");
+    x.element = Db2::tables::Get("chrcustomizationelement");
+    x.geoset = Db2::tables::Get("chrcustomizationgeoset");
+    if (!x.raceModel || !x.option || !x.choice || !x.element || !x.geoset) return;
+
+    for (const Row& row : x.raceModel->Rows())
+        x.modelByRaceSex[RaceSexKey(x.raceModel->Value(row, "ChrRacesID"), x.raceModel->Value(row, "Sex"))] =
+            x.raceModel->Value(row, "ChrModelID");
+    for (const Row& row : x.option->Rows())
+        x.optionsByModel[x.option->Value(row, "ChrModelID")].push_back(&row);
+    for (const Row& row : x.choice->Rows())
+        x.choicesByOption[x.choice->Value(row, "ChrCustomizationOptionID")].push_back(&row);
+    for (const Row& row : x.element->Rows())
+        x.elementsByChoice[x.element->Value(row, "ChrCustomizationChoiceID")].push_back(&row);
+    SortByOrderIndex(x.optionsByModel, *x.option);
+    SortByOrderIndex(x.choicesByOption, *x.choice);
+    x.ready = true;
+}
+
+Index& Ready() {
+    static Index index;
+    std::call_once(index.once, [] { Build(index); });
+    return index;
+}
+
+// Requirement 10 is the internal Transmog placeholder (Esteria's CreationPolicy.h).
+bool CreationAllowed(const Table& choices, const Row& choice) {
+    return choices.Value(choice, "ChrCustomizationReqID") != 10 && choices.Text(choice, "Name_lang") != "Transmog";
+}
+}
+
+uint32_t ChrModelFor(uint32_t retailRace, uint32_t sex) {
+    Index& x = Ready();
+    if (!x.ready) return 0;
+    const auto found = x.modelByRaceSex.find(RaceSexKey(retailRace, sex));
+    return found == x.modelByRaceSex.end() ? 0 : found->second;
+}
+
+void DefaultChoices(uint32_t chrModel, std::vector<uint32_t>& choices) {
+    choices.clear();
+    Index& x = Ready();
+    if (!x.ready) return;
+    const auto options = x.optionsByModel.find(chrModel);
+    if (options == x.optionsByModel.end()) return;
+    for (const Row* option : options->second) {
+        const auto list = x.choicesByOption.find(option->id);
+        if (list == x.choicesByOption.end()) continue;
+        for (const Row* choice : list->second) {
+            if (!CreationAllowed(*x.choice, *choice)) continue;
+            choices.push_back(choice->id);
+            break;
+        }
+    }
+}
+
+void Geosets(uint32_t chrModel, const std::vector<uint32_t>& choices, std::vector<uint16_t>& geosets) {
+    geosets.clear();
+    Index& x = Ready();
+    if (!x.ready) return;
+    for (const uint32_t id : choices) {
+        const Row* choice = x.choice->Find(id);
+        const Row* option = choice ? x.option->Find(x.choice->Value(*choice, "ChrCustomizationOptionID")) : nullptr;
+        if (!option || x.option->Value(*option, "ChrModelID") != chrModel) continue;
+        const auto elements = x.elementsByChoice.find(id);
+        if (elements == x.elementsByChoice.end()) continue;
+        for (const Row* element : elements->second) {
+            // A hair style lists one element per hair colour, each waiting for its colour.
+            const uint32_t needs = x.element->Value(*element, "RelatedChrCustomizationChoiceID");
+            if (needs && std::find(choices.begin(), choices.end(), needs) == choices.end()) continue;
+            const uint32_t geosetId = x.element->Value(*element, "ChrCustomizationGeosetID");
+            const Row* geoset = geosetId ? x.geoset->Find(geosetId) : nullptr;
+            if (!geoset) continue;
+            const uint32_t value = x.geoset->Value(*geoset, "GeosetType") * 100u + x.geoset->Value(*geoset, "GeosetID");
+            if (value <= 0xFFFF) geosets.push_back(static_cast<uint16_t>(value));
+        }
+    }
+}
+
+void DefaultGeosets(const std::vector<uint16_t>& chosen, std::vector<uint16_t>& defaults) {
+    defaults.clear();
+    for (const uint16_t base : {2001, 2201, 2301, 3202, 3301, 5101}) {
+        bool picked = false;
+        for (const uint16_t geoset : chosen) picked = picked || geoset / 100 == base / 100;
+        if (!picked) defaults.push_back(base);
+    }
+}
+}

@@ -103,3 +103,23 @@ They must come from Retail 12.1.5 (`WOWSTATIC_12_1_5_70077`): each table's layou
 and a table from another build is refused rather than misread. They load on first use; the console
 command `retailTables` loads them on demand and lists the row counts. `Logs\RetailTables.log` has
 each table's rows, load time, or error.
+
+## Retail character bodies (geosets)
+
+When a character's body model is a Retail model (for example `character\human\male\humanmale_hd.m2`
+placed over the model a ChrRaces display points at), `CCharacterComponent::GeosRenderPrep` takes its
+geosets from the customization tables instead of the 3.3.5 hair and facial-hair rules:
+
+1. The client race is mapped to a Retail ChrRaces ID. Races 1-11 are the same in both; other races
+   need a row in `Data\Retail\races.csv` (`clientRace;retailRace`, one per line; a retail ID of 0
+   removes a mapping).
+2. ChrRaceXChrModel gives the ChrModel for the character's sex.
+3. Each customization option of that model uses its default choice (the first by OrderIndex that a
+   new character may take). Per-character choices come later.
+4. The choices' ChrCustomizationElement rows give the geosets (an element tied to a related choice
+   applies only when that choice is taken too). Feet, torso, hands, head, eyes and eye overlays get
+   their base geoset when no choice names them.
+
+Everything above geoset 2000 is hidden first, as the 3.3.5 reset only reaches 2000.
+`Logs\RetailCharacter.log` lists, per Retail race and sex, the ChrModel, the default choices and the
+resulting geosets.
