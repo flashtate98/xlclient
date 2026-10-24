@@ -37,6 +37,17 @@ namespace Retail::Appearance
     // ignored.
     void Geosets(uint32_t chrModel, const std::vector<uint32_t>& choices, std::vector<uint16_t>& geosets);
 
+    // A separately modelled part a choice adds (Demon Hunter horns and blindfolds, ...): a collection
+    // model bound to the body's skeleton, showing one of its geosets (type * 100 + id; type * 100
+    // alone hides the collection's group). From ChrCustomizationSkinnedModel.
+    struct SkinnedModel {
+        uint32_t choice = 0;
+        uint32_t fileDataId = 0;
+        uint32_t geoset = 0;
+        uint32_t flags = 0;
+    };
+    void SkinnedModels(uint32_t chrModel, const std::vector<uint32_t>& choices, std::vector<SkinnedModel>& parts);
+
     // Anatomy that no customization choice of a race names, shown unless a choice picks that group:
     // feet (20), torso (22), hands (23), head (32), eyes (33) and eye overlays (51). From Esteria's
     // RaceGeometry.h.

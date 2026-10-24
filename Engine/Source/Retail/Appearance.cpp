@@ -20,6 +20,7 @@ struct Index {
     const Table* choice = nullptr;
     const Table* element = nullptr;
     const Table* geoset = nullptr;
+    const Table* skinnedModel = nullptr;
     const Table* requirement = nullptr;
     const Table* requirementChoice = nullptr;
     std::unordered_map<uint32_t, std::vector<uint32_t>> choicesByRequirement;
@@ -58,6 +59,7 @@ void Build(Index& x) {
     x.choice = Db2::tables::Get("chrcustomizationchoice");
     x.element = Db2::tables::Get("chrcustomizationelement");
     x.geoset = Db2::tables::Get("chrcustomizationgeoset");
+    x.skinnedModel = Db2::tables::Get("chrcustomizationskinnedmodel");
     x.chrModel = Db2::tables::Get("chrmodel");
     x.requirement = Db2::tables::Get("chrcustomizationreq");
     x.requirementChoice = Db2::tables::Get("chrcustomizationreqchoice");
@@ -185,6 +187,32 @@ void Geosets(uint32_t chrModel, const std::vector<uint32_t>& choices, std::vecto
             if (!geoset) continue;
             const uint32_t value = x.geoset->Value(*geoset, "GeosetType") * 100u + x.geoset->Value(*geoset, "GeosetID");
             if (value <= 0xFFFF) geosets.push_back(static_cast<uint16_t>(value));
+        }
+    }
+}
+
+void SkinnedModels(uint32_t chrModel, const std::vector<uint32_t>& choices, std::vector<SkinnedModel>& parts) {
+    parts.clear();
+    Index& x = Ready();
+    if (!x.ready || !x.skinnedModel) return;
+    for (const uint32_t id : choices) {
+        const Row* choice = x.choice->Find(id);
+        const Row* option = choice ? x.option->Find(x.choice->Value(*choice, "ChrCustomizationOptionID")) : nullptr;
+        if (!option || x.option->Value(*option, "ChrModelID") != chrModel) continue;
+        const auto elements = x.elementsByChoice.find(id);
+        if (elements == x.elementsByChoice.end()) continue;
+        for (const Row* element : elements->second) {
+            const uint32_t needs = x.element->Value(*element, "RelatedChrCustomizationChoiceID");
+            if (needs && std::find(choices.begin(), choices.end(), needs) == choices.end()) continue;
+            const uint32_t partId = x.element->Value(*element, "ChrCustomizationSkinnedModelID");
+            const Row* part = partId ? x.skinnedModel->Find(partId) : nullptr;
+            if (!part) continue;
+            SkinnedModel model;
+            model.choice = id;
+            model.fileDataId = x.skinnedModel->Value(*part, "CollectionsFileDataID");
+            model.geoset = x.skinnedModel->Value(*part, "GeosetType") * 100u + x.skinnedModel->Value(*part, "GeosetID");
+            model.flags = x.skinnedModel->Value(*part, "Flags");
+            if (model.fileDataId) parts.push_back(model);
         }
     }
 }

@@ -334,6 +334,15 @@ class CM2Model {
     void LinkToAsyncHead(int32_t textures);
     void LinkToAsyncHeadRecursive(int32_t textures);
     void ReplaceParticleColor(uint32_t id, CImVector color0, CImVector color1, CImVector color2);
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: a model attached to the root of `parent` (attachToRoot) that is drawn with
+    // the parent's skeleton -- Retail customization collections (Demon Hunter horns, blindfolds, ...).
+    // Each animation copies the parent's final bone matrices onto this model's bones, matched by
+    // bone-name CRC (or by index when both rigs are identical). False, binding nothing, when either
+    // model is not loaded or the rigs do not match. Null unbinds.
+    bool SetSkinParent(CM2Model* parent);
+    bool HasSkinParent(const CM2Model* parent) const;
+#endif
     void ReplaceTexture(uint32_t type, CTexture* texture);
     void SetAnimating(int32_t animating);
     void SetEventCallback(void* callback, uint64_t param);

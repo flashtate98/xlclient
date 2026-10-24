@@ -37,6 +37,66 @@
 #include "Engine/Source/Tempest/CMath.h"
 #include "WoW/Source/DB/DBClient/DBClient.h"
 #include "WoW/Source/Object/ObjectClient/Types.h"
+#if defined(WOWDECOMP_RETAIL_MODELS)
+#include <atomic>
+#include <map>
+#include <mutex>
+#include <vector>
+
+namespace {
+// Not in the original: skin-parent bindings (CM2Model::SetSkinParent), kept outside CM2Model so its
+// layout stays the original's. Ported from the Esteria fork's M2Model.cpp. The pointers are borrowed
+// from the attachment and dropped before either model is detached or freed.
+struct SkinParentBinding {
+    CM2Model* parent;
+    const M2Data* childData;
+    const M2Data* parentData;
+    std::vector<uint16_t> bones;    // child bone -> parent bone
+};
+std::mutex s_skinParentMutex;
+std::map<const CM2Model*, SkinParentBinding> s_skinParents;
+std::atomic<size_t> s_skinParentCount{0};   // lets every other model skip the lock
+
+void ClearSkinParents(CM2Model* model) {
+    if (!s_skinParentCount.load(std::memory_order_relaxed)) return;
+    std::lock_guard<std::mutex> lock(s_skinParentMutex);
+    for (auto it = s_skinParents.begin(); it != s_skinParents.end();) {
+        if (it->first == model || it->second.parent == model) it = s_skinParents.erase(it);
+        else ++it;
+    }
+    s_skinParentCount = s_skinParents.size();
+}
+
+bool SameSkinPivot(const C3Vector& a, const C3Vector& b) {
+    return std::isfinite(a.x) && std::isfinite(a.y) && std::isfinite(a.z) &&
+        std::isfinite(b.x) && std::isfinite(b.y) && std::isfinite(b.z) &&
+        std::fabs(a.x - b.x) <= 0.00001f && std::fabs(a.y - b.y) <= 0.00001f && std::fabs(a.z - b.z) <= 0.00001f;
+}
+
+void CopySkinParentPose(CM2Model* child) {
+    if (!s_skinParentCount.load(std::memory_order_relaxed)) return;
+    std::lock_guard<std::mutex> lock(s_skinParentMutex);
+    const auto found = s_skinParents.find(child);
+    if (found == s_skinParents.end()) return;
+    const auto& binding = found->second;
+    CM2Model* parent = binding.parent;
+    if (child->m_attachParent != parent || child->m_attachmentIndex != 0xFFFF ||
+        !(child->m_fFlags & 0x40000) || !(parent->m_fFlags & 1) ||
+        !child->m_shared || !parent->m_shared || child->m_shared->m_data != binding.childData ||
+        parent->m_shared->m_data != binding.parentData || !child->m_boneMatrices || !parent->m_boneMatrices) {
+        s_skinParents.erase(found);
+        s_skinParentCount = s_skinParents.size();
+        return;
+    }
+    // The parent's matrices already hold its animation and view transform. Copied, never aliased:
+    // each model owns and frees its own matrices.
+    for (size_t i = 0; i < binding.bones.size(); ++i)
+        child->m_boneMatrices[i] = parent->m_boneMatrices[binding.bones[i]];
+    child->m_matrixF4 = parent->m_matrixF4;
+    child->m_scaleSq = parent->m_scaleSq;
+}
+}
+#endif
 
 // STATIC: 0x00A45570
 static const uint32_t s_ribbonBlendModes[] = { 0, 1, 2, 10, 3, 4, 5 };
@@ -1936,6 +1996,9 @@ C3Vector CM2Model::GetAttachmentPivot(uint32_t id) {
 // VERIFY: dca38176 manual
 // OFFSET: 0x008274F0
 void CM2Model::DetachFromParent() {
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    ClearSkinParents(this);
+#endif
     if (this->m_attachPrev) {
         *this->m_attachPrev = this->m_attachNext;
     }
@@ -1967,6 +2030,9 @@ void CM2Model::DetachAllChildrenById(uint32_t id) {
         CM2Model* next = model->m_attachNext;
 
         if (model->m_attachmentId == id) {
+#if defined(WOWDECOMP_RETAIL_MODELS)
+            ClearSkinParents(model);
+#endif
             if (model->m_attachPrev) {
                 *model->m_attachPrev = model->m_attachNext;
             }
@@ -3878,6 +3944,9 @@ CM2Model::CM2Model() {
 // VERIFY: 6ff1ddfd manual
 // OFFSET: 0x0082C1C0
 void CM2Model::FreeInternalResources() {
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    ClearSkinParents(this);
+#endif
     M2ModelBone* bones = this->m_bones;
 
     if (!bones) {
@@ -4815,6 +4884,10 @@ void CM2Model::AnimateMTSimple(const C44Matrix* view, const C3Vector& diffuse, c
 
     *this->m_boneMatrices = this->m_matrixF4;
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    CopySkinParentPose(this);
+#endif
+
     for (uint32_t i = 0; i < data->m_textureWeights.m_count; i++) {
         M2TextureWeight* weight = &data->m_textureWeights[i];
         uint32_t count = weight->m_weight.m_sequenceTimes.m_count;
@@ -5535,6 +5608,10 @@ void CM2Model::AnimateMT(const C44Matrix* view, const C3Vector& diffuse, const C
             boneMatrix.d3 = 1.0f;
         }
     }
+
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    CopySkinParentPose(this);
+#endif
 
     for (uint32_t i = 0; i < data->m_colors.m_count; i++) {
         M2Color* colorData = &data->m_colors[i];
@@ -7930,3 +8007,89 @@ uint32_t CM2Model::GetBillboardBoneCount() const {
 
     return 0;
 }
+
+#if defined(WOWDECOMP_RETAIL_MODELS)
+bool CM2Model::SetSkinParent(CM2Model* parent) {
+    std::lock_guard<std::mutex> lock(s_skinParentMutex);
+    const auto done = [](bool result) { s_skinParentCount = s_skinParents.size(); return result; };
+    if (!parent) {
+        s_skinParents.erase(this);
+        return done(true);
+    }
+    if (parent == this || this->m_scene != parent->m_scene || this->m_attachParent != parent ||
+        this->m_attachmentIndex != 0xFFFF || !(this->m_fFlags & 0x40000) || !(this->m_fFlags & 1) ||
+        !(parent->m_fFlags & 1) || !this->m_shared || !parent->m_shared || !this->m_shared->m_data ||
+        !parent->m_shared->m_data || !this->m_boneMatrices || !parent->m_boneMatrices) {
+        s_skinParents.erase(this);
+        return done(false);
+    }
+    const M2Data* childData = this->m_shared->m_data;
+    const M2Data* parentData = parent->m_shared->m_data;
+    const auto existing = s_skinParents.find(this);
+    if (existing != s_skinParents.end() && existing->second.parent == parent &&
+        existing->second.childData == childData && existing->second.parentData == parentData) return done(true);
+    s_skinParents.erase(this);
+    const auto& childBones = childData->m_bones;
+    const auto& parentBones = parentData->m_bones;
+    if (!childBones.m_count || childBones.m_count > 65535 || !parentBones.m_count || parentBones.m_count > 65535)
+        return done(false);
+
+    // Index matching is safe only when the whole rig is identical (some shared skeletons carry zero
+    // name CRCs); otherwise every child bone is found by its name CRC.
+    bool identical = childBones.m_count == parentBones.m_count;
+    for (uint32_t i = 0; identical && i < childBones.m_count; ++i) {
+        const auto& a = childBones[i];
+        const auto& b = parentBones[i];
+        identical = a.m_boneNameCRC == b.m_boneNameCRC && a.m_boneId == b.m_boneId && a.m_flags == b.m_flags &&
+            a.m_parentIndex == b.m_parentIndex && a.m_uDistToParent == b.m_uDistToParent && SameSkinPivot(a.m_pivot, b.m_pivot);
+    }
+    SkinParentBinding binding{parent, childData, parentData, {}};
+    binding.bones.resize(childBones.m_count);
+    if (identical) {
+        for (uint32_t i = 0; i < childBones.m_count; ++i) binding.bones[i] = uint16_t(i);
+    } else {
+        std::map<uint32_t, uint16_t> names;
+        for (uint32_t i = 0; i < parentBones.m_count; ++i) {
+            const uint32_t name = parentBones[i].m_boneNameCRC;
+            if (name && !names.emplace(name, uint16_t(i)).second) return done(false);
+        }
+        std::map<uint32_t, uint16_t> childNames;
+        for (uint32_t i = 0; i < childBones.m_count; ++i) {
+            const auto& bone = childBones[i];
+            if (!bone.m_boneNameCRC || !childNames.emplace(bone.m_boneNameCRC, uint16_t(i)).second) return done(false);
+            const auto match = names.find(bone.m_boneNameCRC);
+            if (match == names.end()) return done(false);
+            binding.bones[i] = match->second;
+        }
+    }
+    // Collection rigs leave out intermediate body joints; each child bone's parent must still be an
+    // ancestor of its match on the body, or its vertices would follow the wrong joint.
+    for (uint32_t i = 0; i < childBones.m_count; ++i) {
+        const uint16_t ancestor = childBones[i].m_parentIndex;
+        if (ancestor != 0xFFFF && ancestor >= childBones.m_count) return done(false);
+        if (ancestor != 0xFFFF) {
+            const uint16_t expected = binding.bones[ancestor];
+            uint16_t actual = parentBones[binding.bones[i]].m_parentIndex;
+            uint32_t depth = 0;
+            while (actual != expected && actual != 0xFFFF && depth++ < parentBones.m_count)
+                actual = parentBones[actual].m_parentIndex;
+            if (actual != expected) return done(false);
+        }
+    }
+    s_skinParents.emplace(this, std::move(binding));
+    this->m_frameStamp = this->m_scene->m_frameStamp - 1;
+    return done(true);
+}
+
+bool CM2Model::HasSkinParent(const CM2Model* parent) const {
+    if (!s_skinParentCount.load(std::memory_order_relaxed)) return false;
+    std::lock_guard<std::mutex> lock(s_skinParentMutex);
+    const auto found = s_skinParents.find(this);
+    if (!parent || found == s_skinParents.end()) return false;
+    const auto& binding = found->second;
+    return binding.parent == parent && this->m_attachParent == parent && this->m_attachmentIndex == 0xFFFF &&
+        (this->m_fFlags & 0x40000) && (this->m_fFlags & 1) && (parent->m_fFlags & 1) && this->m_shared &&
+        parent->m_shared && this->m_shared->m_data == binding.childData &&
+        parent->m_shared->m_data == binding.parentData && this->m_boneMatrices && parent->m_boneMatrices;
+}
+#endif

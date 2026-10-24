@@ -11,6 +11,7 @@
 #include "Engine/Source/Retail/Compose.h"
 #include "Engine/Source/Retail/LocalSource.h"
 #include "Engine/Source/Retail/RetailModel.h"
+#include "Engine/Source/Model2/M2Scene.h"
 #include "Engine/Source/BlizzardCore/SFile2-Core.h"
 #include "Engine/Source/Model2/M2Data.h"
 #include "WoW/Common/ComponentCore/Types.h"
@@ -20,6 +21,7 @@
 #include "WoW/Source/DB/Rec/ItemDisplayInfoRec.h"
 #include "WoW/Source/DB/Rec/HelmetGeosetVisDataRec.h"
 #include <deque>
+#include <cctype>
 #include <charconv>
 #include <chrono>
 #include <cstdlib>
@@ -99,6 +101,7 @@ struct Look {
     std::string key;                         // names its textures: race, sex and choices
     std::vector<uint16_t> geosets;           // chosen, then the anatomy defaults
     std::vector<Retail::Appearance::TextureSection> sections;
+    std::vector<Retail::Appearance::SkinnedModel> parts;            // collection models (horns, ...)
     std::shared_ptr<const Retail::Image> body;                      // the composed skin sheet (type 1)
     std::string bodyKey;                                             // its layers (shared by looks)
     std::map<uint32_t, std::shared_ptr<OwnedTexture>> textures;     // every other type (hair, eyes, ...)
@@ -228,6 +231,7 @@ std::shared_ptr<Look> LookFor(uint32_t retailRace, uint32_t sex, uint32_t chrMod
     Retail::Appearance::DefaultGeosets(look->geosets, defaults);
     look->geosets.insert(look->geosets.end(), defaults.begin(), defaults.end());
     Retail::Appearance::Sections(Retail::Appearance::LayoutFor(chrModel), look->sections);
+    Retail::Appearance::SkinnedModels(chrModel, choices, look->parts);
     Retail::Appearance::TextureLayers(chrModel, choices, layers);
     const double tables = Since(lookStart);
     Retail::ComposeStats compose;
@@ -418,6 +422,106 @@ std::vector<EquipmentLayer> CollectEquipmentLayers(const CCharacterComponent* ch
 
 }
 
+// Collection models: separately modelled parts a choice adds (Demon Hunter horns, blindfolds). Each is
+// a Retail model attached to the body's root and drawn with the body's skeleton (SetSkinParent),
+// showing the geosets the choices pick and the body's textures by type. One model holds every variant
+// of its parts (all six horn styles), so a model is created per file and its geosets switch.
+constexpr uint32_t kCollectionSocket = 0xFFFFFFFEu;
+
+struct Collection {
+    CM2Model* parent = nullptr;
+    std::vector<uint16_t> geosets;
+    bool reported = false;
+};
+std::unordered_map<CM2Model*, Collection> s_collections;    // by collection model
+
+// Model names compare without regard to case or slash direction (the cache may normalise them).
+std::string NameKey(const char* name) {
+    std::string key = name ? name : "";
+    for (char& c : key) c = c == '\\' ? '/' : static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return key;
+}
+
+bool IsCollection(const CM2Model* child, const CM2Model* parent) {
+    return child && child->m_attachParent == parent && child->m_attachmentId == kCollectionSocket;
+}
+
+// Binds a loaded collection to its body and shows its geosets and the body's textures.
+void ApplyCollection(CM2Model* child) {
+    const auto found = s_collections.find(child);
+    if (found == s_collections.end()) return;
+    Collection& state = found->second;
+    CM2Model* parent = state.parent;
+    if (!IsCollection(child, parent)) { s_collections.erase(found); return; }
+    if (!(child->m_fFlags & 1) || !(parent->m_fFlags & 1)) return;   // the loaded callback comes back
+    if (!child->HasSkinParent(parent) && !child->SetSkinParent(parent)) {
+        child->SetGeometryVisible(0, 65535, 0);
+        if (!state.reported) {
+            state.reported = true;
+            Blizzard::Log::Printf(1, kLog, "Collection %s does not match the skeleton of %s; not shown\n",
+                child->m_shared->m_fileName, parent->m_shared->m_fileName);
+        }
+        return;
+    }
+    child->SetGeometryVisible(0, 65535, 0);
+    for (const uint16_t geoset : state.geosets) child->SetGeometryVisible(geoset, geoset, 1);
+    if (parent->m_textures) {
+        const auto& textures = parent->m_shared->m_data->m_textures;
+        for (uint32_t i = 0; i < textures.m_count; ++i)
+            if (textures[i].m_type && parent->m_textures[i]) child->ReplaceTexture(textures[i].m_type, parent->m_textures[i]);
+    }
+}
+
+void OnCollectionLoaded(CM2Model* child, void*) {
+    ApplyCollection(child);
+}
+
+void ApplyCollections(CM2Model* parent) {
+    for (CM2Model* child = parent ? parent->m_attachList : nullptr; child; child = child->m_attachNext)
+        if (child->m_attachmentId == kCollectionSocket) ApplyCollection(child);
+}
+
+// Makes the body's collection models match the look: drops models no choice wants, creates the missing
+// ones (they bind once loaded) and updates the geosets of the rest.
+void SyncCollections(CCharacterComponent* character, const Look& look) {
+    CM2Model* parent = character->m_data.m_model;
+    std::map<std::string, std::vector<uint16_t>> wanted;
+    for (const auto& part : look.parts)
+        if (part.geoset % 100) wanted[NameKey(Retail::FileName(part.fileDataId, ".m2").c_str())].push_back(static_cast<uint16_t>(part.geoset));
+
+    for (CM2Model* child = parent->m_attachList; child;) {
+        CM2Model* next = child->m_attachNext;
+        if (child->m_attachmentId == kCollectionSocket) {
+            const auto want = child->m_shared ? wanted.find(NameKey(child->m_shared->m_fileName)) : wanted.end();
+            if (want == wanted.end()) {
+                s_collections.erase(child);
+                child->DetachFromParent();
+            } else {
+                Collection& state = s_collections[child];
+                state.parent = parent;
+                state.geosets = want->second;
+                ApplyCollection(child);
+                wanted.erase(want);
+            }
+        }
+        child = next;
+    }
+    for (const auto& want : wanted) {
+        CM2Model* child = parent->m_scene->CreateModel(want.first.c_str(), 0);
+        if (!child) {
+            Blizzard::Log::Printf(1, kLog, "Collection %s could not be created\n", want.first.c_str());
+            continue;
+        }
+        child->SetGeometryVisible(0, 65535, 0);   // nothing shows until it follows the body's skeleton
+        child->AttachToParent(parent, kCollectionSocket, nullptr, 1);
+        Collection& state = s_collections[child];
+        state.parent = parent;
+        state.geosets = want.second;
+        child->SetLoadedCallback(OnCollectionLoaded, nullptr);
+        child->Release();   // the attachment holds the body's reference
+    }
+}
+
 bool RetailCharacterGeometry(CCharacterComponent* character) {
     const auto found = RetailLook(character);
     if (!found) return false;
@@ -437,6 +541,7 @@ bool RetailCharacterGeometry(CCharacterComponent* character) {
 
     // Hair, eyes and the other single-layer types replace the 3.3.5 CharSections textures.
     for (const auto& texture : look.textures) model->ReplaceTexture(texture.first, texture.second->texture);
+    SyncCollections(character, look);
     return true;
 }
 
@@ -444,6 +549,7 @@ bool RetailCharacterTextures(CCharacterComponent* character) {
     const auto look = RetailLook(character);
     if (!look) return false;
     for (const auto& texture : look->textures) character->m_data.m_model->ReplaceTexture(texture.first, texture.second->texture);
+    ApplyCollections(character->m_data.m_model);
     return true;
 }
 
@@ -529,6 +635,8 @@ void RetailCustomizationGiveExtras(const CCharacterComponent* character, const R
 }
 
 void RetailCustomizationForget(const CCharacterComponent* character) {
+    for (auto it = s_collections.begin(); it != s_collections.end();)
+        it = it->second.parent == character->m_data.m_model ? s_collections.erase(it) : std::next(it);
     s_extraChoices.erase(character);
     s_boundGuids.erase(character);
 }
@@ -590,6 +698,7 @@ void RetailCharacterShutdown() {
     s_composedTextureOrder.clear();
     s_itemImages.clear();
     s_itemImageOrder.clear();
+    s_collections.clear();
     for (auto& body : s_bodies) HandleClose(reinterpret_cast<HOBJECT>(body.second));
     s_bodies.clear();
     s_bodyOrder.clear();
@@ -706,6 +815,7 @@ void RetailCharacterBody(CCharacterComponent* character) {
         }
     }
     character->m_data.m_model->ReplaceTexture(1, cached->second);
+    ApplyCollections(character->m_data.m_model);
 }
 
 void RetailCharacterFitHelmet(CCharacterComponent* character) {
