@@ -205,12 +205,25 @@ constexpr Definition kChrCustomizationReq{
     "chrcustomizationreq", "DBFilesClient\\chrcustomizationreq.db2", 0xCA154412u, kChrCustomizationReqFields,
 };
 
+// The choices a requirement also asks for: one of them must be taken (ParentId is the requirement).
+constexpr Field kChrCustomizationReqChoiceFields[] = {
+    { "ChrCustomizationChoiceID" },
+};
+constexpr Relation kChrCustomizationReqChoiceRelations[] = {
+    { "ChrCustomizationReqID", RelationSource::ParentId, {}, 0, "chrcustomizationreq" },
+};
+constexpr Definition kChrCustomizationReqChoice{
+    "chrcustomizationreqchoice", "DBFilesClient\\chrcustomizationreqchoice.db2", 0xF925BC6Fu,
+    kChrCustomizationReqChoiceFields, kChrCustomizationReqChoiceRelations,
+};
+
 constexpr Definition kDefinitions[] = {
     kChrRaceXChrModel, kChrModel, kChrCustomizationOption, kChrCustomizationChoice,
     kChrCustomizationElement, kChrCustomizationGeoset, kChrCustomizationSkinnedModel,
     kChrCustomizationMaterial, kChrCustomizationCondModel, kCharComponentTextureLayouts,
     kChrModelTextureLayer, kCreatureDisplayInfo, kCreatureModelData, kCreatureDisplayInfoGeosetData,
     kCharComponentTextureSections, kTextureFileData, kChrCustomizationReq,
+    kChrCustomizationReqChoice,
 };
 constexpr size_t kCount = sizeof(kDefinitions) / sizeof(kDefinitions[0]);
 

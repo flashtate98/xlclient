@@ -151,9 +151,15 @@ void ChoicesFor(uint32_t chrModel, const CharacterPreferences& prefs, std::vecto
                     found = true;
                 }
     }
+    // Options are taken in their OrderIndex order (Face before Skin Color), and a choice that asks for a
+    // choice of an earlier option is offered only when that choice was taken.
     choices.clear();
+    std::vector<uint32_t> list;
     for (size_t i = 0; i < options.size(); ++i) {
-        const auto& list = options[i].choices;
+        list.clear();
+        for (const uint32_t id : options[i].choices)
+            if (Retail::Appearance::RequirementsMet(id, choices)) list.push_back(id);
+        if (list.empty()) list = options[i].choices;
         const uint32_t index = driven[i] < 0 ? 0 : StockValue(prefs, static_cast<Stock>(driven[i])) % list.size();
         choices.push_back(list[index]);
     }

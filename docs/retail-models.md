@@ -98,7 +98,7 @@ named as in Retail:
 `chrcustomizationmaterial.db2`, `chrcustomizationcondmodel.db2`, `charcomponenttexturelayouts.db2`,
 `charcomponenttexturesections.db2`, `chrmodeltexturelayer.db2`, `creaturedisplayinfo.db2`,
 `creaturemodeldata.db2`, `creaturedisplayinfogeosetdata.db2`, `texturefiledata.db2`, and
-`chrcustomizationreq.db2` (choice requirements).
+`chrcustomizationreq.db2` and `chrcustomizationreqchoice.db2` (choice requirements).
 
 They must come from Retail 12.1.5 (`WOWSTATIC_12_1_5_70077`): each table's layout hash is checked,
 and a table from another build is refused rather than misread. They load on first use; the console

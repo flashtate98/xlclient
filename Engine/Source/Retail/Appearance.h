@@ -24,6 +24,11 @@ namespace Retail::Appearance
     };
     void Options(uint32_t chrModel, uint32_t classId, std::vector<Option>& options);
 
+    // Whether the choice's requirement is met by the other choices taken: some choices (the newer Human
+    // skins, for instance) are offered only alongside particular choices of another option
+    // (ChrCustomizationReqChoice). True when the choice asks for none.
+    bool RequirementsMet(uint32_t choiceId, const std::vector<uint32_t>& selected);
+
     // One choice per option of the model: the first that a new character of the class may take.
     void DefaultChoices(uint32_t chrModel, uint32_t classId, std::vector<uint32_t>& choices);
 

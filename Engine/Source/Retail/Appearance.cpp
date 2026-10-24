@@ -21,6 +21,8 @@ struct Index {
     const Table* element = nullptr;
     const Table* geoset = nullptr;
     const Table* requirement = nullptr;
+    const Table* requirementChoice = nullptr;
+    std::unordered_map<uint32_t, std::vector<uint32_t>> choicesByRequirement;
     const Table* chrModel = nullptr;
     const Table* material = nullptr;
     const Table* textureLayer = nullptr;
@@ -58,12 +60,16 @@ void Build(Index& x) {
     x.geoset = Db2::tables::Get("chrcustomizationgeoset");
     x.chrModel = Db2::tables::Get("chrmodel");
     x.requirement = Db2::tables::Get("chrcustomizationreq");
+    x.requirementChoice = Db2::tables::Get("chrcustomizationreqchoice");
     x.material = Db2::tables::Get("chrcustomizationmaterial");
     x.textureLayer = Db2::tables::Get("chrmodeltexturelayer");
     x.layout = Db2::tables::Get("charcomponenttexturelayouts");
     x.section = Db2::tables::Get("charcomponenttexturesections");
     x.textureFile = Db2::tables::Get("texturefiledata");
     if (!x.raceModel || !x.option || !x.choice || !x.element || !x.geoset) return;
+    if (x.requirementChoice)
+        for (const Row& row : x.requirementChoice->Rows())
+            x.choicesByRequirement[row.parentId].push_back(x.requirementChoice->Value(row, "ChrCustomizationChoiceID"));
     if (x.textureLayer)
         for (const Row& row : x.textureLayer->Rows()) x.layersByLayout[row.parentId].push_back(&row);
     if (x.section)
@@ -136,6 +142,18 @@ void Options(uint32_t chrModel, uint32_t classId, std::vector<Option>& options) 
                 if (CreationAllowed(x, *choice, classId)) option.choices.push_back(choice->id);
         if (!option.choices.empty()) options.push_back(std::move(option));
     }
+}
+
+bool RequirementsMet(uint32_t choiceId, const std::vector<uint32_t>& selected) {
+    Index& x = Ready();
+    if (!x.ready) return true;
+    const Row* choice = x.choice->Find(choiceId);
+    const uint32_t requirement = choice ? x.choice->Value(*choice, "ChrCustomizationReqID") : 0;
+    const auto needed = requirement ? x.choicesByRequirement.find(requirement) : x.choicesByRequirement.end();
+    if (needed == x.choicesByRequirement.end()) return true;
+    for (const uint32_t id : needed->second)
+        if (std::find(selected.begin(), selected.end(), id) != selected.end()) return true;
+    return false;
 }
 
 void DefaultChoices(uint32_t chrModel, uint32_t classId, std::vector<uint32_t>& choices) {
