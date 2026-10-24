@@ -1726,6 +1726,13 @@ static int32_t GetConditionalGeoset(CharacterPreferences* prefs) {
 // VERIFY: 4a5d8b79 manual
 // OFFSET: 0x004EA0B0
 void CCharacterComponent::ReplaceExtraSkinTexture(const char* debug) {
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: a Retail body binds its composed hair, eye and other textures instead.
+    if (RetailCharacterTextures(this)) {
+        return;
+    }
+#endif
+
     if (!ComponentValidateBase(CCharacterComponent::s_chrVarArray, this->m_data.m_preferences.m_raceID, this->m_data.m_preferences.m_sexID, VARIATION_SKIN, 0, this->m_data.m_preferences.m_skinID)) {
         return;
     }
@@ -1753,6 +1760,13 @@ void CCharacterComponent::ReplaceExtraSkinTexture(const char* debug) {
 // VERIFY: d35306aa manual
 // OFFSET: 0x004EA150
 void CCharacterComponent::ReplaceHairTexture(int32_t hairStyleID, const char* debug) {
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: a Retail body binds its composed hair, eye and other textures instead.
+    if (RetailCharacterTextures(this)) {
+        return;
+    }
+#endif
+
     if (!ComponentValidateBase(CCharacterComponent::s_chrVarArray, this->m_data.m_preferences.m_raceID, this->m_data.m_preferences.m_sexID, VARIATION_HAIR, hairStyleID, this->m_data.m_preferences.m_hairColorId)) {
         return;
     }

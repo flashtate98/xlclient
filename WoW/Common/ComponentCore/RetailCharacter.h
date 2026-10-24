@@ -22,6 +22,11 @@ bool RetailCharacterGeometry(CCharacterComponent* character);
 // effect meshes (masks, glows) that the stock facial-hair and Death Knight rules would switch on.
 void RetailCharacterAfterStockGeometry(CCharacterComponent* character);
 
+// Binds the composed non-body textures (hair, eyes, ...) for the character's current values. Called in
+// place of the 3.3.5 hair and extra-skin texture replacement, which a hair colour change triggers
+// without a geometry pass. Returns false, changing nothing, for stock bodies.
+bool RetailCharacterTextures(CCharacterComponent* character);
+
 // Binds the composed Retail skin sheet (texture type 1) with the equipped items' 3.3.5 section
 // textures stretched over the matching Retail sections. Called after the stock section pass, before
 // its temporary item textures are released. Does nothing for stock bodies.

@@ -274,6 +274,13 @@ bool RetailCharacterGeometry(CCharacterComponent* character) {
     return true;
 }
 
+bool RetailCharacterTextures(CCharacterComponent* character) {
+    const auto look = RetailLook(character);
+    if (!look) return false;
+    for (const auto& texture : look->textures) character->m_data.m_model->ReplaceTexture(texture.first, texture.second);
+    return true;
+}
+
 void RetailCharacterBody(CCharacterComponent* character) {
     const auto found = RetailLook(character);
     if (!found || !found->body.width) return;
