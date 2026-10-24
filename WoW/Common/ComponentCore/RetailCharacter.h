@@ -37,6 +37,13 @@ bool RetailCharacterTextures(CCharacterComponent* character);
 // its temporary item textures are released. Does nothing for stock bodies.
 void RetailCharacterBody(CCharacterComponent* character);
 
+// Places an installed 3.3.5 helmet on a Retail body. Stock helmet meshes are built around the 3.3.5
+// body's helmet socket; a Retail skeleton puts socket 11 somewhere else relative to the head, so the
+// helmet sinks into the neck. The helmet keeps the offset from the head it had on the 3.3.5 model of
+// the race (Retail::HelmetTranslation). Called after the helmet is linked and after each section
+// pass; does nothing for stock bodies or Retail helmets.
+void RetailCharacterFitHelmet(CCharacterComponent* character);
+
 // The Retail options of a character that the 3.3.5 selectors do not drive (Eyebrows, Ears, Eye Color,
 // ...), in OrderIndex order, with the choices its class and other choices allow. False for stock bodies.
 struct RetailCustomizationOption {

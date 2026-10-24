@@ -3894,6 +3894,10 @@ void CCharacterComponent::AddHelm(int32_t itemVisual) {
     strcpy(s_pathEnd2, s_buffer);
 
     CCharacterComponent::AddLink(this->m_data.m_model, ATTACH_HELM, s_path, s_path2, itemVisual, displayRec);
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: a 3.3.5 helmet on a Retail body keeps its 3.3.5 offset from the head.
+    RetailCharacterFitHelmet(this);
+#endif
 
     HelmetGeosetVisDataRec* visRec = g_helmetGeosetVisDataDB.GetRecord(displayRec->m_helmetGeosetVisID[this->m_data.m_preferences.m_sexID]);
 

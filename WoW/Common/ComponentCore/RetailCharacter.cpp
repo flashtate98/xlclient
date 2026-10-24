@@ -10,6 +10,10 @@
 #include "Engine/Source/Retail/Appearance.h"
 #include "Engine/Source/Retail/Compose.h"
 #include "Engine/Source/Retail/LocalSource.h"
+#include "Engine/Source/Retail/RetailModel.h"
+#include "Engine/Source/BlizzardCore/SFile2-Core.h"
+#include "Engine/Source/Model2/M2Data.h"
+#include "WoW/Common/ComponentCore/Types.h"
 #include "Engine/Source/Services/Texture.h"
 #include "WoW/Common/TextureCache.h"
 #include "WoW/Source/DB/DBClient/DBClient.h"
@@ -499,6 +503,7 @@ void RetailCharacterShutdown() {
 }
 
 void RetailCharacterBody(CCharacterComponent* character) {
+    RetailCharacterFitHelmet(character);
     const auto found = RetailLook(character);
     if (!found || !found->body.width) return;
     const Look& look = *found;
@@ -562,6 +567,77 @@ void RetailCharacterBody(CCharacterComponent* character) {
         }
     }
     character->m_data.m_model->ReplaceTexture(1, cached->second);
+}
+
+void RetailCharacterFitHelmet(CCharacterComponent* character) {
+    CM2Model* body = character ? character->m_data.m_model : nullptr;
+    if (!body || !(body->m_fFlags & 1) || !body->m_shared || !body->m_shared->m_data) return;
+    uint32_t retailRace = 0;
+    if (!RetailModelOf(character, retailRace)) return;
+    CM2Model* helmet = body->m_attachList;
+    while (helmet && helmet->m_attachmentId != ATTACH_HELM) helmet = helmet->m_attachNext;
+    if (!helmet || !helmet->m_shared || Retail::Source().Handles(helmet->m_shared->m_fileName)) return;
+
+    const M2Data* data = body->m_shared->m_data;
+    if (data->m_boneIndicesById.m_count <= 6 || data->m_attachmentIndicesById.m_count <= ATTACH_HELM) return;
+    const uint16_t head = data->m_boneIndicesById[6];
+    const uint16_t socket = data->m_attachmentIndicesById[ATTACH_HELM];
+    if (head >= data->m_bones.m_count || socket >= data->m_attachments.m_count) return;
+    const auto& attachment = data->m_attachments[socket];
+
+    // The 3.3.5 body the race's helmets were made for: Character\<Race>\<Sex>\<Race><Sex>.m2.
+    static const char* const kStock[] = {nullptr, "Human", "Orc", "Dwarf", "NightElf", "Scourge", "Tauren", "Gnome",
+        "Troll", nullptr, "BloodElf", "Draenei"};
+    const auto& prefs = character->m_data.m_preferences;
+    if (prefs.m_raceID >= sizeof(kStock) / sizeof(kStock[0]) || !kStock[prefs.m_raceID] || prefs.m_sexID > 1) return;
+    const std::string race = kStock[prefs.m_raceID], sex = prefs.m_sexID ? "Female" : "Male";
+    const std::string donorPath = "Character\\" + race + "\\" + sex + "\\" + race + sex + ".m2";
+
+    struct Donor { bool tried = false, valid = false; Retail::HelmetAnchor anchor; };
+    static std::map<std::string, Donor> donors;
+    Donor& donor = donors[donorPath];
+    if (!donor.tried) {
+        donor.tried = true;
+        void* bytes = nullptr;
+        uint32_t size = 0;
+        std::string error = "could not read the file";
+        if (SFile::LoadFile(donorPath.c_str(), &bytes, &size, 0, nullptr)) {
+            const auto* begin = static_cast<const uint8_t*>(bytes);
+            donor.valid = Retail::ReadHelmetAnchor(std::vector<uint8_t>(begin, begin + size), donor.anchor, error);
+            SFile::Unload(bytes);
+        }
+        if (donor.valid) {
+            Blizzard::Log::Printf(1, kLog, "Helmet donor %s: head %.3f %.3f %.3f, socket %.3f %.3f %.3f\n", donorPath.c_str(),
+                donor.anchor.head[0], donor.anchor.head[1], donor.anchor.head[2],
+                donor.anchor.socket[0], donor.anchor.socket[1], donor.anchor.socket[2]);
+        } else {
+            Blizzard::Log::Printf(1, kLog, "Helmet donor %s: %s\n", donorPath.c_str(), error.c_str());
+        }
+    }
+    if (!donor.valid) return;
+
+    const auto& pivot = data->m_bones[head].m_pivot;
+    const Retail::HelmetAnchor target{{pivot.x, pivot.y, pivot.z},
+        {attachment.m_position.x, attachment.m_position.y, attachment.m_position.z}};
+    const auto offset = Retail::HelmetTranslation(donor.anchor, target);
+
+    // The helmet's own transform is applied in the socket's frame (CM2Model::Animate), so a translation
+    // there moves it relative to the Retail socket.
+    C44Matrix& local = helmet->m_worldTransform;
+    if ((helmet->m_fFlags & 0x8000) && local.d0 == offset[0] && local.d1 == offset[1] && local.d2 == offset[2]) return;
+    local.Identity();
+    local.d0 = offset[0];
+    local.d1 = offset[1];
+    local.d2 = offset[2];
+    helmet->m_fFlags |= 0x8000;
+
+    static std::set<std::string> logged;
+    if (logged.insert(std::string(body->m_shared->m_fileName)).second) {
+        Blizzard::Log::Printf(1, kLog, "Helmet fit on %s: head bone %u, socket bone %u at %.3f %.3f %.3f, offset %.3f %.3f %.3f%s\n",
+            body->m_shared->m_fileName, static_cast<unsigned>(head), static_cast<unsigned>(attachment.m_bone),
+            target.socket[0], target.socket[1], target.socket[2], offset[0], offset[1], offset[2],
+            attachment.m_bone == head ? "" : " (socket is not on the head bone)");
+    }
 }
 
 void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
