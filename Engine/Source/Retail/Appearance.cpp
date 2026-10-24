@@ -22,6 +22,9 @@ struct Index {
     const Table* geoset = nullptr;
     const Table* skinnedModel = nullptr;
     const Table* boneSet = nullptr;
+    const Table* condModel = nullptr;
+    const Table* displayInfo = nullptr;
+    const Table* modelData = nullptr;
     const Table* requirement = nullptr;
     const Table* requirementChoice = nullptr;
     std::unordered_map<uint32_t, std::vector<uint32_t>> choicesByRequirement;
@@ -62,6 +65,9 @@ void Build(Index& x) {
     x.geoset = Db2::tables::Get("chrcustomizationgeoset");
     x.skinnedModel = Db2::tables::Get("chrcustomizationskinnedmodel");
     x.boneSet = Db2::tables::Get("chrcustomizationboneset");
+    x.condModel = Db2::tables::Get("chrcustomizationcondmodel");
+    x.displayInfo = Db2::tables::Get("creaturedisplayinfo");
+    x.modelData = Db2::tables::Get("creaturemodeldata");
     x.chrModel = Db2::tables::Get("chrmodel");
     x.requirement = Db2::tables::Get("chrcustomizationreq");
     x.requirementChoice = Db2::tables::Get("chrcustomizationreqchoice");
@@ -256,6 +262,36 @@ void BoneSets(uint32_t chrModel, const std::vector<uint32_t>& choices, std::vect
             if (entry.boneFileDataId) sets.push_back(entry);
         }
     }
+}
+
+uint32_t BodyModel(uint32_t chrModel, const std::vector<uint32_t>& choices, uint32_t& defaultFileDataId) {
+    defaultFileDataId = 0;
+    Index& x = Ready();
+    if (!x.ready || !x.modelData) return 0;
+    const auto fileOf = [&x](uint32_t creatureModel) -> uint32_t {
+        const Row* row = creatureModel ? x.modelData->Find(creatureModel) : nullptr;
+        return row ? x.modelData->Value(*row, "FileDataID") : 0;
+    };
+    const Row* model = x.chrModel ? x.chrModel->Find(chrModel) : nullptr;
+    const Row* display = model && x.displayInfo ? x.displayInfo->Find(x.chrModel->Value(*model, "DisplayID")) : nullptr;
+    if (display) defaultFileDataId = fileOf(x.displayInfo->Value(*display, "ModelID"));
+    if (!x.condModel) return 0;
+    for (const uint32_t id : choices) {
+        const Row* choice = x.choice->Find(id);
+        const Row* option = choice ? x.option->Find(x.choice->Value(*choice, "ChrCustomizationOptionID")) : nullptr;
+        if (!option || x.option->Value(*option, "ChrModelID") != chrModel) continue;
+        const auto elements = x.elementsByChoice.find(id);
+        if (elements == x.elementsByChoice.end()) continue;
+        for (const Row* element : elements->second) {
+            const uint32_t needs = x.element->Value(*element, "RelatedChrCustomizationChoiceID");
+            if (needs && std::find(choices.begin(), choices.end(), needs) == choices.end()) continue;
+            const uint32_t condId = x.element->Value(*element, "ChrCustomizationCondModelID");
+            const Row* cond = condId ? x.condModel->Find(condId) : nullptr;
+            const uint32_t file = cond ? fileOf(x.condModel->Value(*cond, "CreatureModelDataID")) : 0;
+            if (file) return file;
+        }
+    }
+    return 0;
 }
 
 uint32_t LayoutFor(uint32_t chrModel) {

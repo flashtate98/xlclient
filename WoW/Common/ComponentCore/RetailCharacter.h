@@ -7,6 +7,7 @@
 #include <vector>
 
 class CCharacterComponent;
+class CM2Model;
 
 // Not in the original: characters whose body is a Retail (MD21) model take their geosets from the
 // Retail customization tables instead of the 3.3.5 hair and facial-hair rules.
@@ -67,6 +68,13 @@ void RetailCustomizationDiscard(CCharacterComponent* character);
 using RetailCustomizationExtras = std::vector<std::pair<uint32_t, uint32_t>>;
 void RetailCustomizationTakeExtras(const CCharacterComponent* character, RetailCustomizationExtras& extras);
 void RetailCustomizationGiveExtras(const CCharacterComponent* character, const RetailCustomizationExtras& extras);
+
+// Conditional bodies (the Orc male Upright posture) replace the component's model during the geometry
+// pass. A unit showing the component is found from the character it is bound to, and glue screens read
+// the component's model each time; any other holder of the model (a model frame) registers here to be
+// handed the new body. A null `swap` unregisters.
+using RetailBodyOwner = void (*)(void* owner, CM2Model* replacement);
+void RetailCharacterSetBodyOwner(const CCharacterComponent* character, RetailBodyOwner swap, void* owner);
 
 // Drops the stored choices of a component that is going away.
 void RetailCustomizationForget(const CCharacterComponent* character);

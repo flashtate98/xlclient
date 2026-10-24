@@ -20,6 +20,9 @@
 #include "WoW/Source/DB/DBClient/DBClient.h"
 #include "WoW/Source/DB/Rec/ItemDisplayInfoRec.h"
 #include "WoW/Source/DB/Rec/HelmetGeosetVisDataRec.h"
+#include "WoW/Source/Object/ObjectClient/Unit_C.h"
+#include "WoW/Source/Object/Types.h"
+#include "WoW/Source/ObjectMgrClient/ObjectMgrClient.h"
 #include <deque>
 #include <cctype>
 #include <cstring>
@@ -106,6 +109,7 @@ struct Look {
     std::vector<Retail::Appearance::TextureSection> sections;
     std::vector<Retail::Appearance::SkinnedModel> parts;            // collection models (horns, ...)
     std::vector<Retail::Appearance::BoneSet> boneSets;              // face shapes (.bone files)
+    uint32_t bodyFileDataId = 0;                                     // a conditional body (Orc Upright), else 0
     std::shared_ptr<const Retail::Image> body;                      // the composed skin sheet (type 1)
     std::string bodyKey;                                             // its layers (shared by looks)
     std::map<uint32_t, std::shared_ptr<OwnedTexture>> textures;     // every other type (hair, eyes, ...)
@@ -237,6 +241,8 @@ std::shared_ptr<Look> LookFor(uint32_t retailRace, uint32_t sex, uint32_t chrMod
     Retail::Appearance::Sections(Retail::Appearance::LayoutFor(chrModel), look->sections);
     Retail::Appearance::SkinnedModels(chrModel, choices, look->parts);
     Retail::Appearance::BoneSets(chrModel, choices, look->boneSets);
+    uint32_t ownBody = 0;
+    look->bodyFileDataId = Retail::Appearance::BodyModel(chrModel, choices, ownBody);
     Retail::Appearance::TextureLayers(chrModel, choices, layers);
     const double tables = Since(lookStart);
     Retail::ComposeStats compose;
@@ -608,13 +614,19 @@ const BoneShape* BoneFile(uint32_t fileDataId) {
 
 // The face shape for the body model in use: the bone set made for this model's file (by path), or the
 // only one offered.
-void ApplyBoneShape(CM2Model* model, const Look& look) {
+void ApplyBoneShape(CM2Model* model, const Look& look, bool bodyMatches) {
     if (!model || !(model->m_fFlags & 1) || !model->m_shared) return;
+    // A set is made for one skeleton: none applies while the body is not (yet) the one the look wants.
+    if (!bodyMatches) {
+        model->SetBoneAdjustments(BoneShape{});
+        return;
+    }
     const Retail::Appearance::BoneSet* chosen = look.boneSets.size() == 1 ? &look.boneSets.front() : nullptr;
     const std::string modelName = NameKey(model->m_shared->m_fileName);
     for (const auto& set : look.boneSets) {
         std::string path;
-        if (Retail::Source().PathOf(set.modelFileDataId, path) && NameKey(path.c_str()) == modelName) {
+        if (NameKey(Retail::FileName(set.modelFileDataId, ".m2").c_str()) == modelName ||
+            (Retail::Source().PathOf(set.modelFileDataId, path) && NameKey(path.c_str()) == modelName)) {
             chosen = &set;
             break;
         }
@@ -623,10 +635,170 @@ void ApplyBoneShape(CM2Model* model, const Look& look) {
     model->SetBoneAdjustments(shape ? *shape : BoneShape{});
 }
 
+// Conditional bodies. Some choices replace the whole body model: the Orc male Upright posture is
+// orcmaleupright.m2 (ChrCustomizationCondModel -> CreatureModelData), a different skeleton from the
+// hunched orcmale_hd.m2. The body is swapped in place, following Esteria's SyncBodyModel: the new model
+// takes the old one's transform, animation, callbacks, parent and attachments (weapons, effects), and
+// every holder of the old model moves to it: the component, and the unit or model frame showing it.
+// Glue screens (create, select) read the component's model each time, so they need nothing else.
+static std::unordered_map<const CCharacterComponent*, std::string> s_originalBodies;   // before a swap
+static std::unordered_map<const CCharacterComponent*, std::pair<RetailBodyOwner, void*>> s_bodyOwners;
+static std::set<std::string> s_failedBodies;
+static bool s_swappingBody = false;
+
+// The body file a look calls for: its conditional model, else the body the component had before it
+// swapped (empty when it never swapped: its own body is the right one).
+static std::string WantedBody(const CCharacterComponent* character, const Look& look) {
+    if (look.bodyFileDataId) return Retail::FileName(look.bodyFileDataId, ".m2");
+    const auto original = s_originalBodies.find(character);
+    return original != s_originalBodies.end() ? original->second : std::string();
+}
+
+static bool BodyIs(const CM2Model* model, const std::string& path) {
+    return path.empty() || (model && model->m_shared && NameKey(model->m_shared->m_fileName) == NameKey(path.c_str()));
+}
+
+// Swaps the component's body for the one its look wants. False when nothing changed: the body is
+// already right, is not loaded, or its holder is not known (a component in the world that no unit or
+// frame shows is left alone, since something else may hold its model).
+static bool SyncBodyModel(CCharacterComponent* character, const Look& look) {
+    if (s_swappingBody) return false;
+    CM2Model* old = character->m_data.m_model;
+    const std::string path = WantedBody(character, look);
+    if (BodyIs(old, path) || !old || !(old->m_fFlags & 1) || !old->m_scene || !old->m_shared) return false;
+    if (s_failedBodies.count(NameKey(path.c_str()))) return false;
+
+    CGUnit_C* unit = nullptr;
+    const auto bound = s_boundGuids.find(character);
+    if (bound != s_boundGuids.end() && ClntObjMgrGetActivePlayer()) {
+        WOWGUID guid;
+        guid.m_guid = bound->second;
+        auto* found = static_cast<CGUnit_C*>(ClntObjMgrObjectPtr(guid, TYPEMASK_UNIT, __FILE__, __LINE__));
+        if (found && found->m_characterComponent == character) unit = found;
+    }
+    // A unit and its component share one body: never move just one of them.
+    if (unit && unit->m_worldModel != old) return false;
+    const auto frame = s_bodyOwners.find(character);
+    if (!unit && frame == s_bodyOwners.end() && ClntObjMgrGetActivePlayer()) return false;
+
+    const auto start = Clock::now();
+    CM2Model* replacement = old->m_scene->CreateModel(path.c_str(), old->m_flags);
+    if (!replacement) {
+        s_failedBodies.insert(NameKey(path.c_str()));
+        Blizzard::Log::Printf(1, kLog, "Body %s could not be created; the body stays %s\n", path.c_str(), old->m_shared->m_fileName);
+        return false;
+    }
+    replacement->WaitForLoad("Retail conditional body");
+    if (!(replacement->m_fFlags & 1) || !replacement->m_shared || !replacement->m_shared->m_data) {
+        s_failedBodies.insert(NameKey(path.c_str()));
+        Blizzard::Log::Printf(1, kLog, "Body %s did not load (missing .m2, .skin or .skel files?); the body stays %s\n",
+            path.c_str(), old->m_shared->m_fileName);
+        replacement->Release();
+        return false;
+    }
+    // Reattaching detaches first, so make sure every equipment socket exists before changing any links.
+    for (CM2Model* child = old->m_attachList; child; child = child->m_attachNext) {
+        if (child->m_attachmentId != kCollectionSocket && !(child->m_fFlags & 0x40000) &&
+            !replacement->HasAttachment(child->m_attachmentId)) {
+            s_failedBodies.insert(NameKey(path.c_str()));
+            Blizzard::Log::Printf(1, kLog, "Body %s has no socket %u; the body stays %s\n", path.c_str(),
+                static_cast<unsigned>(child->m_attachmentId), old->m_shared->m_fileName);
+            replacement->Release();
+            return false;
+        }
+    }
+
+    s_swappingBody = true;
+    replacement->m_worldTransform = old->m_worldTransform;
+    replacement->m_matrixF4 = old->m_matrixF4;
+    replacement->m_scaleSq = old->m_scaleSq;
+    replacement->m_frameOfReferenceMatrix = old->m_frameOfReferenceMatrix;
+    replacement->m_frameOfReference = old->m_frameOfReference == &old->m_frameOfReferenceMatrix
+        ? &replacement->m_frameOfReferenceMatrix : old->m_frameOfReference;
+    replacement->m_fFlags = (replacement->m_fFlags & ~0x8004u) | (old->m_fFlags & 0x8004u);
+    replacement->m_lighting = old->m_lighting;
+    replacement->m_lightingCallback = old->m_lightingCallback;
+    replacement->m_lightingArg = old->m_lightingArg;
+    replacement->m_drawCallback = old->m_drawCallback;
+    replacement->m_drawArg = old->m_drawArg;
+    replacement->m_eventCallback = old->m_eventCallback;
+    replacement->m_eventCallbackParam = old->m_eventCallbackParam;
+    replacement->m_sequenceCallback = old->m_sequenceCallback;
+    replacement->m_sequenceCallbackParam = old->m_sequenceCallbackParam;
+    replacement->m_loadedCallback = old->m_loadedCallback;
+    replacement->m_loadedArg = old->m_loadedArg;
+    replacement->m_fadeAlpha = old->m_fadeAlpha;
+    replacement->m_baseAlpha = old->m_baseAlpha;
+    replacement->m_diffuseTintR = old->m_diffuseTintR;
+    replacement->m_diffuseTintG = old->m_diffuseTintG;
+    replacement->m_diffuseTintB = old->m_diffuseTintB;
+    replacement->m_emissiveTintR = old->m_emissiveTintR;
+    replacement->m_emissiveTintG = old->m_emissiveTintG;
+    replacement->m_emissiveTintB = old->m_emissiveTintB;
+    replacement->m_effectiveAlpha = old->m_effectiveAlpha;
+    replacement->m_alpha = old->m_alpha;
+    replacement->m_diffuseColor = old->m_diffuseColor;
+    replacement->m_emissiveColor = old->m_emissiveColor;
+
+    M2BoneSequenceInfo sequence{};
+    if (old->GetBoneSequenceInfo(UINT32_MAX, sequence))
+        replacement->SetBoneSequence(UINT32_MAX, sequence.m_sequenceId, sequence.m_variationIndex,
+            sequence.m_time, sequence.m_speed, 0, 1);
+    else
+        replacement->SetBoneSequence(UINT32_MAX, 0, UINT32_MAX, 0, 1.0f, 0, 1);
+
+    if (old->m_attachParent) {
+        replacement->AttachToParent(old->m_attachParent, old->m_attachmentId, nullptr, (old->m_fFlags & 0x40000) != 0);
+        old->DetachFromParent();   // the component's reference keeps it alive until the end
+    }
+    for (CM2Model* child = old->m_attachList; child;) {
+        CM2Model* next = child->m_attachNext;
+        if (child->m_attachmentId == kCollectionSocket) {
+            s_collections.erase(child);   // made again for the new body (SyncCollections)
+            child->DetachFromParent();
+        } else {
+            const uint32_t socket = child->m_attachmentId;
+            const bool root = (child->m_fFlags & 0x40000) != 0;
+            ++child->m_refCount;          // AttachToParent releases the old parent's attachment reference
+            child->AttachToParent(replacement, socket, nullptr, root);
+            child->Release();             // only the new parent's attachment reference remains
+        }
+        child = next;
+    }
+
+    const std::string from = old->m_shared->m_fileName;
+    if (look.bodyFileDataId) s_originalBodies.emplace(character, from);   // keeps the first (own) body
+    else s_originalBodies.erase(character);
+    character->m_data.m_model = replacement;   // CreateModel's reference now belongs to the component
+    if (unit) {
+        unit->m_torsoKeyBone = -1;             // found again on the new skeleton
+        unit->SetCharacterModel(replacement);  // takes its own reference and releases the old one
+    } else if (frame != s_bodyOwners.end()) {
+        frame->second.first(frame->second.second, replacement);
+    }
+    character->m_flags |= 0x4;
+    character->SetDirtySections(0xFFFFFFFF);
+    s_swappingBody = false;
+    Blizzard::Log::Printf(1, kLog, "Body swapped for %s: %s -> %s (%.1f ms)\n",
+        unit ? "a unit" : frame != s_bodyOwners.end() ? "a model frame" : "a glue screen", from.c_str(), path.c_str(), Since(start));
+    old->Release();   // the component's former reference, last
+    return true;
+}
+
+void RetailCharacterSetBodyOwner(const CCharacterComponent* character, RetailBodyOwner swap, void* owner) {
+    if (swap) s_bodyOwners[character] = { swap, owner };
+    else s_bodyOwners.erase(character);
+}
+
 bool RetailCharacterGeometry(CCharacterComponent* character) {
     const auto found = RetailLook(character);
     if (!found) return false;
     const Look& look = *found;
+    if (SyncBodyModel(character, look)) {
+        // The stock reset ran on the old body.
+        character->m_data.m_model->SetGeometryVisible(0, 2000, 0);
+        character->m_data.m_model->SetGeometryVisible(0, 0, 1);
+    }
     CM2Model* model = character->m_data.m_model;
 
     // The stock reset only reaches geoset 2000; Retail bodies carry groups above it (feet 20,
@@ -642,7 +814,7 @@ bool RetailCharacterGeometry(CCharacterComponent* character) {
 
     // Hair, eyes and the other single-layer types replace the 3.3.5 CharSections textures.
     for (const auto& texture : look.textures) model->ReplaceTexture(texture.first, texture.second->texture);
-    ApplyBoneShape(model, look);
+    ApplyBoneShape(model, look, BodyIs(model, WantedBody(character, look)));
     SyncCollections(character, look);
     ApplyCollections(model);
     return true;
@@ -744,6 +916,8 @@ void RetailCustomizationForget(const CCharacterComponent* character) {
         it = it->second.parent == character->m_data.m_model ? s_collections.erase(it) : std::next(it);
     s_extraChoices.erase(character);
     s_boundGuids.erase(character);
+    s_originalBodies.erase(character);
+    s_bodyOwners.erase(character);
 }
 
 bool RetailCustomizationChoices(const CCharacterComponent* character, RetailChoiceList& choices) {

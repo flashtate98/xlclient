@@ -56,6 +56,12 @@ namespace Retail::Appearance
     };
     void BoneSets(uint32_t chrModel, const std::vector<uint32_t>& choices, std::vector<BoneSet>& sets);
 
+    // The body model the choices call for: the FileDataID of a conditional model (ChrCustomizationCondModel,
+    // e.g. the Orc male Upright posture, orcmaleupright.m2), or 0 when the model's own body is used.
+    // `defaultFileDataId` receives that own body (ChrModel DisplayID -> CreatureDisplayInfo ->
+    // CreatureModelData), 0 if unknown.
+    uint32_t BodyModel(uint32_t chrModel, const std::vector<uint32_t>& choices, uint32_t& defaultFileDataId);
+
     // Anatomy that no customization choice of a race names, shown unless a choice picks that group:
     // feet (20), torso (22), hands (23), head (32), eyes (33) and eye overlays (51). From Esteria's
     // RaceGeometry.h.
