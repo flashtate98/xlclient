@@ -2,6 +2,8 @@
 
 #include "WoW/Source/RetailCustomizationNet.h"
 #include "Engine/Source/Base/CDataStore.h"
+#include "Engine/Source/BlizzardCore/Source/System/Log/Log.h"
+#include <string>
 #include "WoW/Common/ComponentCore/RetailCharacter.h"
 #include "WoW/Source/Glue/CharacterCreation.h"
 #include "WoW/Source/WowSvcs/WowSvcsClient/ClientServices.h"
@@ -52,6 +54,9 @@ void RetailCustomizationNetAppendCreate(CDataStore& msg) {
 void RetailCustomizationNetAppendChoices(CDataStore& msg, const CCharacterComponent* character) {
     RetailChoiceList choices;
     if (!character || !RetailCustomizationChoices(character, choices) || choices.empty()) return;
+    std::string text;
+    for (const auto& choice : choices) text += " " + std::to_string(choice.first) + "=" + std::to_string(choice.second);
+    Blizzard::Log::Printf(1, "Logs/RetailCharacter.log", "Sending choices:%s\n", text.c_str());
     if (choices.size() > kMaxChoices) choices.resize(kMaxChoices);
     msg.Put(kMagic);
     msg.Put(static_cast<uint8_t>(choices.size()));

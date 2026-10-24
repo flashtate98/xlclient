@@ -667,18 +667,12 @@ bool RetailCustomizationChoices(const CCharacterComponent* character, RetailChoi
     choices.clear();
     uint32_t retailRace = 0;
     const uint32_t chrModel = RetailModelOf(character, retailRace);
-    if (!chrModel) {
-        Blizzard::Log::Printf(1, kLog, "Create: stock body, no Retail choices sent\n");
-        return false;
-    }
+    if (!chrModel) return false;
     std::vector<ResolvedOption> resolved;
     std::vector<uint32_t> taken;
     Resolve(character, chrModel, resolved, taken);
     for (const auto& option : resolved)
         if (!option.driven) choices.emplace_back(option.id, option.offered[option.index]);
-    std::string text;
-    for (const auto& choice : choices) text += " " + std::to_string(choice.first) + "=" + std::to_string(choice.second);
-    Blizzard::Log::Printf(1, kLog, "Create: sending%s\n", text.c_str());
     return true;
 }
 
