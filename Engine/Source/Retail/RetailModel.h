@@ -40,6 +40,8 @@ struct ModelFiles {
 struct HelmetAnchor {
     std::array<float, 3> head{};
     std::array<float, 3> socket{};
+    std::array<float, 3> jaw{};     // key bone 7, for the head's size
+    bool hasJaw = false;
 };
 
 // Read head key-bone 6 and attachment 11 from an unrelocated, flat model. Used to retain

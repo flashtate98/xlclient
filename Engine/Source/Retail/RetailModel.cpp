@@ -804,6 +804,19 @@ bool ReadHelmetAnchor(const std::vector<uint8_t>& b, HelmetAnchor& anchor, std::
             return Fail(error, "Helmet donor contains a nonfinite anchor");
         }
     }
+    // The jaw (key bone 7) measures the head: a Retail head larger than the 3.3.5 one scales the helmet.
+    if (U32(b, 0x34) > 7) {
+        const uint32_t jaw = U16(b, U32(b, 0x38) + 7 * 2);
+        if (jaw < U32(b, 0x2c)) {
+            const size_t jawPivot = U32(b, 0x30) + size_t(jaw) * 88 + 76;
+            bool finite = true;
+            for (size_t axis = 0; axis < 3; ++axis) {
+                std::memcpy(&anchor.jaw[axis], b.data() + jawPivot + axis * 4, 4);
+                finite = finite && std::isfinite(anchor.jaw[axis]);
+            }
+            anchor.hasJaw = finite;
+        }
+    }
     return true;
 }
 

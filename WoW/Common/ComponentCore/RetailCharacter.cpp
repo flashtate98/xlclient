@@ -22,6 +22,8 @@
 #include "WoW/Source/DB/Rec/HelmetGeosetVisDataRec.h"
 #include <deque>
 #include <cctype>
+#include <cmath>
+#include <sstream>
 #include <charconv>
 #include <chrono>
 #include <cstdlib>
@@ -852,6 +854,37 @@ void RetailCharacterBody(CCharacterComponent* character) {
     ApplyCollections(character->m_data.m_model);
 }
 
+// Hand tuning for helmet placement per client race and sex, from Data\Retail\helmets.csv beside the
+// executable: rows "race;sex;scale;x;y;z" (scale 0 keeps the measured scale; x y z are added to the
+// offset, in yards, z up). Read once.
+struct HelmetTuning {
+    float scale = 0;
+    float offset[3] = {0, 0, 0};
+};
+
+const HelmetTuning* HelmetTuningFor(uint32_t race, uint32_t sex) {
+    static std::map<uint32_t, HelmetTuning> tunings;
+    static std::once_flag once;
+    std::call_once(once, [] {
+        std::filesystem::path path = RaceMapPath().parent_path() / "helmets.csv";
+        std::ifstream file(path);
+        std::string line;
+        uint32_t rows = 0;
+        while (std::getline(file, line)) {
+            for (char& c : line) if (c == ';' || c == ',') c = ' ';
+            std::istringstream fields(line);
+            uint32_t r = 0, s = 0;
+            HelmetTuning tuning;
+            if (!(fields >> r >> s >> tuning.scale >> tuning.offset[0] >> tuning.offset[1] >> tuning.offset[2])) continue;
+            tunings[(r << 1) | (s & 1)] = tuning;
+            ++rows;
+        }
+        if (rows) Blizzard::Log::Printf(1, kLog, "%s: %u helmet tunings\n", path.string().c_str(), static_cast<unsigned>(rows));
+    });
+    const auto found = tunings.find((race << 1) | (sex & 1));
+    return found == tunings.end() ? nullptr : &found->second;
+}
+
 void RetailCharacterFitHelmet(CCharacterComponent* character) {
     CM2Model* body = character ? character->m_data.m_model : nullptr;
     if (!body || !(body->m_fFlags & 1) || !body->m_shared || !body->m_shared->m_data) return;
@@ -902,13 +935,47 @@ void RetailCharacterFitHelmet(CCharacterComponent* character) {
     const auto& pivot = data->m_bones[head].m_pivot;
     const Retail::HelmetAnchor target{{pivot.x, pivot.y, pivot.z},
         {attachment.m_position.x, attachment.m_position.y, attachment.m_position.z}};
-    const auto offset = Retail::HelmetTranslation(donor.anchor, target);
 
-    // The helmet's own transform is applied in the socket's frame (CM2Model::Animate), so a translation
-    // there moves it relative to the Retail socket.
+    // Size: the head-to-jaw distance on both skeletons. Retail heads that grew a lot (Gnomes) scale the
+    // helmet up; within 10% of the 3.3.5 head the helmet keeps its size (Human, Elves and Dwarves fit
+    // unscaled).
+    float scale = 1.0f;
+    float measured = 1.0f;
+    if (donor.anchor.hasJaw && data->m_boneIndicesById.m_count > 7) {
+        const uint16_t jaw = data->m_boneIndicesById[7];
+        if (jaw < data->m_bones.m_count) {
+            const auto& jawPivot = data->m_bones[jaw].m_pivot;
+            const auto distance = [](const float* a, float x, float y, float z) {
+                return std::sqrt((a[0] - x) * (a[0] - x) + (a[1] - y) * (a[1] - y) + (a[2] - z) * (a[2] - z));
+            };
+            const float legacy = distance(donor.anchor.head.data(), donor.anchor.jaw[0], donor.anchor.jaw[1], donor.anchor.jaw[2]);
+            const float retail = distance(target.head.data(), jawPivot.x, jawPivot.y, jawPivot.z);
+            if (legacy > 0.001f && retail > 0.001f && std::isfinite(retail / legacy)) {
+                measured = retail / legacy;
+                if (std::fabs(measured - 1.0f) > 0.10f) scale = std::min(1.5f, std::max(0.8f, measured));
+            }
+        }
+    }
+    // Hand tuning from Data\Retail\helmets.csv, rows "race;sex;scale;x;y;z" (scale 0 keeps the measured one).
+    float nudge[3] = {0, 0, 0};
+    if (const HelmetTuning* tuning = HelmetTuningFor(prefs.m_raceID, prefs.m_sexID)) {
+        if (tuning->scale > 0) scale = tuning->scale;
+        for (int axis = 0; axis < 3; ++axis) nudge[axis] = tuning->offset[axis];
+    }
+
+    // The helmet keeps its 3.3.5 crown height above the head, scaled with the head, plus any nudge.
+    std::array<float, 3> offset{};
+    for (size_t axis = 0; axis < 3; ++axis)
+        offset[axis] = target.head[axis] + scale * (donor.anchor.socket[axis] - donor.anchor.head[axis]) - target.socket[axis] + nudge[axis];
+
+    // The helmet's own transform is applied in the socket's frame (CM2Model::Animate): scale about the
+    // helmet's origin, then move it relative to the Retail socket.
     C44Matrix& local = helmet->m_worldTransform;
-    if ((helmet->m_fFlags & 0x8000) && local.d0 == offset[0] && local.d1 == offset[1] && local.d2 == offset[2]) return;
+    if ((helmet->m_fFlags & 0x8000) && local.a0 == scale && local.d0 == offset[0] && local.d1 == offset[1] && local.d2 == offset[2]) return;
     local.Identity();
+    local.a0 = scale;
+    local.b1 = scale;
+    local.c2 = scale;
     local.d0 = offset[0];
     local.d1 = offset[1];
     local.d2 = offset[2];
@@ -916,9 +983,9 @@ void RetailCharacterFitHelmet(CCharacterComponent* character) {
 
     static std::set<std::string> logged;
     if (logged.insert(std::string(body->m_shared->m_fileName)).second) {
-        Blizzard::Log::Printf(1, kLog, "Helmet fit on %s: head bone %u, socket bone %u at %.3f %.3f %.3f, offset %.3f %.3f %.3f%s\n",
+        Blizzard::Log::Printf(1, kLog, "Helmet fit on %s: head bone %u, socket bone %u at %.3f %.3f %.3f, head size %.3f of the 3.3.5 head, scale %.3f, offset %.3f %.3f %.3f%s\n",
             body->m_shared->m_fileName, static_cast<unsigned>(head), static_cast<unsigned>(attachment.m_bone),
-            target.socket[0], target.socket[1], target.socket[2], offset[0], offset[1], offset[2],
+            target.socket[0], target.socket[1], target.socket[2], measured, scale, offset[0], offset[1], offset[2],
             attachment.m_bone == head ? "" : " (socket is not on the head bone)");
     }
 }
