@@ -57,6 +57,10 @@ std::mutex s_skinParentMutex;
 std::map<const CM2Model*, SkinParentBinding> s_skinParents;
 std::atomic<size_t> s_skinParentCount{0};   // lets every other model skip the lock
 
+// The socket Retail customization collections hang on (RetailCharacter.cpp's kCollectionSocket): no
+// model has an attachment with this ID, so they attach to the root.
+constexpr uint32_t kCollectionSocket = 0xFFFFFFFEu;
+
 void ClearSkinParents(CM2Model* model) {
     if (!s_skinParentCount.load(std::memory_order_relaxed)) return;
     std::lock_guard<std::mutex> lock(s_skinParentMutex);
@@ -74,6 +78,15 @@ bool SameSkinPivot(const C3Vector& a, const C3Vector& b) {
 }
 
 void CopySkinParentPose(CM2Model* child) {
+    // A collection that is not following its body yet (a copy made for a model frame such as the
+    // character pane, or one whose body finished loading after it) binds as soon as both are ready.
+    if (child->m_attachmentId == kCollectionSocket && child->m_attachParent && (child->m_fFlags & 0x40000) &&
+        !child->HasSkinParent(child->m_attachParent)) {
+        // Mid-animation: keep the frame stamp SetSkinParent would rewind; the pose is copied below.
+        const uint32_t stamp = child->m_frameStamp;
+        child->SetSkinParent(child->m_attachParent);
+        child->m_frameStamp = stamp;
+    }
     if (!s_skinParentCount.load(std::memory_order_relaxed)) return;
     std::lock_guard<std::mutex> lock(s_skinParentMutex);
     const auto found = s_skinParents.find(child);
@@ -7867,7 +7880,15 @@ int32_t CM2Model::Initialize(CM2Scene* scene, CM2Shared* shared, CM2Model* sourc
             CM2Model* copy = this->m_scene->DuplicateModel(child, 0);
 
             if (copy) {
+#if defined(WOWDECOMP_RETAIL_MODELS)
+                // Not in the original: Retail customization collections (horns, blindfolds) hang on
+                // the root, which the attachment lookup cannot find; the copy keeps them there and
+                // binds them to its own skeleton once loaded (CopySkinParentPose).
+                const bool collection = child->m_attachmentId == kCollectionSocket && (child->m_fFlags & 0x40000);
+                copy->AttachToParent(this, child->m_attachmentId, nullptr, collection ? 1 : 0);
+#else
                 copy->AttachToParent(this, child->m_attachmentId, nullptr, 0);
+#endif
 
                 if (copy->m_refCount-- == 1) {
                     g_modelPool->Delete(copy);
