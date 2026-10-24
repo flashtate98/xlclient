@@ -1355,6 +1355,9 @@ void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
         const uint32_t group = kGroups[slot];
         model->SetGeometryVisible(group ? group * 100 : 1, group * 100 + 99, 0);
     }
+    // Retail head gear has no 3.3.5 slot: group 37 is the headdress or circlet on every race that has one
+    // (Draenei Circlet, Tauren and Dwarf female Headdress). It goes with the hair, under the same helmets.
+    if (hides(0)) model->SetGeometryVisible(3701, 3799, 0);
 }
 
 #endif
