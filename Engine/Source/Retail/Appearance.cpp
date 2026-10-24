@@ -107,21 +107,29 @@ uint32_t ChrModelFor(uint32_t retailRace, uint32_t sex) {
     return found == x.modelByRaceSex.end() ? 0 : found->second;
 }
 
-void DefaultChoices(uint32_t chrModel, std::vector<uint32_t>& choices) {
-    choices.clear();
+void Options(uint32_t chrModel, std::vector<Option>& options) {
+    options.clear();
     Index& x = Ready();
     if (!x.ready) return;
-    const auto options = x.optionsByModel.find(chrModel);
-    if (options == x.optionsByModel.end()) return;
-    for (const Row* option : options->second) {
-        const auto list = x.choicesByOption.find(option->id);
-        if (list == x.choicesByOption.end()) continue;
-        for (const Row* choice : list->second) {
-            if (!CreationAllowed(*x.choice, *choice)) continue;
-            choices.push_back(choice->id);
-            break;
-        }
+    const auto found = x.optionsByModel.find(chrModel);
+    if (found == x.optionsByModel.end()) return;
+    for (const Row* row : found->second) {
+        Option option;
+        option.id = row->id;
+        option.name = x.option->Text(*row, "Name_lang");
+        const auto list = x.choicesByOption.find(row->id);
+        if (list != x.choicesByOption.end())
+            for (const Row* choice : list->second)
+                if (CreationAllowed(*x.choice, *choice)) option.choices.push_back(choice->id);
+        if (!option.choices.empty()) options.push_back(std::move(option));
     }
+}
+
+void DefaultChoices(uint32_t chrModel, std::vector<uint32_t>& choices) {
+    choices.clear();
+    std::vector<Option> options;
+    Options(chrModel, options);
+    for (const Option& option : options) choices.push_back(option.choices.front());
 }
 
 void Geosets(uint32_t chrModel, const std::vector<uint32_t>& choices, std::vector<uint16_t>& geosets) {

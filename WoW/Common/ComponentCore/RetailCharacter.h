@@ -8,7 +8,9 @@ class CCharacterComponent;
 //
 // The client race is mapped to a Retail ChrRaces ID (1-11 are the same in both; others come from
 // Data\Retail\races.csv, rows "clientRace;retailRace"), then to its ChrModel for the character's sex.
-// Until choices are stored per character, every option uses its default choice. The skin, hair, eye
+// The 3.3.5 skin, face, hair style, hair colour and facial hair values pick the Nth choice of the
+// matching Retail options; every other option uses its default choice until full Retail choices are
+// stored per character. The skin, hair, eye
 // and other textures are composed from the choices' materials (Compose.h).
 //
 // Called from CCharacterComponent::GeosRenderPrep after the stock reset. Returns false, changing

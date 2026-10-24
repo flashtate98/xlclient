@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <string>
@@ -82,6 +83,13 @@ struct Look {
     std::vector<Retail::Appearance::TextureSection> sections;
     Retail::Image body;                      // the composed skin sheet (texture type 1)
     std::map<uint32_t, CTexture*> textures;  // every other composed type (hair, eyes, ...)
+
+    Look() = default;
+    Look(const Look&) = delete;
+    Look& operator=(const Look&) = delete;
+    ~Look() {
+        for (auto& texture : textures) HandleClose(reinterpret_cast<HOBJECT>(texture.second));
+    }
 };
 
 bool FetchBlp(uint32_t fileDataId, std::vector<uint8_t>& bytes, void*) {
@@ -98,64 +106,127 @@ CTexture* MakeTexture(const std::string& name, const Retail::Image& image) {
     return TextureCreateFromBlpData(name.c_str(), flags, blp.data());
 }
 
-// The default look per Retail race and sex, composed once and logged the first time it is built.
-Look& LookFor(uint32_t retailRace, uint32_t sex) {
-    static std::map<uint64_t, Look> looks;
+// The Retail option each 3.3.5 selector drives, by name (the lists follow Esteria's StockOptionName):
+// the first name the model has wins. Women's "facial hair" slot drives a female-only option.
+enum class Stock { Skin, Face, HairStyle, HairColor, Facial };
+
+const char* const* StockNames(Stock stock, uint32_t sex) {
+    static const char* const skin[] = {"Skin Color", "Fur Color", "Primary Color", nullptr};
+    static const char* const face[] = {"Face", nullptr};
+    static const char* const hairStyle[] = {"Hair Style", "Horn Style", "Hair", nullptr};
+    static const char* const hairColor[] = {"Hair Color", "Horn Color", nullptr};
+    static const char* const male[] = {"Beard", "Facial Hair", "Beard Style", "Jaw Features", "Tusks", "Chin Decoration", nullptr};
+    static const char* const female[] = {"Makeup", "Earrings", "Piercings", "Horns", "Face Features", "Ears", nullptr};
+    switch (stock) {
+        case Stock::Skin: return skin;
+        case Stock::Face: return face;
+        case Stock::HairStyle: return hairStyle;
+        case Stock::HairColor: return hairColor;
+        default: return sex ? female : male;
+    }
+}
+
+uint32_t StockValue(const CharacterPreferences& prefs, Stock stock) {
+    switch (stock) {
+        case Stock::Skin: return prefs.m_skinID;
+        case Stock::Face: return prefs.m_faceId;
+        case Stock::HairStyle: return prefs.m_hairStyleId;
+        case Stock::HairColor: return prefs.m_hairColorId;
+        default: return prefs.m_facialHairId;
+    }
+}
+
+// Every option takes its default choice, except the five the 3.3.5 selectors drive: there the
+// character's value picks the Nth choice (wrapping when the 3.3.5 range is longer).
+void ChoicesFor(uint32_t chrModel, const CharacterPreferences& prefs, std::vector<uint32_t>& choices) {
+    std::vector<Retail::Appearance::Option> options;
+    Retail::Appearance::Options(chrModel, options);
+    std::vector<int32_t> driven(options.size(), -1);
+    for (const Stock stock : {Stock::Skin, Stock::Face, Stock::HairStyle, Stock::HairColor, Stock::Facial}) {
+        bool found = false;
+        for (const char* const* name = StockNames(stock, prefs.m_sexID); *name && !found; ++name)
+            for (size_t i = 0; i < options.size() && !found; ++i)
+                if (driven[i] < 0 && options[i].name == *name) {
+                    driven[i] = static_cast<int32_t>(stock);
+                    found = true;
+                }
+    }
+    choices.clear();
+    for (size_t i = 0; i < options.size(); ++i) {
+        const auto& list = options[i].choices;
+        const uint32_t index = driven[i] < 0 ? 0 : StockValue(prefs, static_cast<Stock>(driven[i])) % list.size();
+        choices.push_back(list[index]);
+    }
+}
+
+// A composed look per Retail race, sex and choices. The most recent ones are kept; each holds a full
+// skin sheet, so the cache is bounded.
+std::shared_ptr<Look> LookFor(uint32_t retailRace, uint32_t sex, uint32_t chrModel, const std::vector<uint32_t>& choices) {
+    static std::map<std::string, std::shared_ptr<Look>> looks;
+    static std::deque<std::string> order;
     static std::mutex mutex;
     std::lock_guard<std::mutex> lock(mutex);
-    const uint64_t key = (static_cast<uint64_t>(retailRace) << 32) | sex;
+
+    std::string key = std::to_string(retailRace) + "-" + std::to_string(sex);
+    for (const uint32_t id : choices) key += "-" + std::to_string(id);
     const auto found = looks.find(key);
     if (found != looks.end()) return found->second;
 
-    Look& look = looks[key];
-    look.chrModel = Retail::Appearance::ChrModelFor(retailRace, sex);
-    std::vector<uint32_t> choices;
+    auto look = std::make_shared<Look>();
+    look->chrModel = chrModel;
+    look->key = key;
     std::vector<uint16_t> defaults;
     std::vector<Retail::Appearance::TextureLayer> layers;
     std::vector<Retail::ComposedTexture> composed;
     std::string warnings;
-    if (look.chrModel) {
-        Retail::Appearance::DefaultChoices(look.chrModel, choices);
-        Retail::Appearance::Geosets(look.chrModel, choices, look.geosets);
-        Retail::Appearance::DefaultGeosets(look.geosets, defaults);
-        look.geosets.insert(look.geosets.end(), defaults.begin(), defaults.end());
-        Retail::Appearance::Sections(Retail::Appearance::LayoutFor(look.chrModel), look.sections);
-        Retail::Appearance::TextureLayers(look.chrModel, choices, layers);
-        Retail::ComposeTextures(look.chrModel, layers, FetchBlp, nullptr, composed, warnings);
-    }
-
-    look.key = std::to_string(retailRace) + "-" + std::to_string(sex);
-    for (const uint32_t id : choices) look.key += "-" + std::to_string(id);
+    Retail::Appearance::Geosets(chrModel, choices, look->geosets);
+    Retail::Appearance::DefaultGeosets(look->geosets, defaults);
+    look->geosets.insert(look->geosets.end(), defaults.begin(), defaults.end());
+    Retail::Appearance::Sections(Retail::Appearance::LayoutFor(chrModel), look->sections);
+    Retail::Appearance::TextureLayers(chrModel, choices, layers);
+    Retail::ComposeTextures(chrModel, layers, FetchBlp, nullptr, composed, warnings);
     for (auto& texture : composed) {
         if (texture.textureType == 1) {
-            look.body = std::move(texture.image);
+            look->body = std::move(texture.image);
             continue;
         }
-        CTexture* made = MakeTexture("Retail\\Character\\" + look.key + "\\" + std::to_string(texture.textureType), texture.image);
-        if (made) look.textures[texture.textureType] = made;
+        CTexture* made = MakeTexture("Retail\\Character\\" + key + "\\" + std::to_string(texture.textureType), texture.image);
+        if (made) look->textures[texture.textureType] = made;
     }
 
     std::string text;
     for (const uint32_t id : choices) text += " " + std::to_string(id);
     text += " | geosets";
-    for (const uint16_t id : look.geosets) text += " " + std::to_string(id);
+    for (const uint16_t id : look->geosets) text += " " + std::to_string(id);
     text += " | textures";
-    if (look.body.width) text += " 1 (" + std::to_string(look.body.width) + "x" + std::to_string(look.body.height) + ")";
-    for (const auto& texture : look.textures) text += " " + std::to_string(texture.first);
-    Blizzard::Log::Printf(1, kLog, "Retail race %u sex %u: ChrModel %u, default choices%s\n%s",
-        static_cast<unsigned>(retailRace), static_cast<unsigned>(sex), static_cast<unsigned>(look.chrModel), text.c_str(), warnings.c_str());
+    if (look->body.width) text += " 1 (" + std::to_string(look->body.width) + "x" + std::to_string(look->body.height) + ")";
+    for (const auto& texture : look->textures) text += " " + std::to_string(texture.first);
+    Blizzard::Log::Printf(1, kLog, "Retail race %u sex %u: ChrModel %u, choices%s\n%s",
+        static_cast<unsigned>(retailRace), static_cast<unsigned>(sex), static_cast<unsigned>(chrModel), text.c_str(), warnings.c_str());
+
+    looks.emplace(key, look);
+    order.push_back(key);
+    while (order.size() > 24) {
+        const auto old = looks.find(order.front());
+        if (old != looks.end()) looks.erase(old);   // its textures close with the last reference
+        order.pop_front();
+    }
     return look;
 }
 
 // The Retail look of a character with a Retail body, or null for stock bodies and unmapped races.
-Look* RetailLook(CCharacterComponent* character) {
+std::shared_ptr<Look> RetailLook(CCharacterComponent* character) {
     CM2Model* model = character->m_data.m_model;
     if (!model || !model->m_shared || !Retail::Source().Handles(model->m_shared->m_fileName)) return nullptr;
+    const auto& prefs = character->m_data.m_preferences;
     const auto& map = RaceMap();
-    const auto race = map.find(character->m_data.m_preferences.m_raceID);
+    const auto race = map.find(prefs.m_raceID);
     if (race == map.end()) return nullptr;
-    Look& look = LookFor(race->second, character->m_data.m_preferences.m_sexID);
-    return look.chrModel ? &look : nullptr;
+    const uint32_t chrModel = Retail::Appearance::ChrModelFor(race->second, prefs.m_sexID);
+    if (!chrModel) return nullptr;
+    std::vector<uint32_t> choices;
+    ChoicesFor(chrModel, prefs, choices);
+    return LookFor(race->second, prefs.m_sexID, chrModel, choices);
 }
 
 // One equipped item texture in a body section, in the stock compositor's order (Esteria's
@@ -182,7 +253,7 @@ std::vector<EquipmentLayer> CollectEquipmentLayers(const CCharacterComponent* ch
 }
 
 bool RetailCharacterGeometry(CCharacterComponent* character) {
-    Look* found = RetailLook(character);
+    const auto found = RetailLook(character);
     if (!found) return false;
     const Look& look = *found;
     CM2Model* model = character->m_data.m_model;
@@ -204,7 +275,7 @@ bool RetailCharacterGeometry(CCharacterComponent* character) {
 }
 
 void RetailCharacterBody(CCharacterComponent* character) {
-    Look* found = RetailLook(character);
+    const auto found = RetailLook(character);
     if (!found || !found->body.width) return;
     const Look& look = *found;
 

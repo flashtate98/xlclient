@@ -2,6 +2,7 @@
 #define ENGINE_SOURCE_RETAIL_APPEARANCE_H
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 // Retail character appearance from the customization tables (Tables.h). Geoset selection follows the
@@ -12,6 +13,15 @@ namespace Retail::Appearance
 {
     // The ChrModel for a Retail ChrRaces ID and sex (ChrRaceXChrModel), or 0.
     uint32_t ChrModelFor(uint32_t retailRace, uint32_t sex);
+
+    // A customization option of a model and the choices a new character may take, in OrderIndex order
+    // (the internal "Transmog" placeholders are skipped). Options without such choices are left out.
+    struct Option {
+        uint32_t id = 0;
+        std::string name;              // "Skin Color", "Hair Style", ...
+        std::vector<uint32_t> choices;
+    };
+    void Options(uint32_t chrModel, std::vector<Option>& options);
 
     // One choice per option of the model: the first by OrderIndex that a new character may take
     // (the internal "Transmog" placeholders are skipped). Options appear in their OrderIndex order.

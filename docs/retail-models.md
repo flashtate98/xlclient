@@ -114,8 +114,11 @@ geosets from the customization tables instead of the 3.3.5 hair and facial-hair 
    need a row in `Data\Retail\races.csv` (`clientRace;retailRace`, one per line; a retail ID of 0
    removes a mapping).
 2. ChrRaceXChrModel gives the ChrModel for the character's sex.
-3. Each customization option of that model uses its default choice (the first by OrderIndex that a
-   new character may take). Per-character choices come later.
+3. Five options follow the character's 3.3.5 values, so the character creation and barbershop
+   selectors work on Retail bodies: skin colour, face, hair style, hair colour, and beard (men) or
+   makeup/earrings (women). Value N picks the Nth choice, wrapping when the 3.3.5 range is longer.
+   Every other option uses its default choice (the first by OrderIndex that a new character may
+   take) until the full Retail choices are stored per character.
 4. The choices' ChrCustomizationElement rows give the geosets (an element tied to a related choice
    applies only when that choice is taken too). Feet, torso, hands, head, eyes and eye overlays get
    their base geoset when no choice names them.
