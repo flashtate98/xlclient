@@ -812,33 +812,50 @@ static bool SyncBodyModel(CCharacterComponent* character, const Look& look) {
     return true;
 }
 
+const Retail::HelmetAnchor* StockAnchor(uint32_t raceId, uint32_t sexId);
+
+// The glue screens' cameras were placed for the 3.3.5 bodies. A Retail body modelled much larger than its
+// 3.3.5 body (the Tauren: heads 1.35x and 1.25x as high) is drawn at the 3.3.5 body's height, measured by the
+// head bone. Bodies within 20% of it (every race but the Tauren; Gnomes are 15% taller) keep scale 1.
 float RetailCharacterGlueScale(const CCharacterComponent* character) {
     if (!character) return 1.0f;
-    const auto& prefs = character->m_data.m_preferences;
     const CM2Model* model = character->m_data.m_model;
     uint32_t retailRace = 0;
-    const bool retail = RetailModelOf(character, retailRace) != 0;
-    const ChrRacesRec* race = g_chrRacesDB.GetRecord(prefs.m_raceID);
-    const int32_t displayId = race ? (prefs.m_sexID ? race->m_femaleDisplayID : race->m_maleDisplayID) : 0;
-    const CreatureDisplayInfoRec* display = displayId ? g_creatureDisplayInfoDB.GetRecord(displayId) : nullptr;
-    const CreatureModelDataRec* modelData = display ? g_creatureModelDataDB.GetRecord(display->m_modelID) : nullptr;
-    float scale = modelData ? display->m_creatureModelScale * modelData->m_modelScale : 1.0f;
-    if (!retail || !std::isfinite(scale) || scale <= 0.1f || scale >= 10.0f) scale = 1.0f;
+    if (!RetailModelOf(character, retailRace) || !(model->m_fFlags & 1) || !model->m_shared->m_data) return 1.0f;
+    const auto& prefs = character->m_data.m_preferences;
+    const Retail::HelmetAnchor* stock = StockAnchor(prefs.m_raceID, prefs.m_sexID);
+    const M2Data* data = model->m_shared->m_data;
+    if (!stock || data->m_boneIndicesById.m_count <= 6) return 1.0f;
+    const uint16_t head = data->m_boneIndicesById[6];
+    if (head >= data->m_bones.m_count) return 1.0f;
+    const float retail = data->m_bones[head].m_pivot.z, legacy = stock->head[2];
+    const float ratio = retail > 0.01f && legacy > 0.01f ? legacy / retail : 1.0f;
+    const float scale = std::isfinite(ratio) && std::fabs(ratio - 1.0f) > 0.2f ? ratio : 1.0f;
 
-    // Logged once per race and sex (and whenever the answer changes), to show where a size comes from.
-    static std::map<uint32_t, std::string> reported;
-    char line[512];
-    std::snprintf(line, sizeof(line), "Glue scale race %u sex %u: body %s (%s), ChrRaces display %d -> %s, CreatureDisplayInfo scale %.4f, "
-        "model data %d (%s) scale %.4f -> %.4f\n", static_cast<unsigned>(prefs.m_raceID), static_cast<unsigned>(prefs.m_sexID),
-        model && model->m_shared ? model->m_shared->m_fileName : "(none)", retail ? "Retail" : "not Retail", displayId,
-        display ? "found" : "missing", display ? display->m_creatureModelScale : 0.0f, display ? display->m_modelID : 0,
-        modelData ? (modelData->m_modelName ? modelData->m_modelName : "") : "missing", modelData ? modelData->m_modelScale : 0.0f, scale);
-    std::string& last = reported[prefs.m_raceID * 2 + (prefs.m_sexID ? 1 : 0)];
-    if (last != line) {
-        last = line;
-        Blizzard::Log::Printf(1, kLog, "%s", line);
+    static std::map<std::string, float> reported;
+    const std::string name = model->m_shared->m_fileName;
+    const auto seen = reported.find(name);
+    if (seen == reported.end() || seen->second != scale) {
+        reported[name] = scale;
+        Blizzard::Log::Printf(1, kLog, "Glue scale for %s: head %.3f high, 3.3.5 head %.3f, scale %.3f\n",
+            name.c_str(), retail, legacy, scale);
     }
     return scale;
+}
+
+// Puts a glue screen body at its glue scale, keeping its facing and position (the screens set the transform
+// before the body has loaded, when its head is not known yet).
+static void ApplyGlueScale(CCharacterComponent* character) {
+    CM2Model* model = character->m_data.m_model;
+    if (ClntObjMgrGetActivePlayer() || !model || !(model->m_fFlags & 0x8000)) return;
+    C44Matrix& m = model->m_worldTransform;
+    const float current = std::sqrt(m.a0 * m.a0 + m.a1 * m.a1 + m.a2 * m.a2);
+    const float wanted = RetailCharacterGlueScale(character);
+    if (current < 0.001f || std::fabs(current - wanted) < 0.0005f) return;
+    const float k = wanted / current;
+    m.a0 *= k; m.a1 *= k; m.a2 *= k;
+    m.b0 *= k; m.b1 *= k; m.b2 *= k;
+    m.c0 *= k; m.c1 *= k; m.c2 *= k;
 }
 
 void RetailCharacterSetBodyOwner(const CCharacterComponent* character, RetailBodyOwner swap, void* owner) {
@@ -855,6 +872,7 @@ bool RetailCharacterGeometry(CCharacterComponent* character) {
         character->m_data.m_model->SetGeometryVisible(0, 2000, 0);
         character->m_data.m_model->SetGeometryVisible(0, 0, 1);
     }
+    ApplyGlueScale(character);
     CM2Model* model = character->m_data.m_model;
 
     // The stock reset only reaches geoset 2000; Retail bodies carry groups above it (feet 20,
@@ -1178,28 +1196,13 @@ const HelmetTuning* HelmetTuningFor(uint32_t race, uint32_t sex) {
     return found == tunings.end() ? nullptr : &found->second;
 }
 
-void RetailCharacterFitHelmet(CCharacterComponent* character) {
-    CM2Model* body = character ? character->m_data.m_model : nullptr;
-    if (!body || !(body->m_fFlags & 1) || !body->m_shared || !body->m_shared->m_data) return;
-    uint32_t retailRace = 0;
-    if (!RetailModelOf(character, retailRace)) return;
-    CM2Model* helmet = body->m_attachList;
-    while (helmet && helmet->m_attachmentId != ATTACH_HELM) helmet = helmet->m_attachNext;
-    if (!helmet || !helmet->m_shared || Retail::Source().Handles(helmet->m_shared->m_fileName)) return;
-
-    const M2Data* data = body->m_shared->m_data;
-    if (data->m_boneIndicesById.m_count <= 6 || data->m_attachmentIndicesById.m_count <= ATTACH_HELM) return;
-    const uint16_t head = data->m_boneIndicesById[6];
-    const uint16_t socket = data->m_attachmentIndicesById[ATTACH_HELM];
-    if (head >= data->m_bones.m_count || socket >= data->m_attachments.m_count) return;
-    const auto& attachment = data->m_attachments[socket];
-
-    // The 3.3.5 body the race's helmets were made for: Character\<Race>\<Sex>\<Race><Sex>.m2.
+// The head and helmet socket of the 3.3.5 body a client race had (Character\<Race>\<Sex>\<Race><Sex>.m2),
+// read once from the game's own archives. Null when the race has none or it cannot be read.
+const Retail::HelmetAnchor* StockAnchor(uint32_t raceId, uint32_t sexId) {
     static const char* const kStock[] = {nullptr, "Human", "Orc", "Dwarf", "NightElf", "Scourge", "Tauren", "Gnome",
         "Troll", nullptr, "BloodElf", "Draenei"};
-    const auto& prefs = character->m_data.m_preferences;
-    if (prefs.m_raceID >= sizeof(kStock) / sizeof(kStock[0]) || !kStock[prefs.m_raceID] || prefs.m_sexID > 1) return;
-    const std::string race = kStock[prefs.m_raceID], sex = prefs.m_sexID ? "Female" : "Male";
+    if (raceId >= sizeof(kStock) / sizeof(kStock[0]) || !kStock[raceId] || sexId > 1) return nullptr;
+    const std::string race = kStock[raceId], sex = sexId ? "Female" : "Male";
     const std::string donorPath = "Character\\" + race + "\\" + sex + "\\" + race + sex + ".m2";
 
     struct Donor { bool tried = false, valid = false; Retail::HelmetAnchor anchor; };
@@ -1223,7 +1226,29 @@ void RetailCharacterFitHelmet(CCharacterComponent* character) {
             Blizzard::Log::Printf(1, kLog, "Helmet donor %s: %s\n", donorPath.c_str(), error.c_str());
         }
     }
-    if (!donor.valid) return;
+    return donor.valid ? &donor.anchor : nullptr;
+}
+
+void RetailCharacterFitHelmet(CCharacterComponent* character) {
+    CM2Model* body = character ? character->m_data.m_model : nullptr;
+    if (!body || !(body->m_fFlags & 1) || !body->m_shared || !body->m_shared->m_data) return;
+    uint32_t retailRace = 0;
+    if (!RetailModelOf(character, retailRace)) return;
+    CM2Model* helmet = body->m_attachList;
+    while (helmet && helmet->m_attachmentId != ATTACH_HELM) helmet = helmet->m_attachNext;
+    if (!helmet || !helmet->m_shared || Retail::Source().Handles(helmet->m_shared->m_fileName)) return;
+
+    const M2Data* data = body->m_shared->m_data;
+    if (data->m_boneIndicesById.m_count <= 6 || data->m_attachmentIndicesById.m_count <= ATTACH_HELM) return;
+    const uint16_t head = data->m_boneIndicesById[6];
+    const uint16_t socket = data->m_attachmentIndicesById[ATTACH_HELM];
+    if (head >= data->m_bones.m_count || socket >= data->m_attachments.m_count) return;
+    const auto& attachment = data->m_attachments[socket];
+
+    const auto& prefs = character->m_data.m_preferences;
+    const Retail::HelmetAnchor* donorAnchor = StockAnchor(prefs.m_raceID, prefs.m_sexID);
+    if (!donorAnchor) return;
+    struct { const Retail::HelmetAnchor& anchor; } donor{*donorAnchor};
 
     const auto& pivot = data->m_bones[head].m_pivot;
     const Retail::HelmetAnchor target{{pivot.x, pivot.y, pivot.z},
