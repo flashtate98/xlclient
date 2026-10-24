@@ -210,7 +210,12 @@ void CCharacterCreation::SetCharacterFacing(float facing) {
 
     if (CCharacterCreation::m_character->m_data.m_model) {
         C3Vector position(0.0f, 0.0f, 0.0f);
+#if defined(WOWDECOMP_RETAIL_MODELS)
+        // Not in the original: a Retail body is drawn at its world size (RetailCharacterGlueScale).
+        CCharacterCreation::m_character->m_data.m_model->SetWorldTransform(position, facing, RetailCharacterGlueScale(CCharacterCreation::m_character));
+#else
         CCharacterCreation::m_character->m_data.m_model->SetWorldTransform(position, facing, 1.0f);
+#endif
     }
 }
 

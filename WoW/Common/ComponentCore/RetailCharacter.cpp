@@ -811,6 +811,19 @@ static bool SyncBodyModel(CCharacterComponent* character, const Look& look) {
     return true;
 }
 
+float RetailCharacterGlueScale(const CCharacterComponent* character) {
+    uint32_t retailRace = 0;
+    if (!character || !RetailModelOf(character, retailRace)) return 1.0f;
+    const auto& prefs = character->m_data.m_preferences;
+    const ChrRacesRec* race = g_chrRacesDB.GetRecord(prefs.m_raceID);
+    const CreatureDisplayInfoRec* display = race
+        ? g_creatureDisplayInfoDB.GetRecord(prefs.m_sexID ? race->m_femaleDisplayID : race->m_maleDisplayID) : nullptr;
+    const CreatureModelDataRec* modelData = display ? g_creatureModelDataDB.GetRecord(display->m_modelID) : nullptr;
+    if (!modelData) return 1.0f;
+    const float scale = display->m_creatureModelScale * modelData->m_modelScale;
+    return std::isfinite(scale) && scale > 0.1f && scale < 10.0f ? scale : 1.0f;
+}
+
 void RetailCharacterSetBodyOwner(const CCharacterComponent* character, RetailBodyOwner swap, void* owner) {
     if (swap) s_bodyOwners[character] = { swap, owner };
     else s_bodyOwners.erase(character);

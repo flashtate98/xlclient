@@ -1,6 +1,7 @@
 #include "CharacterSelectionDisplay.h"
 #include "Engine/Source/Model2/M2Model.h"
 #include "WoW/Common/ComponentCore/CharacterComponent.h"
+#include "WoW/Common/ComponentCore/RetailCharacter.h"
 #include "WoW/Source/Glue/CGlueMgr.h"
 #include "WoW/Source/Glue/CharacterSelection.h"
 
@@ -53,6 +54,11 @@ void CharacterSelectionDisplay::SetCharacterFacing(float rotation) {
 
     if (display.m_component->m_data.m_model) {
         C3Vector position(0.0f, 0.0f, 0.0f);
+#if defined(WOWDECOMP_RETAIL_MODELS)
+        // Not in the original: a Retail body is drawn at its world size (RetailCharacterGlueScale).
+        display.m_component->m_data.m_model->SetWorldTransform(position, rotation, RetailCharacterGlueScale(display.m_component));
+#else
         display.m_component->m_data.m_model->SetWorldTransform(position, rotation, 1.0f);
+#endif
     }
 }

@@ -73,6 +73,12 @@ void RetailCustomizationGiveExtras(const CCharacterComponent* character, const R
 // pass. A unit showing the component is found from the character it is bound to, and glue screens read
 // the component's model each time; any other holder of the model (a model frame) registers here to be
 // handed the new body. A null `swap` unregisters.
+// The size a Retail body is drawn at on the glue screens (create, select): the world's size for the race,
+// CreatureDisplayInfo scale x CreatureModelData scale of its native display. The stock screens draw at 1.0,
+// which suited the 3.3.5 bodies; some Retail bodies are modelled larger (Tauren male 1.35x) and are sized
+// down through those scales, so the screens follow them. 1.0 for stock bodies.
+float RetailCharacterGlueScale(const CCharacterComponent* character);
+
 using RetailBodyOwner = void (*)(void* owner, CM2Model* replacement);
 void RetailCharacterSetBodyOwner(const CCharacterComponent* character, RetailBodyOwner swap, void* owner);
 
