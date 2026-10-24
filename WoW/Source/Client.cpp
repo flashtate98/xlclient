@@ -6,6 +6,7 @@
 #include "WarcraftXL/Seams.h"
 #if defined(WOWDECOMP_RETAIL_MODELS)
 #include "Engine/Source/Retail/Tables.h"
+#include "WoW/Common/ComponentCore/RetailCharacter.h"
 #endif
 #include "Engine/Source/Base/Base.h"
 #include "Engine/Source/Base/CmdLine.h"
@@ -1646,6 +1647,10 @@ int32_t DestroyEngineCallback(const void* data, void* param) {
     ScrnDestroy();
     M2Destroy();
     ModelBlobDestroy();
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: composed Retail character textures go before the texture system.
+    RetailCharacterShutdown();
+#endif
     TextureDestroy();
     AsyncFileReadDestroy();
     GxuLightShutdown();

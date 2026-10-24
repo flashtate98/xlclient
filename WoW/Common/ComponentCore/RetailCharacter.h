@@ -32,4 +32,8 @@ bool RetailCharacterTextures(CCharacterComponent* character);
 // its temporary item textures are released. Does nothing for stock bodies.
 void RetailCharacterBody(CCharacterComponent* character);
 
+// Releases every composed texture. Called at shutdown before TextureDestroy: textures still held at
+// process exit would be freed after the graphics device is gone.
+void RetailCharacterShutdown();
+
 #endif

@@ -165,13 +165,20 @@ void ChoicesFor(uint32_t chrModel, const CharacterPreferences& prefs, std::vecto
     }
 }
 
+// Composed looks and body sheets. They hold textures, so they are released at shutdown before the
+// texture system and the graphics device go (RetailCharacterShutdown), not by static destruction.
+std::map<std::string, std::shared_ptr<Look>> s_looks;
+std::deque<std::string> s_lookOrder;
+std::mutex s_lookMutex;
+std::map<std::string, CTexture*> s_bodies;
+std::deque<std::string> s_bodyOrder;
+
 // A composed look per Retail race, sex and choices. The most recent ones are kept; each holds a full
 // skin sheet, so the cache is bounded.
 std::shared_ptr<Look> LookFor(uint32_t retailRace, uint32_t sex, uint32_t chrModel, const std::vector<uint32_t>& choices) {
-    static std::map<std::string, std::shared_ptr<Look>> looks;
-    static std::deque<std::string> order;
-    static std::mutex mutex;
-    std::lock_guard<std::mutex> lock(mutex);
+    auto& looks = s_looks;
+    auto& order = s_lookOrder;
+    std::lock_guard<std::mutex> lock(s_lookMutex);
 
     std::string key = std::to_string(retailRace) + "-" + std::to_string(sex);
     for (const uint32_t id : choices) key += "-" + std::to_string(id);
@@ -287,6 +294,17 @@ bool RetailCharacterTextures(CCharacterComponent* character) {
     return true;
 }
 
+void RetailCharacterShutdown() {
+    {
+        std::lock_guard<std::mutex> lock(s_lookMutex);
+        s_looks.clear();
+        s_lookOrder.clear();
+    }
+    for (auto& body : s_bodies) HandleClose(reinterpret_cast<HOBJECT>(body.second));
+    s_bodies.clear();
+    s_bodyOrder.clear();
+}
+
 void RetailCharacterBody(CCharacterComponent* character) {
     const auto found = RetailLook(character);
     if (!found || !found->body.width) return;
@@ -302,8 +320,8 @@ void RetailCharacterBody(CCharacterComponent* character) {
         if (!layer.displayId && layer.texture) name += ":" + std::string(static_cast<const CACHEENTRY*>(layer.texture)->m_fileName);
     }
 
-    static std::map<std::string, CTexture*> bodies;
-    static std::deque<std::string> order;
+    auto& bodies = s_bodies;
+    auto& order = s_bodyOrder;
     auto cached = bodies.find(name);
     if (cached == bodies.end()) {
         Retail::Image sheet = look.body;
