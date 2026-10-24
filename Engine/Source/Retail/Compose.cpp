@@ -2,6 +2,7 @@
 // (Engine/Source/Retail/Compose.cpp there).
 #include "Engine/Source/Retail/Compose.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <map>
@@ -201,8 +202,12 @@ void PaintImage(Image& dst, const Image& src, uint32_t x, uint32_t y, uint32_t w
 }
 
 bool ComposeTextures(uint32_t chrModel, const std::vector<Appearance::TextureLayer>& layers, BlpFetch fetch, void* context,
-    std::vector<ComposedTexture>& out, std::string& warnings) {
+    std::vector<ComposedTexture>& out, std::string& warnings, ComposeStats* stats) {
     out.clear();
+    using Clock = std::chrono::steady_clock;
+    const auto since = [](Clock::time_point start) {
+        return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+    };
     const uint32_t layout = Appearance::LayoutFor(chrModel);
     uint32_t sheetWidth = 0, sheetHeight = 0;
     const bool haveSheet = Appearance::LayoutSize(layout, sheetWidth, sheetHeight);
@@ -213,10 +218,21 @@ bool ComposeTextures(uint32_t chrModel, const std::vector<Appearance::TextureLay
         std::vector<uint8_t> bytes;
         Image image;
         std::string error;
-        if (!layer.fileDataId || !fetch(layer.fileDataId, bytes, context) || !DecodeBlp(bytes, image, error)) {
+        auto start = Clock::now();
+        const bool fetched = layer.fileDataId && fetch(layer.fileDataId, bytes, context);
+        if (stats) { stats->fetch += since(start); ++stats->files; }
+        start = Clock::now();
+        const bool decoded = fetched && DecodeBlp(bytes, image, error);
+        if (stats) stats->decode += since(start);
+        if (!decoded) {
             warnings += "texture " + std::to_string(layer.fileDataId) + " unavailable" + (error.empty() ? "" : ": " + error) + "\n";
             continue;
         }
+        start = Clock::now();
+        struct PaintTimer {
+            ComposeStats* stats; Clock::time_point start;
+            ~PaintTimer() { if (stats) stats->paint += std::chrono::duration<double, std::milli>(Clock::now() - start).count(); }
+        } paintTimer{stats, start};
         ComposedTexture& target = byType[layer.textureType];
         target.textureType = layer.textureType;
         if (!target.image.width) {

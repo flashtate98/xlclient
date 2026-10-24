@@ -32,8 +32,14 @@ struct ComposedTexture {
 // Builds every texture the layers paint (the body sheet at the model's layout size). `fetch` returns the bytes of a retail BLP by FileDataID;
 // layers whose file cannot be fetched are skipped and named in `warnings`.
 using BlpFetch = bool (*)(uint32_t fileDataId, std::vector<uint8_t>& bytes, void* context);
+// Where ComposeTextures spends its time, in milliseconds, for the timing log.
+struct ComposeStats {
+    double fetch = 0, decode = 0, paint = 0;
+    uint32_t files = 0;
+};
+
 bool ComposeTextures(uint32_t chrModel, const std::vector<Appearance::TextureLayer>& layers, BlpFetch fetch, void* context,
-    std::vector<ComposedTexture>& out, std::string& warnings);
+    std::vector<ComposedTexture>& out, std::string& warnings, ComposeStats* stats = nullptr);
 
 }
 #endif

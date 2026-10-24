@@ -21,6 +21,7 @@
 #include "WoW/Source/DB/Rec/HelmetGeosetVisDataRec.h"
 #include <deque>
 #include <charconv>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -107,11 +108,38 @@ bool FetchBlp(uint32_t fileDataId, std::vector<uint8_t>& bytes, void*) {
     return false;
 }
 
-CTexture* MakeTexture(const std::string& name, const Retail::Image& image) {
+using Clock = std::chrono::steady_clock;
+double Since(Clock::time_point start) { return std::chrono::duration<double, std::milli>(Clock::now() - start).count(); }
+
+// Time spent turning composed images into client textures: building the BLP (pixels plus every mip
+// level) and creating the texture from it.
+struct MakeStats {
+    double build = 0, upload = 0;
+    uint32_t count = 0;
+    uint64_t bytes = 0;
+};
+
+CTexture* MakeTexture(const std::string& name, const Retail::Image& image, MakeStats* stats = nullptr) {
+    auto start = Clock::now();
     std::vector<uint8_t> blp;
     Retail::BuildBlp(image, blp);
+    if (stats) { stats->build += Since(start); stats->bytes += blp.size(); ++stats->count; }
+    start = Clock::now();
     CGxTexFlags flags(GxTex_LinearMipNearest, 0, 0, 0, 0, 0, 1);
-    return TextureCreateFromBlpData(name.c_str(), flags, blp.data());
+    CTexture* texture = TextureCreateFromBlpData(name.c_str(), flags, blp.data());
+    if (stats) stats->upload += Since(start);
+    return texture;
+}
+
+void LogBuildType() {
+    static bool logged = false;
+    if (logged) return;
+    logged = true;
+#if defined(_DEBUG)
+    Blizzard::Log::Printf(1, kLog, "Timing: Debug build (image work runs several times slower than in Release)\n");
+#else
+    Blizzard::Log::Printf(1, kLog, "Timing: Release build\n");
+#endif
 }
 
 // The Retail option each 3.3.5 selector drives, by name (the lists follow Esteria's StockOptionName):
@@ -164,6 +192,8 @@ std::shared_ptr<Look> LookFor(uint32_t retailRace, uint32_t sex, uint32_t chrMod
     const auto found = looks.find(key);
     if (found != looks.end()) return found->second;
 
+    LogBuildType();
+    const auto lookStart = Clock::now();
     auto look = std::make_shared<Look>();
     look->chrModel = chrModel;
     look->key = key;
@@ -176,15 +206,25 @@ std::shared_ptr<Look> LookFor(uint32_t retailRace, uint32_t sex, uint32_t chrMod
     look->geosets.insert(look->geosets.end(), defaults.begin(), defaults.end());
     Retail::Appearance::Sections(Retail::Appearance::LayoutFor(chrModel), look->sections);
     Retail::Appearance::TextureLayers(chrModel, choices, layers);
-    Retail::ComposeTextures(chrModel, layers, FetchBlp, nullptr, composed, warnings);
+    const double tables = Since(lookStart);
+    Retail::ComposeStats compose;
+    auto start = Clock::now();
+    Retail::ComposeTextures(chrModel, layers, FetchBlp, nullptr, composed, warnings, &compose);
+    const double composeTotal = Since(start);
+    MakeStats make;
     for (auto& texture : composed) {
         if (texture.textureType == 1) {
             look->body = std::move(texture.image);
             continue;
         }
-        CTexture* made = MakeTexture("Retail\\Character\\" + key + "\\" + std::to_string(texture.textureType), texture.image);
+        CTexture* made = MakeTexture("Retail\\Character\\" + key + "\\" + std::to_string(texture.textureType), texture.image, &make);
         if (made) look->textures[texture.textureType] = made;
     }
+    Blizzard::Log::Printf(1, kLog,
+        "Timing look: total %.1f ms | tables %.1f | compose %.1f (read %.1f for %u files, decode %.1f, paint %.1f) | "
+        "textures %u: build %.1f, create %.1f, %.1f MB\n",
+        Since(lookStart), tables, composeTotal, compose.fetch, compose.files, compose.decode, compose.paint,
+        make.count, make.build, make.upload, make.bytes / 1048576.0);
 
     std::string text;
     for (const uint32_t id : choices) text += " " + std::to_string(id);
@@ -523,7 +563,12 @@ void RetailCharacterBody(CCharacterComponent* character) {
     auto& order = s_bodyOrder;
     auto cached = bodies.find(name);
     if (cached == bodies.end()) {
+        LogBuildType();
+        const auto bodyStart = Clock::now();
+        double itemRead = 0, itemDecode = 0, itemPaint = 0;
+        auto start = Clock::now();
         Retail::Image sheet = look.body;
+        const double copy = Since(start);
         for (const auto& layer : layers) {
             void* handle = layer.texture;
             // Only dirty sections reload their item textures; the others were released by the last pass.
@@ -533,6 +578,7 @@ void RetailCharacterBody(CCharacterComponent* character) {
                 if (g_itemDisplayInfoDB.GetRecord(layer.displayId, &display))
                     handle = character->LoadItemComponentTexture(&display, static_cast<COMPONENT_SECTIONS>(layer.section));
             }
+            start = Clock::now();
             TCTEXTUREINFO info{};
             TextureCacheGetInfo(handle, info, 1);
             const CACHEENTRY* entry = static_cast<const CACHEENTRY*>(handle);
@@ -542,18 +588,29 @@ void RetailCharacterBody(CCharacterComponent* character) {
                 bytes.assign(begin, begin + entry->m_size);
             }
             if (reload && handle) TextureCacheDestroyTexture(handle);
+            itemRead += Since(start);
             Retail::Image item;
             std::string error;
-            if (!Retail::DecodeBlp(bytes, item, error)) {
+            start = Clock::now();
+            const bool decoded = Retail::DecodeBlp(bytes, item, error);
+            itemDecode += Since(start);
+            if (!decoded) {
                 Blizzard::Log::Printf(1, kLog, "Item texture for section %u layer %u (display %u): %s\n",
                     static_cast<unsigned>(layer.section), static_cast<unsigned>(layer.layer), static_cast<unsigned>(layer.displayId), error.c_str());
                 continue;
             }
+            start = Clock::now();
             for (const auto& section : look.sections)
                 if (section.sectionType == layer.section)
                     Retail::PaintImage(sheet, item, section.x, section.y, section.width, section.height, 2);
+            itemPaint += Since(start);
         }
-        CTexture* texture = MakeTexture(name, sheet);
+        MakeStats make;
+        CTexture* texture = MakeTexture(name, sheet, &make);
+        Blizzard::Log::Printf(1, kLog,
+            "Timing body: total %.1f ms | copy %.1f | %u item layers: read %.1f, decode %.1f, paint %.1f | build %.1f, create %.1f, %.1f MB\n",
+            Since(bodyStart), copy, static_cast<unsigned>(layers.size()), itemRead, itemDecode, itemPaint,
+            make.build, make.upload, make.bytes / 1048576.0);
         if (!texture) return;
         cached = bodies.emplace(name, texture).first;
         order.push_back(name);
