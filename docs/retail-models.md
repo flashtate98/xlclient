@@ -123,3 +123,14 @@ geosets from the customization tables instead of the 3.3.5 hair and facial-hair 
 Everything above geoset 2000 is hidden first, as the 3.3.5 reset only reaches 2000.
 `Logs\RetailCharacter.log` lists, per Retail race and sex, the ChrModel, the default choices and the
 resulting geosets.
+
+## Retail character textures
+
+The same characters get their textures from the Retail tables too. Each chosen
+ChrCustomizationMaterial is matched to the model layout's ChrModelTextureLayer rows; TextureFileData
+gives the BLP, read by FileDataID through the path tables. The layers are composed (the compositor is
+Esteria's `Compose.cpp`): the body skin sheet at the layout's size (2048x1024 for Retail Humans, its
+left half being the 3.3.5 body sections at twice the size and its right half the face), and hair,
+eyes and the other types at the size of their first layer. Equipped items keep their 3.3.5 section
+textures, stretched over the matching Retail sections. `Logs\RetailCharacter.log` lists the
+textures each look composed and any file that could not be read.

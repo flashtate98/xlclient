@@ -34,6 +34,8 @@ public:
     bool Read(const char* name, std::vector<uint8_t>& bytes, std::string& error);
     // Prepared size once read, otherwise the size on disk.
     bool Size(const char* name, uint32_t& size);
+    // The raw bytes of a file by FileDataID (listfile.csv or the FilePath DB2s, then the archives).
+    bool ReadFileDataId(uint32_t id, std::vector<uint8_t>& bytes, std::string& error);
     // Drops the published dependency names once the last CM2Shared using the model goes away.
     void ReleaseModel(const char* name);
 

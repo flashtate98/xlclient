@@ -2176,6 +2176,22 @@ CTexture* CreateBlpSync(const char* fileName, char* extension, uint32_t flags, C
     return texture;
 }
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+// Not in the original (from the Esteria fork): builds a texture from BLP bytes in memory, as
+// CreateBlpTexture does from a file. `blpData` stays owned by the caller.
+CTexture* TextureCreateFromBlpData(const char* name, CGxTexFlags texFlags, void* blpData) {
+    CTexture* texture = new ("HTEXTURE", SLOG_OBJECT) CTexture;
+    texture->m_gxTexFlags = texFlags;
+    SStrCopy(texture->m_filename, name, STORM_MAX_STR);
+
+    if (!PumpBlpTextureAsync(texture, blpData)) {
+        FillInSolidTexture(*reinterpret_cast<const CImVector*>(&s_defaultColor), texture);
+    }
+
+    return reinterpret_cast<CTexture*>(HandleCreate(texture, "HTEXTURE"));
+}
+#endif
+
 // VERIFY: 1c0f47e5 manual
 // OFFSET: 0x004B8A50
 CTexture* CreateBlpAsync(char* extension, const char* fileName, uint32_t flags, CGxTexFlags texFlags) {

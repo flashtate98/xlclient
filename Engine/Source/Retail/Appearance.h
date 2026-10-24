@@ -25,6 +25,27 @@ namespace Retail::Appearance
     // feet (20), torso (22), hands (23), head (32), eyes (33) and eye overlays (51). From Esteria's
     // RaceGeometry.h.
     void DefaultGeosets(const std::vector<uint16_t>& chosen, std::vector<uint16_t>& defaults);
+
+    // One layer of a composed texture: ChrModelTextureLayer matched to a chosen material.
+    struct TextureLayer {
+        uint32_t textureType = 0;     // the M2 texture type it paints (1 body skin, 6 hair, ...)
+        uint32_t layer = 0;           // paint order
+        uint32_t blendMode = 0;       // the character compositor's blend enum
+        uint32_t sectionMask = 0;     // body sections it covers (0xFFFFFFFF: the whole texture)
+        uint32_t fileDataId = 0;      // the BLP, from TextureFileData
+    };
+    struct TextureSection {
+        uint32_t sectionType = 0, x = 0, y = 0, width = 0, height = 0;
+    };
+
+    // The model's CharComponentTextureLayouts row, its size and its sections.
+    uint32_t LayoutFor(uint32_t chrModel);
+    bool LayoutSize(uint32_t layout, uint32_t& width, uint32_t& height);
+    void Sections(uint32_t layout, std::vector<TextureSection>& sections);
+
+    // The texture layers the choices paint, in paint order (Esteria's AddMaterialLayers): each chosen
+    // ChrCustomizationMaterial matches the layout's ChrModelTextureLayer rows of the same target.
+    void TextureLayers(uint32_t chrModel, const std::vector<uint32_t>& choices, std::vector<TextureLayer>& layers);
 }
 
 #endif

@@ -544,6 +544,12 @@ bool LocalSource::Read(const char* name, std::vector<uint8_t>& bytes, std::strin
     return true;
 }
 
+bool LocalSource::ReadFileDataId(uint32_t id, std::vector<uint8_t>& bytes, std::string& error) {
+    Reference ref;
+    ref.id = id;
+    return id && m_impl->Fetch(ref, bytes, error);
+}
+
 void LocalSource::ReleaseModel(const char* name) {
     const auto key = Normalize(name);
     std::lock_guard<std::mutex> lock(m_impl->mutex);

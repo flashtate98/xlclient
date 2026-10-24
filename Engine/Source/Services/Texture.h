@@ -138,6 +138,10 @@ CTexture* TextureCreate(uint32_t width, uint32_t height, EGxTexFormat format, EG
 CTexture* TextureCreateBlob(char* fileName, CGxTexFlags texFlags, CStatus* status, int32_t defaultFilter);
 SFileImpl* TextureCreateOpenFile(const char* fileName, int32_t flags);
 CTexture* TextureCreateSolid(const CImVector& color);
+#if defined(WOWDECOMP_RETAIL_MODELS)
+// Not in the original: a texture from BLP bytes already in memory (composed Retail character textures).
+CTexture* TextureCreateFromBlpData(const char* name, CGxTexFlags texFlags, void* blpData);
+#endif
 void TextureDestroy();
 TEXFILETYPE TextureDiscoverFileType(const char* fileName);
 void TextureEnableAtlas(int32_t enable);

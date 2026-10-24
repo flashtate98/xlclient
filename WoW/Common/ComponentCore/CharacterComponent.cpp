@@ -3640,6 +3640,10 @@ void CCharacterComponent::RenderPrepAll() {
 
     this->m_flags &= ~0x1;
     this->m_dirtySections = 0;
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: a Retail body takes the composed Retail skin sheet with the items over it.
+    RetailCharacterBody(this);
+#endif
     this->DestroyRenderTextures();
     this->m_link.Unlink();
 }
@@ -4946,6 +4950,10 @@ void CCharacterComponent::ProcessFinishedRequest() {
 
     this->UpdateSections();
     ShellRaces::RefreshClothing(this); // FlashWOW: before the layer textures are released
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: a Retail body takes the composed Retail skin sheet with the items over it.
+    RetailCharacterBody(this);
+#endif
     this->m_request->m_flags &= ~0x1;
     this->m_flags &= ~0x1;
     this->m_request = nullptr;
@@ -5123,6 +5131,10 @@ void CCharacterComponent::RenderPrepSections() {
 
     this->PrepSections();
     ShellRaces::RefreshClothing(this); // FlashWOW: before the layer textures are released
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: a Retail body takes the composed Retail skin sheet with the items over it.
+    RetailCharacterBody(this);
+#endif
     this->m_flags &= ~0x1;
     this->m_dirtySections = 0;
     this->DestroyRenderTextures();

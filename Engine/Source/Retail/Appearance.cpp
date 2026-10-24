@@ -20,6 +20,15 @@ struct Index {
     const Table* choice = nullptr;
     const Table* element = nullptr;
     const Table* geoset = nullptr;
+    const Table* chrModel = nullptr;
+    const Table* material = nullptr;
+    const Table* textureLayer = nullptr;
+    const Table* layout = nullptr;
+    const Table* section = nullptr;
+    const Table* textureFile = nullptr;
+    std::unordered_map<uint32_t, std::vector<const Row*>> layersByLayout;
+    std::unordered_map<uint32_t, std::vector<const Row*>> sectionsByLayout;
+    std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, uint32_t>>> filesByMaterial; // (usage, file)
     std::unordered_map<uint64_t, uint32_t> modelByRaceSex;
     std::unordered_map<uint32_t, std::vector<const Row*>> optionsByModel;
     std::unordered_map<uint32_t, std::vector<const Row*>> choicesByOption;
@@ -46,7 +55,24 @@ void Build(Index& x) {
     x.choice = Db2::tables::Get("chrcustomizationchoice");
     x.element = Db2::tables::Get("chrcustomizationelement");
     x.geoset = Db2::tables::Get("chrcustomizationgeoset");
+    x.chrModel = Db2::tables::Get("chrmodel");
+    x.material = Db2::tables::Get("chrcustomizationmaterial");
+    x.textureLayer = Db2::tables::Get("chrmodeltexturelayer");
+    x.layout = Db2::tables::Get("charcomponenttexturelayouts");
+    x.section = Db2::tables::Get("charcomponenttexturesections");
+    x.textureFile = Db2::tables::Get("texturefiledata");
     if (!x.raceModel || !x.option || !x.choice || !x.element || !x.geoset) return;
+    if (x.textureLayer)
+        for (const Row& row : x.textureLayer->Rows()) x.layersByLayout[row.parentId].push_back(&row);
+    if (x.section)
+        for (const Row& row : x.section->Rows()) {
+            const uint32_t layout = x.section->Value(row, "CharComponentTextureLayoutID");
+            x.sectionsByLayout[layout ? layout : row.parentId].push_back(&row);
+        }
+    if (x.textureFile)
+        for (const Row& row : x.textureFile->Rows())
+            x.filesByMaterial[x.textureFile->Value(row, "MaterialResourcesID")].push_back(
+                {x.textureFile->Value(row, "UsageType"), row.id});
 
     for (const Row& row : x.raceModel->Rows())
         x.modelByRaceSex[RaceSexKey(x.raceModel->Value(row, "ChrRacesID"), x.raceModel->Value(row, "Sex"))] =
@@ -119,6 +145,75 @@ void Geosets(uint32_t chrModel, const std::vector<uint32_t>& choices, std::vecto
             if (value <= 0xFFFF) geosets.push_back(static_cast<uint16_t>(value));
         }
     }
+}
+
+uint32_t LayoutFor(uint32_t chrModel) {
+    Index& x = Ready();
+    const Row* row = x.ready && x.chrModel ? x.chrModel->Find(chrModel) : nullptr;
+    return row ? x.chrModel->Value(*row, "CharComponentTextureLayoutID") : 0;
+}
+
+bool LayoutSize(uint32_t layout, uint32_t& width, uint32_t& height) {
+    Index& x = Ready();
+    const Row* row = x.ready && x.layout ? x.layout->Find(layout) : nullptr;
+    if (!row) return false;
+    width = x.layout->Value(*row, "Width");
+    height = x.layout->Value(*row, "Height");
+    return width && height;
+}
+
+void Sections(uint32_t layout, std::vector<TextureSection>& sections) {
+    sections.clear();
+    Index& x = Ready();
+    if (!x.ready || !x.section) return;
+    const auto found = x.sectionsByLayout.find(layout);
+    if (found == x.sectionsByLayout.end()) return;
+    for (const Row* row : found->second)
+        sections.push_back({x.section->Value(*row, "SectionType"), x.section->Value(*row, "X"), x.section->Value(*row, "Y"),
+            x.section->Value(*row, "Width"), x.section->Value(*row, "Height")});
+}
+
+namespace {
+// TextureFileData lists a material's files by usage; usage 0 is the colour map (Esteria falls back to 2).
+uint32_t MaterialFile(Index& x, uint32_t material) {
+    const auto found = x.filesByMaterial.find(material);
+    if (found == x.filesByMaterial.end() || found->second.empty()) return 0;
+    for (const uint32_t wanted : {0u, 2u})
+        for (const auto& file : found->second)
+            if (file.first == wanted) return file.second;
+    return found->second.front().second;
+}
+}
+
+void TextureLayers(uint32_t chrModel, const std::vector<uint32_t>& choices, std::vector<TextureLayer>& layers) {
+    layers.clear();
+    Index& x = Ready();
+    if (!x.ready || !x.material || !x.textureLayer) return;
+    const uint32_t layout = LayoutFor(chrModel);
+    const auto layoutLayers = x.layersByLayout.find(layout);
+    if (layoutLayers == x.layersByLayout.end()) return;
+    for (const uint32_t id : choices) {
+        const Row* choice = x.choice->Find(id);
+        const Row* option = choice ? x.option->Find(x.choice->Value(*choice, "ChrCustomizationOptionID")) : nullptr;
+        if (!option || x.option->Value(*option, "ChrModelID") != chrModel) continue;
+        const auto elements = x.elementsByChoice.find(id);
+        if (elements == x.elementsByChoice.end()) continue;
+        for (const Row* element : elements->second) {
+            const uint32_t needs = x.element->Value(*element, "RelatedChrCustomizationChoiceID");
+            if (needs && std::find(choices.begin(), choices.end(), needs) == choices.end()) continue;
+            const uint32_t materialId = x.element->Value(*element, "ChrCustomizationMaterialID");
+            const Row* material = materialId ? x.material->Find(materialId) : nullptr;
+            if (!material) continue;
+            const uint32_t target = x.material->Value(*material, "ChrModelTextureTargetID");
+            const uint32_t file = MaterialFile(x, x.material->Value(*material, "MaterialResourcesID"));
+            for (const Row* layer : layoutLayers->second) {
+                if (x.textureLayer->Value(*layer, "ChrModelTextureTargetID") != target) continue;
+                layers.push_back({x.textureLayer->Value(*layer, "TextureType"), x.textureLayer->Value(*layer, "Layer"),
+                    x.textureLayer->Value(*layer, "BlendMode"), x.textureLayer->Value(*layer, "TextureSectionTypeBitMask"), file});
+            }
+        }
+    }
+    std::stable_sort(layers.begin(), layers.end(), [](const TextureLayer& a, const TextureLayer& b) { return a.layer < b.layer; });
 }
 
 void DefaultGeosets(const std::vector<uint16_t>& chosen, std::vector<uint16_t>& defaults) {
