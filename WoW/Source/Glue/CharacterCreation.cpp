@@ -9,6 +9,7 @@
 #include "Engine/Source/Storm/H/storm.h"
 #include "Engine/Source/Tempest/CRandom.h"
 #include "WoW/Common/ComponentCore/CharacterComponent.h"
+#include "WoW/Common/ComponentCore/RetailCharacter.h"
 #include "WoW/Source/DB/DBClient/DBClient.h"
 #include "WoW/Source/DB/Rec/CharBaseInfoRec.h"
 #include "WoW/Source/DB/Rec/CharStartOutfitRec.h"
@@ -556,6 +557,12 @@ void CCharacterCreation::InitCharacterComponents(ComponentData* data, bool rando
         return;
     }
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: the Retail rows the player set survive the rebuild (the create button
+    // re-selects the class, which lands here, just before the character is sent).
+    RetailCustomizationExtras extras;
+    RetailCustomizationTakeExtras(CCharacterCreation::m_character, extras);
+#endif
     if (CCharacterCreation::m_character) {
         if (CCharacterCreation::m_character->m_data.m_model->m_attachParent) {
             CCharacterCreation::m_character->m_data.m_model->DetachFromParent();
@@ -565,6 +572,11 @@ void CCharacterCreation::InitCharacterComponents(ComponentData* data, bool rando
     }
 
     CCharacterCreation::m_character = CCharacterComponent::AllocComponent();
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    if (!randomize) {
+        RetailCustomizationGiveExtras(CCharacterCreation::m_character, extras);
+    }
+#endif
     data->m_model = CCharacterCreation::m_charCustomizeFrame->GetScene()->CreateModel(modelRec->m_modelName, 0);
 
     if (!data->m_model) {

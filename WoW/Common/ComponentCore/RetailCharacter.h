@@ -50,6 +50,12 @@ bool RetailCustomizationOptions(const CCharacterComponent* character, std::vecto
 // a random choice for every listed option; then refreshes geosets and textures. False for stock bodies.
 bool RetailCustomizationCycle(CCharacterComponent* character, uint32_t index, int32_t delta, bool randomize = false);
 
+// The create screen's row choices, carried from a component that is about to be freed to the one that
+// replaces it. Choices the new character is not offered fall back to defaults as usual.
+using RetailCustomizationExtras = std::vector<std::pair<uint32_t, uint32_t>>;
+void RetailCustomizationTakeExtras(const CCharacterComponent* character, RetailCustomizationExtras& extras);
+void RetailCustomizationGiveExtras(const CCharacterComponent* character, const RetailCustomizationExtras& extras);
+
 // Drops the stored choices of a component that is going away.
 void RetailCustomizationForget(const CCharacterComponent* character);
 

@@ -400,6 +400,17 @@ bool RetailCustomizationCycle(CCharacterComponent* character, uint32_t index, in
     return true;
 }
 
+void RetailCustomizationTakeExtras(const CCharacterComponent* character, RetailCustomizationExtras& extras) {
+    extras.clear();
+    const auto found = s_extraChoices.find(character);
+    if (found != s_extraChoices.end()) extras.assign(found->second.begin(), found->second.end());
+}
+
+void RetailCustomizationGiveExtras(const CCharacterComponent* character, const RetailCustomizationExtras& extras) {
+    if (!character || extras.empty()) return;
+    s_extraChoices[character] = std::map<uint32_t, uint32_t>(extras.begin(), extras.end());
+}
+
 void RetailCustomizationForget(const CCharacterComponent* character) {
     s_extraChoices.erase(character);
     s_boundGuids.erase(character);
