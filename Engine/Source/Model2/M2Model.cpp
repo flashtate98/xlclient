@@ -7886,6 +7886,13 @@ int32_t CM2Model::Initialize(CM2Scene* scene, CM2Shared* shared, CM2Model* sourc
                 // binds them to its own skeleton once loaded (CopySkinParentPose).
                 const bool collection = child->m_attachmentId == kCollectionSocket && (child->m_fFlags & 0x40000);
                 copy->AttachToParent(this, child->m_attachmentId, nullptr, collection ? 1 : 0);
+                // The child's own transform within its socket comes along too: a 3.3.5 helmet on a
+                // Retail body carries the offset that seats it on the Retail head
+                // (RetailCharacterFitHelmet), which the copy would otherwise drop into the neck.
+                if (!collection && copy->m_attachParent == this) {
+                    copy->m_worldTransform = child->m_worldTransform;
+                    copy->m_fFlags |= child->m_fFlags & 0x8000;
+                }
 #else
                 copy->AttachToParent(this, child->m_attachmentId, nullptr, 0);
 #endif
