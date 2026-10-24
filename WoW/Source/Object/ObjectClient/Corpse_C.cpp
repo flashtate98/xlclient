@@ -26,6 +26,9 @@
 #include "WoW/Source/Ui/SpellBookFrame.h"
 #include "WoW/Source/UIUtil/PortraitButton.h"
 #include "WoW/Source/WorldClient/World.h"
+#if defined(WOWDECOMP_RETAIL_MODELS)
+#include "WoW/Source/RetailCustomizationNet.h"
+#endif
 
 // VERIFY: 91aabd2d manual
 // OFFSET: 0x00705950
@@ -102,6 +105,10 @@ void CGCorpse_C::PostInit(uint32_t time, const CClientObjCreate& create, bool a3
     if (!(this->m_corpse->m_corpseFieldFlags & 0x1)) {
         if (useComponent) {
             this->m_component = CCharacterComponent::AllocComponent();
+#if defined(WOWDECOMP_RETAIL_MODELS)
+            // Not in the original: a player's corpse shows its owner's Retail choices.
+            RetailCustomizationNetBind(this->m_component, this->m_corpse->m_corpseFieldOwner.m_guid, true);
+#endif
 
             ComponentData data;
             data.m_preferences.m_raceID = this->m_corpse->m_corpseFieldBytes1[1];

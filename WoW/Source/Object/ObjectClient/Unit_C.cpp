@@ -23703,6 +23703,12 @@ void CGUnit_C::OnReceiveMirrorImageDataFromServer(CDataStore* msg) {
         msg->Get(guildId);
 
         this->m_characterComponent = CCharacterComponent::AllocComponent();
+#if defined(WOWDECOMP_RETAIL_MODELS)
+        // Not in the original: a mirror image shows its caster's Retail choices.
+        if (this->m_unit->m_unitFieldCreatedby) {
+            RetailCustomizationNetBind(this->m_characterComponent, this->m_unit->m_unitFieldCreatedby.m_guid, true);
+        }
+#endif
         data.m_model = this->m_worldModel;
         data.m_flags ^= (data.m_flags ^ (static_cast<uint32_t>(this->m_obj->m_guid == ClntObjMgrGetActivePlayer()) << 1)) & 0x2;
         data.m_model->m_refCount++;

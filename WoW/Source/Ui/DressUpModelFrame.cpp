@@ -25,6 +25,9 @@
 #include "WoW/Source/Ui/GameUI.h"
 #include <cstdlib>
 #include <cstring>
+#if defined(WOWDECOMP_RETAIL_MODELS)
+#include "WoW/Source/RetailCustomizationNet.h"
+#endif
 
 // STATIC: 0x00ACF54C
 const char* CGDressUpModelFrame::s_objectTypeName = "DressUpModel";
@@ -514,6 +517,10 @@ void CGDressUpModelFrame::SetModel(CM2Model* model) {
 
     if (player) {
         this->m_component = CCharacterComponent::AllocComponent();
+#if defined(WOWDECOMP_RETAIL_MODELS)
+        // Not in the original: the dressing room shows the player's stored Retail choices too.
+        RetailCustomizationNetBind(this->m_component, player->m_obj->m_guid.m_guid, true);
+#endif
         model->m_refCount++;
         ComponentData data;
         data.m_preferences.m_raceID = player->m_unit->m_unitFieldBytes0[0];
