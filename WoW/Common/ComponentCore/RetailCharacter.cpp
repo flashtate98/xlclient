@@ -409,24 +409,36 @@ bool RetailCustomizationChoices(const CCharacterComponent* character, RetailChoi
     choices.clear();
     uint32_t retailRace = 0;
     const uint32_t chrModel = RetailModelOf(character, retailRace);
-    if (!chrModel) return false;
+    if (!chrModel) {
+        Blizzard::Log::Printf(1, kLog, "Create: stock body, no Retail choices sent\n");
+        return false;
+    }
     std::vector<ResolvedOption> resolved;
     std::vector<uint32_t> taken;
     Resolve(character, chrModel, resolved, taken);
     for (const auto& option : resolved)
         if (!option.driven) choices.emplace_back(option.id, option.offered[option.index]);
+    std::string text;
+    for (const auto& choice : choices) text += " " + std::to_string(choice.first) + "=" + std::to_string(choice.second);
+    Blizzard::Log::Printf(1, kLog, "Create: sending%s\n", text.c_str());
     return true;
 }
 
 bool RetailCustomizationBind(const CCharacterComponent* character, uint64_t guid) {
     if (!character || !guid) return false;
     s_boundGuids[character] = guid;
-    if (s_storedChoices.count(guid)) return false;
+    const bool known = s_storedChoices.count(guid) != 0;
+    Blizzard::Log::Printf(1, kLog, "Bind %p to character %llu: %s\n", static_cast<const void*>(character),
+        static_cast<unsigned long long>(guid), known ? "choices known" : "choices not known");
+    if (known) return false;
     return s_askedGuids.insert(guid).second;
 }
 
 void RetailCustomizationStore(uint64_t guid, const RetailChoiceList& choices) {
     std::map<uint32_t, uint32_t> next(choices.begin(), choices.end());
+    std::string text;
+    for (const auto& choice : next) text += " " + std::to_string(choice.first) + "=" + std::to_string(choice.second);
+    Blizzard::Log::Printf(1, kLog, "Server choices for character %llu:%s\n", static_cast<unsigned long long>(guid), text.empty() ? " none" : text.c_str());
     const auto known = s_storedChoices.find(guid);
     if (known != s_storedChoices.end() && known->second == next) return;
     s_storedChoices[guid] = std::move(next);
