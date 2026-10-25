@@ -22,6 +22,7 @@
 #if defined(WOWDECOMP_RETAIL_MODELS)
 #include "WoW/Common/ComponentCore/RetailCharacter.h"
 #include "WoW/Source/RetailCustomizationNet.h"
+#include "Engine/Source/BlizzardCore/Source/System/Log/Log.h"
 #endif
 
 // STATIC: 0x00BD19B8
@@ -64,12 +65,22 @@ float CGBarberShop::GetMinCameraDistance() {
 // OFFSET: 0x0052E490
 const BarberShopStyleRec* CGBarberShop::GetCurrentStyle(int32_t type) {
     switch (type) {
+#if defined(WOWDECOMP_RETAIL_MODELS)
+        // Not in the original: a race whose BarberShopStyle rows miss the character's value has no current style.
+        case 0:
+            return CGBarberShop::m_currentHairStyle ? CGBarberShop::m_currentHairStyle->m_rec : nullptr;
+        case 2:
+            return CGBarberShop::m_currentFacialHair ? CGBarberShop::m_currentFacialHair->m_rec : nullptr;
+        case 3:
+            return CGBarberShop::m_currentSkinColor ? CGBarberShop::m_currentSkinColor->m_rec : nullptr;
+#else
         case 0:
             return CGBarberShop::m_currentHairStyle->m_rec;
         case 2:
             return CGBarberShop::m_currentFacialHair->m_rec;
         case 3:
             return CGBarberShop::m_currentSkinColor->m_rec;
+#endif
     }
 
     return nullptr;
@@ -414,6 +425,12 @@ bool CGBarberShop::IsCurrentStyle(int32_t type) {
         return true;
     }
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: no current style (missing BarberShopStyle row) counts as unchanged.
+    if ((type == 0 && !CGBarberShop::m_currentHairStyle) || (type == 2 && !CGBarberShop::m_currentFacialHair)) {
+        return true;
+    }
+#endif
     switch (type) {
         case 0:
             return player->m_player->m_playerBytes[2] == CGBarberShop::m_currentHairStyle->m_rec->m_data;
@@ -525,7 +542,7 @@ int32_t CGBarberShop::GetTotalCost() {
         cost += static_cast<int32_t>(value);
     }
 
-    if (!CGBarberShop::IsCurrentStyle(3)) {
+    if (CGBarberShop::m_currentSkinColor && !CGBarberShop::IsCurrentStyle(3)) {
         float value = baseCost * CGBarberShop::m_currentSkinColor->m_rec->m_costModifier;
         cost += static_cast<int32_t>(value);
     }
@@ -552,6 +569,18 @@ void CGBarberShop::ApplyAppearanceChange() {
         return;
     }
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: the server needs a BarberShopStyle row for the hair style and the facial hair; with
+    // one missing (a race whose rows stop short of the character's value) nothing can be sent.
+    if (!CGBarberShop::m_currentHairStyle || !CGBarberShop::m_currentFacialHair) {
+        Blizzard::Log::Printf(1, "Logs/RetailCharacter.log",
+            "Barber shop: no BarberShopStyle row for race %u sex %u %s %u; the visit cannot be saved\n",
+            static_cast<unsigned>(player->m_unit->m_unitFieldBytes0[0]), static_cast<unsigned>(player->m_player->m_playerBytes3[0]),
+            !CGBarberShop::m_currentHairStyle ? "hair style" : "facial hair",
+            static_cast<unsigned>(!CGBarberShop::m_currentHairStyle ? component->m_data.m_preferences.m_hairStyleId : component->m_data.m_preferences.m_facialHairId));
+        return;
+    }
+#endif
     if (player->m_player->m_playerBytes[3] == component->m_data.m_preferences.m_hairColorId && player->m_player->m_playerBytes[2] == CGBarberShop::m_currentHairStyle->m_rec->m_data && player->m_player->m_playerBytes2[0] == CGBarberShop::m_currentFacialHair->m_rec->m_data && (!CGBarberShop::m_currentSkinColor || player->m_player->m_playerBytes[0] == CGBarberShop::m_currentSkinColor->m_rec->m_data)
 #if defined(WOWDECOMP_RETAIL_MODELS)
         // Not in the original: a visit that only changes Retail rows is still a change.

@@ -55,6 +55,16 @@ static int32_t Script_GetBarberShopStyleInfo(lua_State* L) {
         cost = static_cast<int32_t>(value);
     } else {
         const BarberShopStyleRec* style = CGBarberShop::GetCurrentStyle(index);
+#if defined(WOWDECOMP_RETAIL_MODELS)
+        // Not in the original: no row for the character's value (a race missing BarberShopStyle rows).
+        if (!style) {
+            lua_pushstring(L, "");
+            lua_pushstring(L, "");
+            lua_pushinteger(L, 0);
+            lua_pushnumber(L, 1.0);
+            return 4;
+        }
+#endif
         lua_pushstring(L, style->m_displayName);
         lua_pushstring(L, style->m_description);
         float value = GetGameTableValue(0, ClntObjMgrGetActivePlayerObj()->m_unit->m_unitFieldLevel - 1, 0) * style->m_costModifier;
