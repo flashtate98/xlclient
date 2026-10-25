@@ -6042,6 +6042,15 @@ uint32_t CM2Model::ProcessEventCallbacks(uint32_t boneIndex, uint32_t sequenceIn
             continue;
         }
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+        // Not in the original: an event track may list fewer sequences than the model has, and a sequence
+        // kept in an external .anim file (flag 0x20 clear until it is loaded) still holds anim-relative
+        // offsets, not addresses. Retail models have both; reading either faults.
+        if (event->m_enabled.m_loopIndex == 0xFFFF &&
+            (sequenceIndex >= event->m_enabled.m_sequenceTimes.m_count || !(data->m_sequences[sequenceIndex].m_flags & 0x20))) {
+            continue;
+        }
+#endif
         M2Array<uint32_t>* times = &event->m_enabled.m_sequenceTimes[event->m_enabled.m_loopIndex != 0xFFFF ? 0 : sequenceIndex];
         uint32_t count = times->m_count;
 
