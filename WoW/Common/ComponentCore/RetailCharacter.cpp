@@ -339,6 +339,8 @@ struct ResolvedOption {
     uint32_t id = 0;
     std::string name;
     bool driven = false;            // by a 3.3.5 selector
+    bool implied = false;           // set from the other choices (Retail::Appearance::ClassImplied); no row
+    bool Row() const { return !driven && !implied; }
     std::vector<uint32_t> offered;
     uint32_t index = 0;             // into offered
 };
@@ -384,6 +386,23 @@ uint32_t Resolve(const CCharacterComponent* character, uint32_t chrModel, std::v
         }
         choices.push_back(option.offered[option.index]);
         resolved.push_back(std::move(option));
+    }
+    // Class-implied options follow the look: their Demon Hunter choice when any visible choice is a Demon
+    // Hunter one (horns, blindfold, tattoo), else their other choice. FlashWOW opens Demon Hunter choices
+    // to every class, so a class cannot decide it.
+    bool demonHunter = false;
+    for (size_t i = 0; i < resolved.size(); ++i)
+        if (!resolved[i].name.empty() && Retail::Appearance::DemonHunterOnly(choices[i])) demonHunter = true;
+    for (size_t i = 0; i < resolved.size(); ++i) {
+        ResolvedOption& option = resolved[i];
+        if (option.driven || !Retail::Appearance::ClassImplied(option.id)) continue;
+        option.implied = true;
+        for (uint32_t k = 0; k < option.offered.size(); ++k)
+            if (Retail::Appearance::DemonHunterOnly(option.offered[k]) == demonHunter) {
+                option.index = k;
+                choices[i] = option.offered[k];
+                break;
+            }
     }
     return chrModel;
 }
@@ -920,7 +939,7 @@ bool RetailCustomizationOptions(const CCharacterComponent* character, std::vecto
     std::vector<uint32_t> choices;
     Resolve(character, chrModel, resolved, choices);
     for (const auto& option : resolved)
-        if (!option.driven) options.push_back({option.name, option.index, static_cast<uint32_t>(option.offered.size())});
+        if (option.Row()) options.push_back({option.name, option.index, static_cast<uint32_t>(option.offered.size())});
     return true;
 }
 
@@ -939,7 +958,7 @@ bool RetailCustomizationCycle(CCharacterComponent* character, uint32_t index, in
     uint32_t extra = 0;
     bool changed = false;
     for (const auto& option : resolved) {
-        if (option.driven) continue;
+        if (!option.Row()) continue;
         const uint32_t count = static_cast<uint32_t>(option.offered.size());
         if (randomize) {
             s_extraChoices[character][option.id] = option.offered[static_cast<uint32_t>(std::rand()) % count];
@@ -1003,7 +1022,7 @@ bool RetailCustomizationChoices(const CCharacterComponent* character, RetailChoi
     std::vector<uint32_t> taken;
     Resolve(character, chrModel, resolved, taken);
     for (const auto& option : resolved)
-        if (!option.driven) choices.emplace_back(option.id, option.offered[option.index]);
+        if (option.Row()) choices.emplace_back(option.id, option.offered[option.index]);
     return true;
 }
 

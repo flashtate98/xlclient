@@ -147,6 +147,28 @@ static bool IsEyeColor(const Index& x, uint32_t choiceId) {
     return option && x.option->Text(*option, "Name_lang") == "Eye Color";
 }
 
+bool DemonHunterOnly(uint32_t choiceId) {
+    Index& x = Ready();
+    return x.ready && DemonHunterOnly(x, choiceId);
+}
+
+bool ClassImplied(uint32_t optionId) {
+    Index& x = Ready();
+    if (!x.ready) return false;
+    const Row* option = x.option->Find(optionId);
+    if (!option || !x.option->Text(*option, "Name_lang").empty()) return false;
+    const auto list = x.choicesByOption.find(optionId);
+    if (list == x.choicesByOption.end() || list->second.size() < 2) return false;
+    for (const Row* choice : list->second) {
+        const uint32_t id = x.choice->Value(*choice, "ChrCustomizationReqID");
+        const Row* requirement = id && x.requirement ? x.requirement->Find(id) : nullptr;
+        if (!requirement || x.requirement->Value(*requirement, "ReqType") != 3) return false;
+        const uint32_t classes = x.requirement->Value(*requirement, "ClassMask");
+        if (!classes || classes == 0xFFFFFFFFu) return false;
+    }
+    return true;
+}
+
 uint32_t ChrModelFor(uint32_t retailRace, uint32_t sex) {
     Index& x = Ready();
     if (!x.ready) return 0;
@@ -339,6 +361,7 @@ void TextureLayers(uint32_t chrModel, const std::vector<uint32_t>& choices, std:
     const uint32_t layout = LayoutFor(chrModel);
     const auto layoutLayers = x.layersByLayout.find(layout);
     if (layoutLayers == x.layersByLayout.end()) return;
+    std::vector<uint32_t> painted;    // targets painted so far, by any choice: a fallback never paints one twice
     for (const uint32_t id : choices) {
         const Row* choice = x.choice->Find(id);
         const Row* option = choice ? x.option->Find(x.choice->Value(*choice, "ChrCustomizationOptionID")) : nullptr;
@@ -362,8 +385,10 @@ void TextureLayers(uint32_t chrModel, const std::vector<uint32_t>& choices, std:
         // takes its first such element. Everything else waiting (faces, tattoo colours, the hidden
         // fel-eye effect options) is skipped as before.
         const Row* ownOption = x.option->Find(x.choice->Value(*choice, "ChrCustomizationOptionID"));
-        const bool impliesFelEyes = DemonHunterOnly(x, id) && ownOption && !x.option->Text(*ownOption, "Name_lang").empty();
-        std::vector<uint32_t> painted;
+        // The Demon Hunter choice of a class-implied option (set only when the look has a visible Demon Hunter
+        // choice) is treated the same way: the Void Elf female's blindfold texture lives there.
+        const bool impliesFelEyes = DemonHunterOnly(x, id) && ownOption &&
+            (!x.option->Text(*ownOption, "Name_lang").empty() || ClassImplied(ownOption->id));
         std::vector<std::pair<uint32_t, const Row*>> waiting;    // target, first material for it
         for (const Row* element : elements->second) {
             const uint32_t materialId = x.element->Value(*element, "ChrCustomizationMaterialID");
@@ -381,7 +406,10 @@ void TextureLayers(uint32_t chrModel, const std::vector<uint32_t>& choices, std:
             paint(material);
         }
         for (const auto& w : waiting)
-            if (std::find(painted.begin(), painted.end(), w.first) == painted.end()) paint(w.second);
+            if (std::find(painted.begin(), painted.end(), w.first) == painted.end()) {
+                painted.push_back(w.first);
+                paint(w.second);
+            }
     }
     std::stable_sort(layers.begin(), layers.end(), [](const TextureLayer& a, const TextureLayer& b) { return a.layer < b.layer; });
 }

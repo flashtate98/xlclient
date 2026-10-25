@@ -30,6 +30,13 @@ namespace Retail::Appearance
     // (ChrCustomizationReqChoice). True when the choice asks for none.
     bool RequirementsMet(uint32_t choiceId, const std::vector<uint32_t>& selected);
 
+    // Class-implied options: unnamed options whose choices are each offered to a set of classes, never
+    // shown in Retail's creator but set from the class (Void Elf's has one choice for Demon Hunters,
+    // carrying the blindfold texture of the female and the fel eye area, and one for everyone else).
+    // DemonHunterOnly: a choice offered to Demon Hunters (class 12) alone.
+    bool ClassImplied(uint32_t optionId);
+    bool DemonHunterOnly(uint32_t choiceId);
+
     // One choice per option of the model: the first that a new character of the class may take.
     void DefaultChoices(uint32_t chrModel, uint32_t classId, std::vector<uint32_t>& choices);
 
