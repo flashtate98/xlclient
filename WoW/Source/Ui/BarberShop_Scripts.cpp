@@ -206,7 +206,23 @@ static int32_t Script_IsRetailCustomizationChanged(lua_State* L) {
     return 1;
 }
 
+// SetRetailHelmetFit(scale, x, y, z) -> "race;sex;scale;x;y;z". Not tied to the barber shop: moves and scales
+// the helmet on your own character right away (x forward, y left, z up, in yards), for tuning
+// Data\Retail\helmets.csv by eye. Try /run print(SetRetailHelmetFit(1.25, 0.1, 0, 0.3)).
+static int32_t Script_SetRetailHelmetFit(lua_State* L) {
+    CGPlayer_C* player = ClntObjMgrGetActivePlayerObj();
+    if (!player || !player->m_characterComponent || !lua_isnumber(L, 1)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    const std::string row = RetailCharacterTuneHelmet(player->m_characterComponent, static_cast<float>(lua_tonumber(L, 1)),
+        static_cast<float>(luaL_optnumber(L, 2, 0)), static_cast<float>(luaL_optnumber(L, 3, 0)), static_cast<float>(luaL_optnumber(L, 4, 0)));
+    lua_pushstring(L, row.c_str());
+    return 1;
+}
+
 static FrameScript_Method s_retailScriptFunctions[] = {
+    { "SetRetailHelmetFit", &Script_SetRetailHelmetFit },
     { "GetRetailCustomizationCount", &Script_GetRetailCustomizationCount },
     { "GetRetailCustomizationInfo", &Script_GetRetailCustomizationInfo },
     { "CycleRetailCustomization", &Script_CycleRetailCustomization },

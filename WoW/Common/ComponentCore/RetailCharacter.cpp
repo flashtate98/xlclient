@@ -1201,7 +1201,7 @@ struct HelmetTuning {
     float offset[3] = {0, 0, 0};
 };
 
-const HelmetTuning* HelmetTuningFor(uint32_t race, uint32_t sex) {
+std::map<uint32_t, HelmetTuning>& HelmetTunings() {
     static std::map<uint32_t, HelmetTuning> tunings;
     static std::once_flag once;
     std::call_once(once, [] {
@@ -1220,8 +1220,29 @@ const HelmetTuning* HelmetTuningFor(uint32_t race, uint32_t sex) {
         }
         if (rows) Blizzard::Log::Printf(1, kLog, "%s: %u helmet tunings\n", path.string().c_str(), static_cast<unsigned>(rows));
     });
+    return tunings;
+}
+
+const HelmetTuning* HelmetTuningFor(uint32_t race, uint32_t sex) {
+    auto& tunings = HelmetTunings();
     const auto found = tunings.find((race << 1) | (sex & 1));
     return found == tunings.end() ? nullptr : &found->second;
+}
+
+std::string RetailCharacterTuneHelmet(CCharacterComponent* character, float scale, float x, float y, float z) {
+    if (!character) return std::string();
+    const auto& prefs = character->m_data.m_preferences;
+    HelmetTuning& tuning = HelmetTunings()[(prefs.m_raceID << 1) | (prefs.m_sexID & 1)];
+    tuning.scale = scale;
+    tuning.offset[0] = x;
+    tuning.offset[1] = y;
+    tuning.offset[2] = z;
+    RetailCharacterFitHelmet(character);
+    char row[96];
+    std::snprintf(row, sizeof(row), "%u;%u;%.3f;%.3f;%.3f;%.3f", static_cast<unsigned>(prefs.m_raceID),
+        static_cast<unsigned>(prefs.m_sexID), scale, x, y, z);
+    Blizzard::Log::Printf(1, kLog, "Helmet tuning set from the game: %s (add it to helmets.csv to keep it)\n", row);
+    return row;
 }
 
 // The stock client race (1-11) whose helmets a race wears: itself, or for a new race the stock race whose

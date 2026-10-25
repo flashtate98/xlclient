@@ -45,6 +45,10 @@ void RetailCharacterBody(CCharacterComponent* character);
 // pass; does nothing for stock bodies or Retail helmets.
 void RetailCharacterFitHelmet(CCharacterComponent* character);
 
+// Live helmet tuning: replaces the helmets.csv row for the character's race and sex for this session and
+// refits its helmet now. Returns the row ("race;sex;scale;x;y;z") to paste into helmets.csv to keep it.
+std::string RetailCharacterTuneHelmet(CCharacterComponent* character, float scale, float x, float y, float z);
+
 // The Retail options of a character that the 3.3.5 selectors do not drive (Eyebrows, Ears, Eye Color,
 // ...), in OrderIndex order, with the choices its class and other choices allow. False for stock bodies.
 struct RetailCustomizationOption {
