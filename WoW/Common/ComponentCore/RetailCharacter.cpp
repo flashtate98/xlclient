@@ -1215,23 +1215,27 @@ const HelmetTuning* HelmetTuningFor(uint32_t race, uint32_t sex) {
     return found == tunings.end() ? nullptr : &found->second;
 }
 
+// The stock client race (1-11) whose helmets a race wears: itself, or for a new race the stock race whose
+// ChrRaces client prefix it shares (Void Elf "Be": Blood Elf helmet models, Blood Elf helmet hides). 0 if none.
+uint32_t StockRaceFor(uint32_t raceId) {
+    static const std::pair<const char*, uint32_t> kByPrefix[] = {{"Hu", 1}, {"Or", 2}, {"Dw", 3}, {"Ni", 4}, {"Sc", 5},
+        {"Ta", 6}, {"Gn", 7}, {"Tr", 8}, {"Be", 10}, {"Dr", 11}};
+    if (raceId >= 1 && raceId <= 11 && raceId != 9) return raceId;
+    if (const ChrRacesRec* rec = g_chrRacesDB.GetRecord(raceId); rec && rec->m_clientPrefix)
+        for (const auto& entry : kByPrefix)
+            if (!_stricmp(rec->m_clientPrefix, entry.first)) return entry.second;
+    return 0;
+}
+
 // The head and helmet socket of the 3.3.5 body a client race had (Character\<Race>\<Sex>\<Race><Sex>.m2),
-// read once from the game's own archives. Null when the race has none or it cannot be read.
+// read once from the game's own archives; a new race uses its helmet race's body (StockRaceFor). Null when
+// there is none or it cannot be read.
 const Retail::HelmetAnchor* StockAnchor(uint32_t raceId, uint32_t sexId) {
     static const char* const kStock[] = {nullptr, "Human", "Orc", "Dwarf", "NightElf", "Scourge", "Tauren", "Gnome",
         "Troll", nullptr, "BloodElf", "Draenei"};
-    // A new race wears the helmets of the race whose ChrRaces client prefix it shares (Void Elf "Be": Blood Elf
-    // helmet models), so that race's 3.3.5 body is its donor too.
-    static const std::pair<const char*, const char*> kByPrefix[] = {{"Hu", "Human"}, {"Or", "Orc"}, {"Dw", "Dwarf"},
-        {"Ni", "NightElf"}, {"Sc", "Scourge"}, {"Ta", "Tauren"}, {"Gn", "Gnome"}, {"Tr", "Troll"}, {"Be", "BloodElf"},
-        {"Dr", "Draenei"}};
-    if (sexId > 1) return nullptr;
-    const char* stock = raceId < sizeof(kStock) / sizeof(kStock[0]) ? kStock[raceId] : nullptr;
-    if (const ChrRacesRec* rec = g_chrRacesDB.GetRecord(raceId); rec && rec->m_clientPrefix)
-        for (const auto& entry : kByPrefix)
-            if (!_stricmp(rec->m_clientPrefix, entry.first)) stock = entry.second;
-    if (!stock) return nullptr;
-    const std::string race = stock, sex = sexId ? "Female" : "Male";
+    const uint32_t stockRace = StockRaceFor(raceId);
+    if (sexId > 1 || !stockRace || !kStock[stockRace]) return nullptr;
+    const std::string race = kStock[stockRace], sex = sexId ? "Female" : "Male";
     const std::string donorPath = "Character\\" + race + "\\" + sex + "\\" + race + sex + ".m2";
 
     struct Donor { bool tried = false, valid = false; Retail::HelmetAnchor anchor; };
@@ -1374,7 +1378,9 @@ void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
     const auto* visibility = g_helmetGeosetVisDataDB.GetRecord(display.m_helmetGeosetVisID[prefs.m_sexID]);
     if (!visibility) return;
     static const uint32_t kGroups[7] = {0, 1, 2, 3, 7, 16, 17};
-    const uint32_t raceBit = uint32_t{1} << prefs.m_raceID;
+    // A new race takes the hides of the race whose helmets it wears (the 3.3.5 masks stop at Draenei).
+    const uint32_t hideRace = StockRaceFor(prefs.m_raceID) ? StockRaceFor(prefs.m_raceID) : prefs.m_raceID;
+    const uint32_t raceBit = uint32_t{1} << hideRace;
     const auto hides = [&](uint32_t slot) { return (static_cast<uint32_t>(visibility->m_hideGeoset[slot]) & raceBit) != 0; };
     // Facial hair goes only under helmets that hide all of it (full-face helms). Hoods and half helms
     // that hid one piece of the small 3.3.5 facial hair would take a whole Retail mustache or sideburns.

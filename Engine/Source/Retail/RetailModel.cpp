@@ -954,6 +954,67 @@ bool PrepareModel(const std::vector<uint8_t>& bytes, std::vector<uint8_t>& prepa
     return true;
 }
 
+bool InheritEvents(std::vector<uint8_t>& b, const std::vector<uint8_t>& parentModel,
+    const std::vector<uint8_t>& parentSkeleton, uint32_t& filled, std::string& error) {
+    filled = 0;
+    error.clear();
+    if (!Array(b, 0x1c, 64) || !Array(b, 0x100, 36)) return Fail(error, "Invalid prepared sequence or event array");
+    const uint32_t sequenceCount = U32(b, 0x1c);
+    Chunks parent;
+    SkeletonChunks parentChunks;
+    if (!Parse(parentModel, parent, error) || !ReadSkeletonChunks(parentSkeleton, parentChunks, error)) return false;
+    const auto& pb = parent.body;
+    const auto sks = parentChunks.find(MergeSKS);
+    if (sks == parentChunks.end() || !Array(sks->second, 8, 64) || !Array(pb, 0x100, 36))
+        return Fail(error, "Parent model has no sequences or events");
+    const auto& ps = sks->second;
+    std::map<SequenceKey, uint32_t> parentIndex;
+    for (uint32_t i = 0; i < U32(ps, 8); ++i) {
+        const size_t q = U32(ps, 12) + size_t(i) * 64;
+        parentIndex.emplace(SequenceKey{U16(ps, q), U16(ps, q + 2)}, i);
+    }
+    std::map<uint32_t, size_t> parentEvents;    // identifier -> event
+    for (uint32_t i = 0; i < U32(pb, 0x100); ++i) parentEvents.emplace(U32(pb, U32(pb, 0x104) + size_t(i) * 36), U32(pb, 0x104) + size_t(i) * 36);
+
+    for (uint32_t e = 0; e < U32(b, 0x100); ++e) {
+        const size_t ev = U32(b, 0x104) + size_t(e) * 36;
+        if (U16(b, ev + 26) != 0xffff) continue;                  // global-sequence events have one timeline
+        const uint32_t have = U32(b, ev + 28);
+        if (have >= sequenceCount || !Array(b, ev + 28, 8)) continue;
+        const auto donor = parentEvents.find(U32(b, ev));
+        const bool usable = donor != parentEvents.end() && U16(pb, donor->second + 26) == 0xffff && Array(pb, donor->second + 28, 8);
+        std::vector<uint8_t> table(size_t(sequenceCount) * 8, 0);
+        std::copy(b.begin() + U32(b, ev + 32), b.begin() + U32(b, ev + 32) + size_t(have) * 8, table.begin());
+        std::vector<std::pair<uint32_t, std::vector<uint8_t>>> resident;    // sequence, its times
+        for (uint32_t i = have; usable && i < sequenceCount; ++i) {
+            const size_t q = U32(b, 0x20) + size_t(i) * 64;
+            const auto found = parentIndex.find(SequenceKey{U16(b, q), U16(b, q + 2)});
+            if (found == parentIndex.end() || found->second >= U32(pb, donor->second + 28)) continue;
+            const size_t entry = U32(pb, donor->second + 32) + size_t(found->second) * 8;
+            const uint32_t count = U32(pb, entry), offset = U32(pb, entry + 4);
+            if (!count) continue;
+            if (U32(b, q + 12) & 0x20) {
+                // Resident in the parent too: its times live in the parent model, so copy them.
+                if (!Range(pb, offset, size_t(count) * 4)) continue;
+                resident.emplace_back(i, std::vector<uint8_t>(pb.begin() + offset, pb.begin() + offset + size_t(count) * 4));
+                Put(table, size_t(i) * 8, count);
+            } else {
+                // Kept in the parent's .anim file, which the merged skeleton also loads for this sequence:
+                // the offset stays relative to that file and is relocated when it is loaded.
+                Put(table, size_t(i) * 8, count);
+                Put(table, size_t(i) * 8 + 4, offset);
+            }
+            ++filled;
+        }
+        for (auto& times : resident) Put(table, size_t(times.first) * 8 + 4, uint32_t(AppendAligned(b, times.second)));
+        const size_t at = AppendAligned(b, table);
+        Put(b, ev + 28, sequenceCount);
+        Put(b, ev + 32, uint32_t(at));
+        if (b.size() > 128 * 1024 * 1024) return Fail(error, "Prepared model exceeds 128 MiB");
+    }
+    return true;
+}
+
 bool ValidateSkin(const std::vector<uint8_t>& b, const std::vector<uint8_t>& m, std::string& error) {
     if (!Range(b, 0, 48) || U32(b, 0) != 0x4e494b53 || !Range(m, 0, 0x130)) return Fail(error, "Invalid SKIN header");
     for (const auto& f : {std::pair<size_t, size_t>{4, 2}, {12, 2}, {20, 4}, {28, 48}, {36, 24}})

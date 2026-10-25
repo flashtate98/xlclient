@@ -58,6 +58,13 @@ bool MergeSkeleton(const std::vector<uint8_t>& child, const std::vector<uint8_t>
     std::vector<uint8_t>& merged, std::string& error);
 bool PrepareModel(const std::vector<uint8_t>& bytes, std::vector<uint8_t>& prepared,
     ModelFiles& files, std::string& error, const std::vector<uint8_t>* skeleton = nullptr);
+// A skeleton that inherits sequences from a parent (Void Elf from Blood Elf) gets them appended after
+// its own, but the model's event tracks (sheathe, footsteps, spell casts) list only the child's own
+// sequences. Extend each event track to every sequence, taking the parent model's times for the
+// inherited ones (matched by event identifier and sequence id/variation). `filled` counts the timelines
+// added. Call on PrepareModel's output.
+bool InheritEvents(std::vector<uint8_t>& prepared, const std::vector<uint8_t>& parentModel,
+    const std::vector<uint8_t>& parentSkeleton, uint32_t& filled, std::string& error);
 bool ValidateSkin(const std::vector<uint8_t>& bytes, const std::vector<uint8_t>& model,
     std::string& error);
 bool PrepareSkin(std::vector<uint8_t>& bytes, const std::vector<uint8_t>& model,

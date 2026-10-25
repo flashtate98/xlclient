@@ -333,6 +333,48 @@ struct LocalSource::Impl {
         return Fail(error, ref.id ? "FileDataID " + std::to_string(ref.id) + ": " + last : last);
     }
 
+    // The parent FileDataID of a skeleton (its SKPD chunk), 0 for none.
+    static uint32_t SkeletonParent(const std::vector<uint8_t>& bytes) {
+        const auto word = [&](size_t at) {
+            return uint32_t(bytes[at]) | (uint32_t(bytes[at + 1]) << 8) | (uint32_t(bytes[at + 2]) << 16) | (uint32_t(bytes[at + 3]) << 24);
+        };
+        for (size_t p = 0; p + 8 <= bytes.size();) {
+            const uint32_t tag = word(p), size = word(p + 4);
+            p += 8;
+            if (size > bytes.size() - p) return 0;
+            if (tag == 0x44504b53 && size >= 12) return word(p + 8);
+            p += size;
+        }
+        return 0;
+    }
+
+    // Called without the mutex. Gives a model whose skeleton has a parent the parent model's event times for
+    // the sequences it inherits (Retail::InheritEvents). The parent model is the parent skeleton's file with
+    // .m2 for .skel. Logged once per model; nothing changes when anything is missing.
+    void InheritParentEvents(const std::string& key, uint32_t skeletonId, std::vector<uint8_t>& prepared) {
+        Reference skel;
+        skel.id = skeletonId;
+        std::vector<uint8_t> raw, parentSkeleton, parentModel;
+        std::string error;
+        if (!Fetch(skel, raw, error)) return;
+        const uint32_t parent = SkeletonParent(raw);
+        if (!parent) return;
+        Reference up;
+        up.id = parent;
+        const auto paths = CandidatesLocked(up);
+        std::vector<uint32_t> chain;
+        uint32_t filled = 0;
+        std::string modelPath;
+        if (!paths.empty() && paths.front().size() > 5) modelPath = paths.front().substr(0, paths.front().size() - 5) + ".m2";
+        Reference parentRef;
+        parentRef.path = modelPath;
+        const bool ok = !modelPath.empty() && LoadSkeleton(up, parentSkeleton, error, chain) &&
+            Fetch(parentRef, parentModel, error) && InheritEvents(prepared, parentModel, parentSkeleton, filled, error);
+        if (ok) Blizzard::Log::Printf(1, kLog, "%s: %u inherited event timelines from %s\n", key.c_str(), filled, modelPath.c_str());
+        else Blizzard::Log::Printf(1, kLog, "%s: inherited events not added (%s): %s\n", key.c_str(),
+            modelPath.empty() ? "parent skeleton has no path" : modelPath.c_str(), error.c_str());
+    }
+
     // Called without the mutex. Follows SKPD parents (by FileDataID) and merges them in.
     bool LoadSkeleton(const Reference& ref, std::vector<uint8_t>& bytes, std::string& error, std::vector<uint32_t>& chain) {
         if (chain.size() >= 8 || (ref.id && std::find(chain.begin(), chain.end(), ref.id) != chain.end()))
@@ -475,6 +517,9 @@ bool LocalSource::Read(const char* name, std::vector<uint8_t>& bytes, std::strin
             success = s.LoadSkeleton(skel, skeleton, error, chain);
         }
         success = success && PrepareModel(bytes, model->bytes, model->files, error, skeleton.empty() ? nullptr : &skeleton);
+        // A skeleton with a parent (Void Elf on Blood Elf) inherits sequences whose events (sheathe, footsteps)
+        // only the parent model lists; borrow them, or weapons never move to their sheaths.
+        if (success && inspected.skeleton) s.InheritParentEvents(key, inspected.skeleton, model->bytes);
 
         std::map<std::string, Reference> pending;
         const bool normalPath = !IsVirtualPath(key.c_str());
