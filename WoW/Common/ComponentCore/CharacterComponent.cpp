@@ -2630,6 +2630,11 @@ bool CCharacterComponent::SetNextFacialFeature(COMPONENT_CONTEXT context) {
 
     if (!found) {
         int32_t count = CCharacterComponent::s_characterFacialHairStylesList[this->m_data.m_preferences.m_raceID * 2 + this->m_data.m_preferences.m_sexID];
+#if defined(WOWDECOMP_RETAIL_MODELS)
+        // Not in the original: a race with no CharacterFacialHairStyles rows (Goblin female) cycles the choices
+        // of the Retail option the selector drives.
+        if (count <= 0) count = static_cast<int32_t>(RetailCharacterFacialCount(this));
+#endif
         int32_t facialHairID = this->m_data.m_preferences.m_facialHairId + 1;
         this->SetBeardStyle(facialHairID >= count ? 0 : facialHairID, true, nullptr);
 
@@ -2700,6 +2705,12 @@ bool CCharacterComponent::SetPrevFacialFeature(COMPONENT_CONTEXT context) {
 
     if (!found) {
         uint32_t count = CCharacterComponent::s_characterFacialHairStylesList[this->m_data.m_preferences.m_raceID * 2 + this->m_data.m_preferences.m_sexID];
+#if defined(WOWDECOMP_RETAIL_MODELS)
+        // Not in the original: as above. With no count at all, stepping back from 0 gave 255, a value no
+        // BarberShopStyle row has, so the barber could not save.
+        if (!count) count = RetailCharacterFacialCount(this);
+        if (!count) count = 1;
+#endif
         int32_t facialHairID = this->m_data.m_preferences.m_facialHairId - 1;
         this->SetBeardStyle(facialHairID >= 0 ? facialHairID : count - 1, true, nullptr);
 

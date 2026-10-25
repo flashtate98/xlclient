@@ -340,6 +340,7 @@ struct ResolvedOption {
     std::string name;
     bool driven = false;            // by a 3.3.5 selector
     bool implied = false;           // set from the other choices (Retail::Appearance::ClassImplied); no row
+    int32_t stock = -1;             // the Stock selector that drives it, when driven
     bool Row() const { return !driven && !implied; }
     std::vector<uint32_t> offered;
     uint32_t index = 0;             // into offered
@@ -372,6 +373,7 @@ uint32_t Resolve(const CCharacterComponent* character, uint32_t chrModel, std::v
         option.id = options[i].id;
         option.name = options[i].name;
         option.driven = driven[i] >= 0;
+        option.stock = driven[i];
         for (const uint32_t id : options[i].choices)
             if (Retail::Appearance::RequirementsMet(id, choices)) option.offered.push_back(id);
         if (option.offered.empty()) option.offered = options[i].choices;
@@ -417,6 +419,20 @@ uint32_t RetailModelOf(const CCharacterComponent* character, uint32_t& retailRac
     if (race == map.end()) return 0;
     retailRace = race->second;
     return Retail::Appearance::ChrModelFor(race->second, prefs.m_sexID);
+}
+
+// How many values the facial hair selector has on a Retail body: the choices of the option it drives
+// (Goblin female Earrings), 0 for stock bodies or when it drives none.
+uint32_t RetailCharacterFacialCount(const CCharacterComponent* character) {
+    uint32_t retailRace = 0;
+    const uint32_t chrModel = RetailModelOf(character, retailRace);
+    if (!chrModel) return 0;
+    std::vector<ResolvedOption> resolved;
+    std::vector<uint32_t> choices;
+    Resolve(character, chrModel, resolved, choices);
+    for (const auto& option : resolved)
+        if (option.stock == static_cast<int32_t>(Stock::Facial)) return static_cast<uint32_t>(option.offered.size());
+    return 0;
 }
 
 // The Retail look of a character with a Retail body, or null for stock bodies and unmapped races.
