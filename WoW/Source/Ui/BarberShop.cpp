@@ -121,7 +121,14 @@ void CGBarberShop::Reset() {
 
     HASHKEY_NONE key;
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: the stock loop walks the race's styles until one matches the character, and spins
+    // forever when none does (a race with fewer BarberShopStyle rows than the character's value, as new races
+    // have). One lap is enough to find it.
+    for (uint32_t lap = 0; CGBarberShop::m_currentHairStyle && lap < 256 && player->m_player->m_playerBytes[2] != CGBarberShop::m_currentHairStyle->m_rec->m_data; ++lap) {
+#else
     while (player->m_player->m_playerBytes[2] != CGBarberShop::m_currentHairStyle->m_rec->m_data) {
+#endif
         STYLEREC* style = CGBarberShop::m_currentHairStyle;
         USEABLESTYLE* useable = CGBarberShop::m_useableStyles.Ptr(style->m_rec->m_type, key);
         STYLEREC* next = style->Next();
@@ -133,7 +140,14 @@ void CGBarberShop::Reset() {
         CGBarberShop::m_currentHairStyle = next;
     }
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: the stock loop walks the race's styles until one matches the character, and spins
+    // forever when none does (a race with fewer BarberShopStyle rows than the character's value, as new races
+    // have). One lap is enough to find it.
+    for (uint32_t lap = 0; CGBarberShop::m_currentFacialHair && lap < 256 && player->m_player->m_playerBytes2[0] != CGBarberShop::m_currentFacialHair->m_rec->m_data; ++lap) {
+#else
     while (player->m_player->m_playerBytes2[0] != CGBarberShop::m_currentFacialHair->m_rec->m_data) {
+#endif
         STYLEREC* style = CGBarberShop::m_currentFacialHair;
         USEABLESTYLE* useable = CGBarberShop::m_useableStyles.Ptr(style->m_rec->m_type, key);
         STYLEREC* next = style->Next();
