@@ -1289,7 +1289,29 @@ void RetailCharacterFitHelmet(CCharacterComponent* character) {
 
     const auto& prefs = character->m_data.m_preferences;
     const Retail::HelmetAnchor* donorAnchor = StockAnchor(prefs.m_raceID, prefs.m_sexID);
-    if (!donorAnchor) return;
+    if (!donorAnchor) {
+        // A race with no 3.3.5 body to measure against (Pandaren, client prefix "Pa"): its helmets keep the
+        // Retail socket, moved and scaled by hand from Data\Retail\helmets.csv when it has a row.
+        const HelmetTuning* tuning = HelmetTuningFor(prefs.m_raceID, prefs.m_sexID);
+        if (!tuning) return;
+        const float scale = tuning->scale > 0 ? tuning->scale : 1.0f;
+        C44Matrix& local = helmet->m_worldTransform;
+        if ((helmet->m_fFlags & 0x8000) && local.a0 == scale && local.d0 == tuning->offset[0] && local.d1 == tuning->offset[1] &&
+            local.d2 == tuning->offset[2]) return;
+        local.Identity();
+        local.a0 = scale;
+        local.b1 = scale;
+        local.c2 = scale;
+        local.d0 = tuning->offset[0];
+        local.d1 = tuning->offset[1];
+        local.d2 = tuning->offset[2];
+        helmet->m_fFlags |= 0x8000;
+        static std::set<std::string> logged;
+        if (logged.insert(std::string(body->m_shared->m_fileName)).second)
+            Blizzard::Log::Printf(1, kLog, "Helmet fit on %s: no 3.3.5 body for race %u; helmets.csv scale %.3f, offset %.3f %.3f %.3f\n",
+                body->m_shared->m_fileName, static_cast<unsigned>(prefs.m_raceID), scale, tuning->offset[0], tuning->offset[1], tuning->offset[2]);
+        return;
+    }
     struct { const Retail::HelmetAnchor& anchor; } donor{*donorAnchor};
 
     const auto& pivot = data->m_bones[head].m_pivot;
