@@ -1398,6 +1398,9 @@ void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
     uint32_t retailRace = 0;
     if (hides(0) && RetailModelOf(character, retailRace) && (retailRace == 6 || retailRace == 29))
         model->SetGeometryVisible(201, 299, 0);
+    // The Lightforged forehead Rune (group 25) is a glowing mesh standing off the brow; 3.3.5 hats, made for
+    // the old heads, do not cover it, so it shines through their crowns. It goes with the hair.
+    if (hides(0) && retailRace == 30) model->SetGeometryVisible(2501, 2599, 0);
 }
 
 #endif
