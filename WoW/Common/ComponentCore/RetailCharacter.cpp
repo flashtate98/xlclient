@@ -1460,8 +1460,11 @@ void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
     // Facial hair goes only under helmets that hide all of it (full-face helms). Hoods and half helms
     // that hid one piece of the small 3.3.5 facial hair would take a whole Retail mustache or sideburns.
     const bool wholeFace = hides(1) && hides(2) && hides(3);
+    uint32_t retailRace = 0;
+    RetailModelOf(character, retailRace);
     for (uint32_t slot = 0; slot < 7; ++slot) {
         if (!hides(slot) || (slot >= 1 && slot <= 3 && !wholeFace)) continue;
+        if (slot == 2 && retailRace == 35) continue;    // Vulpera ears, below
         const uint32_t group = kGroups[slot];
         model->SetGeometryVisible(group ? group * 100 : 1, group * 100 + 99, 0);
     }
@@ -1473,12 +1476,15 @@ void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
     if (hides(4)) model->SetGeometryVisible(3501, 3599, 0);
     // Some races keep hair, not facial hair, in group 2: the Tauren long Hair and the Void Elf Tentacles,
     // which hang from the scalp. They go with the hair rather than waiting for a full-face helmet.
-    uint32_t retailRace = 0;
-    if (hides(0) && RetailModelOf(character, retailRace) && (retailRace == 6 || retailRace == 29))
+    if (hides(0) && (retailRace == 6 || retailRace == 29))
         model->SetGeometryVisible(201, 299, 0);
     // The Lightforged forehead Rune (group 25) is a glowing mesh standing off the brow; 3.3.5 hats, made for
     // the old heads, do not cover it, so it shines through their crowns. It goes with the hair.
     if (hides(0) && retailRace == 30) model->SetGeometryVisible(2501, 2599, 0);
+    // The Vulpera Ears (group 2) are the ears, not facial hair: they go with the 3.3.5 ears slot only, full-face
+    // helmets included, so each helmet's HelmetGeosetVisData ears bit decides whether they stick out.
+    if (hides(4) && retailRace == 35)
+        model->SetGeometryVisible(201, 299, 0);
     // The Pandaren Eyebrows (group 34) are tufts standing off the brow, above the head's front; hat brims
     // and helmet rims cut through them, so they go with the hair.
     if (hides(0) && retailRace >= 24 && retailRace <= 26) model->SetGeometryVisible(3401, 3499, 0);
