@@ -320,6 +320,21 @@ bool ComposeTextures(uint32_t chrModel, const std::vector<Appearance::TextureLay
             ComposeStats* stats; Clock::time_point start;
             ~PaintTimer() { if (stats) stats->paint += std::chrono::duration<double, std::milli>(Clock::now() - start).count(); }
         } paintTimer{stats, start};
+        // Glow masks. Some blend-mode-9 skin layers (Nightborne tattoos and Luminous Hands) carry one flat colour
+        // and a faint alpha (at most 17 or 39 of 255): an emissive mask Retail's skin shader lights up. The 3.3.5
+        // renderer has no emissive skin, so painted as ordinary transparency they barely showed. Such a layer is
+        // baked as glow instead: its alpha stretched to full strength, its colour lifted toward white. Layers
+        // with ordinary alpha (Orc war paint, Tauren and Troll paint) are painted as before.
+        if (layer.blendMode == 9 && layer.textureType == 1 && !image.rgba.empty()) {
+            uint8_t peak = 0;
+            for (size_t i = 3; i < image.rgba.size(); i += 4) peak = std::max(peak, image.rgba[i]);
+            if (peak && peak <= 64) {
+                for (size_t i = 0; i < image.rgba.size(); i += 4) {
+                    for (size_t c = 0; c < 3; ++c) image.rgba[i + c] = uint8_t(image.rgba[i + c] + (255 - image.rgba[i + c]) * 11 / 20);
+                    image.rgba[i + 3] = uint8_t(std::min(255u, uint32_t(image.rgba[i + 3]) * 255u / peak));
+                }
+            }
+        }
         ComposedTexture& target = byType[layer.textureType];
         target.textureType = layer.textureType;
         if (!target.image.width) {
