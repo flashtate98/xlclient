@@ -1372,6 +1372,13 @@ void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
         model->SetGeometryVisible(shoe ? 2002 : 2001, shoe ? 2002 : 2001, 1);
     }
 
+    // Group 14. No 3.3.5 item drives it, so the stock pass always shows 1401; most Retail bodies have nothing
+    // there, but the Pandaren female's 1401 is her cloth flap with the Pandaren emblem, which then showed over
+    // trousers and robes. It shows only with nothing worn on the legs, chest or tabard slot.
+    if (character->m_itemDisplayID[ITEMSLOT_PANTS] || character->m_itemDisplayID[ITEMSLOT_CHEST] ||
+        character->m_itemDisplayID[ITEMSLOT_TABARD])
+        model->SetGeometryVisible(1401, 1499, 0);
+
     // Helmet hides. AddHelm writes them into the 3.3.5 selector values, which the Retail geometry does
     // not read, so the chosen hair and beard showed through. HelmetGeosetVisData slots 0-6 cover geoset
     // groups 0 (hair), 1-3 (facial hair), 7 (ears), 16 and 17, per race bit, as in the stock AddHelm. On
