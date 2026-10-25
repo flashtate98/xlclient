@@ -145,6 +145,11 @@
 #include "WoW/Source/WowSvcs/WowSvcsClient/ClientServices.h"
 #if defined(WOWDECOMP_RETAIL_MODELS)
 #include "WoW/Source/RetailCustomizationNet.h"
+#include "Engine/Source/Retail/LocalSource.h"
+#include "Engine/Source/BlizzardCore/SFile2-Core.h"
+#include "Engine/Source/BlizzardCore/Source/System/Log/Log.h"
+#include <set>
+#include <string>
 #endif
 #include "WarcraftXL/Seams.h"
 
@@ -7916,6 +7921,20 @@ int32_t CGUnit_C::GetModelFileName(const char** name) const {
 
     if (modelData) {
         *name = modelData->m_modelName;
+#if defined(WOWDECOMP_RETAIL_MODELS)
+        // Not in the original: which file each display loads, once per model row, to find a model
+        // that is not the one the tables name.
+        static std::set<int32_t> s_loggedModels;
+        if (*name && s_loggedModels.insert(modelData->m_id).second) {
+            std::string m2(*name);
+            const auto dot = m2.find_last_of('.');
+            if (dot != std::string::npos) m2 = m2.substr(0, dot) + ".m2";
+            Blizzard::Log::Printf(1, "Logs/RetailModels.log", "Unit display %u: CreatureModelData %d %s (%s, %s)\n",
+                static_cast<unsigned>(this->m_unit->m_unitFieldDisplayid), modelData->m_id, *name,
+                SFile::FileExistsEx(m2.c_str(), 0) ? "found" : "NOT FOUND",
+                Retail::Source().Handles(m2.c_str()) ? "Retail model" : "3.3.5 model");
+        }
+#endif
         return *name != nullptr;
     }
 
