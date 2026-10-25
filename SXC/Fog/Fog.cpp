@@ -2,6 +2,9 @@
 
 #include "SXC/Fog/Fog.h"
 
+#include <intrin.h>
+#include <immintrin.h>
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -91,11 +94,41 @@ namespace {
         return static_cast<uint16_t>(half);
     }
 
-    void Convert(const float* src, std::vector<uint16_t>& dst, size_t count) {
-        dst.resize(count * 4);
+    // F16C (every x64 CPU since 2012; asked once): four values an instruction.
+    bool HasF16c() {
+        static const int s_has = [] {
+            int regs[4] = {};
+            __cpuid(regs, 1);
+            return (regs[2] >> 29) & 1;
+        }();
+        return s_has != 0;
+    }
 
-        for (size_t i = 0; i < count * 4; i++) {
-            dst[i] = src ? Half(std::isfinite(src[i]) ? src[i] : 0.0f) : 0;
+    void Convert(const float* src, std::vector<uint16_t>& dst, size_t count) {
+        const size_t n = count * 4;
+        dst.resize(n);
+
+        if (!src) {
+            std::fill(dst.begin(), dst.end(), uint16_t(0));
+            return;
+        }
+
+        if (HasF16c()) {
+            const __m128 zero = _mm_setzero_ps();
+
+            for (size_t i = 0; i < n; i += 4) {
+                const __m128 v = _mm_loadu_ps(src + i);
+                // Not finite (x - x isn't 0 for infinities and NaN): 0, as below.
+                const __m128 finite = _mm_cmpeq_ps(_mm_sub_ps(v, v), zero);
+                const __m128i h = _mm_cvtps_ph(_mm_and_ps(v, finite), _MM_FROUND_TO_NEAREST_INT);
+                _mm_storel_epi64(reinterpret_cast<__m128i*>(dst.data() + i), h);
+            }
+
+            return;
+        }
+
+        for (size_t i = 0; i < n; i++) {
+            dst[i] = Half(std::isfinite(src[i]) ? src[i] : 0.0f);
         }
     }
 

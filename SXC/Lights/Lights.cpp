@@ -5,6 +5,7 @@
 #include "SXC/Lights/Lights.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -660,6 +661,7 @@ namespace {
     constexpr uint32_t kShadowChecksPerFrame = 8;
     constexpr uint32_t kShadowMaxPerLight = 256 * 1024;   // vertices
     constexpr float kShadowKeepBonus = 4.0f;              // yd nearer a light that has its map counts as (no flapping at the edge)
+    constexpr double kShadowGatherBudgetMs = 2.0;         // a frame's gathering (and checks) before the rest wait
 
     std::vector<float> s_shadowVertices;
     std::vector<ShadowJob> s_shadowJobs;
@@ -1048,6 +1050,7 @@ namespace {
 
         const uint32_t updates = static_cast<uint32_t>(std::max(s_settings.shadow_updates, 0));
         uint32_t checks = 0;
+        const auto gatherStart = std::chrono::steady_clock::now();
         std::vector<std::pair<size_t, uint32_t>> ranges; // per job: first float, vertex count
         std::vector<size_t> partRanges;                  // per job: its first part
 
@@ -1117,7 +1120,11 @@ namespace {
             ShadowSlot& s = s_shadowSlots[slot];
             s.usedFrame = s_shadowFrame;
 
-            if (draw && s_shadowJobs.size() < updates && s_shadowVertices.size() / 5 < s_shadowMaxVertices) {
+            // A frame gathers for kShadowGatherBudgetMs (always one map): the rest wait for the next frames,
+            // the old maps (or none) meanwhile.
+            const bool inBudget = s_shadowJobs.empty() || std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - gatherStart).count() < kShadowGatherBudgetMs;
+
+            if (draw && inBudget && s_shadowJobs.size() < updates && s_shadowVertices.size() / 5 < s_shadowMaxVertices) {
                 Gathered g;
                 g.out = &s_shadowVertices;
                 g.centre = f.pos;
