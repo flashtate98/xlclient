@@ -1463,6 +1463,9 @@ void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
     // The Lightforged forehead Rune (group 25) is a glowing mesh standing off the brow; 3.3.5 hats, made for
     // the old heads, do not cover it, so it shines through their crowns. It goes with the hair.
     if (hides(0) && retailRace == 30) model->SetGeometryVisible(2501, 2599, 0);
+    // The Pandaren Eyebrows (group 34) are tufts standing off the brow, above the head's front; hat brims
+    // and helmet rims cut through them, so they go with the hair.
+    if (hides(0) && retailRace >= 24 && retailRace <= 26) model->SetGeometryVisible(3401, 3499, 0);
 }
 
 #endif
