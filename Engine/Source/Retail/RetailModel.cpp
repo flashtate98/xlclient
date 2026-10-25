@@ -693,6 +693,10 @@ bool MergeSkeleton(const std::vector<uint8_t>& childBytes, const std::vector<uin
             if (next >= parentMap.size()) return Fail(error, "Invalid parent variation link");
             Put16(seq, 60, uint16_t(parentMap[next]));
         }
+        // The alias link (offset 62) still held the parent's index, so the engine's alias rings (walked until
+        // they return to the sequence) never closed and loading such a sequence spun forever. Inherited aliases
+        // are materialized above, so every inherited sequence stands alone: it links to itself.
+        Put16(seq, 62, uint16_t(parentMap[index]));
     }
     const auto& childBones = child.chunks.at(MergeSKB);
     const auto& parentBones = parent.chunks.at(MergeSKB);

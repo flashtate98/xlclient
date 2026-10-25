@@ -6389,6 +6389,9 @@ void CM2Model::SetBoneSequenceDeferred(uint16_t sequenceIndex, M2Data* data, uin
 
     if (data->m_sequences[sequenceIndex].m_flags & 0x10) {
         uint16_t index = sequenceIndex;
+#if defined(WOWDECOMP_RETAIL_MODELS)
+        uint32_t ringSteps = 0;
+#endif
 
         while (true) {
             TSList<CM2SequenceLoad>& loads = this->m_shared->m_sequenceLoads;
@@ -6414,6 +6417,12 @@ void CM2Model::SetBoneSequenceDeferred(uint16_t sequenceIndex, M2Data* data, uin
             if (index == sequenceIndex) {
                 return;
             }
+#if defined(WOWDECOMP_RETAIL_MODELS)
+            // Not in the original: a ring that never closes (or leaves the array) ends here instead of spinning.
+            if (index >= data->m_sequences.m_count || ++ringSteps > data->m_sequences.m_count) {
+                return;
+            }
+#endif
         }
     } else {
         CM2SequenceLoad* load = this->m_shared->LoadLowPrioritySequence(sequenceIndex);

@@ -1695,7 +1695,13 @@ int32_t CM2Shared::FinishLoadingLowPrioritySequence(uint32_t sequenceIndex, CAsy
         return 0;
     }
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    uint32_t aliasSteps = 0;    // Not in the original: bounded as in LoadLowPrioritySequence.
+    for (uint16_t* alias = &sequence->m_aliasNext; *alias != sequenceIndex && *alias < this->m_data->m_sequences.m_count &&
+         aliasSteps++ < this->m_data->m_sequences.m_count; alias = &this->m_data->m_sequences[*alias].m_aliasNext) {
+#else
     for (uint16_t* alias = &sequence->m_aliasNext; *alias != sequenceIndex; alias = &this->m_data->m_sequences[*alias].m_aliasNext) {
+#endif
         if (!this->FinishLoadingLowPrioritySequence(*alias, static_cast<uint8_t*>(object->m_buffer), object->m_size)) {
             return 0;
         }
@@ -2189,7 +2195,15 @@ CM2SequenceLoad* CM2Shared::LoadLowPrioritySequence(uint16_t sequenceIndex) {
 
     sequence->m_flags |= 0x10;
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: an alias ring that never returns to the sequence (a malformed or mis-merged
+    // model) would spin forever; one pass over the sequences is the most a ring can hold.
+    uint32_t ringSteps = 0;
+    for (uint16_t i = sequence->m_aliasNext; i != sequenceIndex && i < this->m_data->m_sequences.m_count &&
+         ringSteps++ < this->m_data->m_sequences.m_count; i = this->m_data->m_sequences[i].m_aliasNext) {
+#else
     for (uint16_t i = sequence->m_aliasNext; i != sequenceIndex; i = this->m_data->m_sequences[i].m_aliasNext) {
+#endif
         this->m_data->m_sequences[i].m_flags |= 0x10;
     }
 
