@@ -82,6 +82,14 @@ float RetailCharacterGlueScale(const CCharacterComponent* character);
 using RetailBodyOwner = void (*)(void* owner, CM2Model* replacement);
 void RetailCharacterSetBodyOwner(const CCharacterComponent* character, RetailBodyOwner swap, void* owner);
 
+// The stock client race (1-11) whose helmets a race wears: itself, or for a new race the stock race whose
+// ChrRaces client prefix it shares (Nightborne "Ni": Night Elf). 0 if none.
+uint32_t RetailCharacterStockRace(uint32_t raceId);
+
+// The race whose HelmetGeosetVisData bit a character uses: for a Retail body of a new race the stock race above,
+// otherwise its own race.
+uint32_t RetailCharacterHelmetRace(const CCharacterComponent* character);
+
 // Drops the stored choices of a component that is going away.
 void RetailCustomizationForget(const CCharacterComponent* character);
 

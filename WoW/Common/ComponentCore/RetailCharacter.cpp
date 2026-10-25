@@ -877,6 +877,15 @@ static void ApplyGlueScale(CCharacterComponent* character) {
     m.c0 *= k; m.c1 *= k; m.c2 *= k;
 }
 
+uint32_t StockRaceFor(uint32_t raceId);
+uint32_t RetailCharacterStockRace(uint32_t raceId) { return StockRaceFor(raceId); }
+uint32_t RetailCharacterHelmetRace(const CCharacterComponent* character) {
+    const uint32_t race = character->m_data.m_preferences.m_raceID;
+    uint32_t retailRace = 0;
+    const uint32_t stock = RetailModelOf(character, retailRace) ? StockRaceFor(race) : 0;
+    return stock ? stock : race;
+}
+
 void RetailCharacterSetBodyOwner(const CCharacterComponent* character, RetailBodyOwner swap, void* owner) {
     if (swap) s_bodyOwners[character] = { swap, owner };
     else s_bodyOwners.erase(character);
