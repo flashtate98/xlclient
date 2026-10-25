@@ -4,6 +4,7 @@
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Context.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Frame.hpp"
 #include "Engine/Source/Gx/Gx.h"
+#include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler
 
 namespace context = gxvk::vk::context;
 namespace frame   = gxvk::vk::frame;
@@ -23,11 +24,17 @@ void CGxDeviceVulkan::ScenePresent() {
             this->DeviceScreenShot();
         }
 
+        SXC::Profiler::Enter(SXC::Profiler::kFrameCap);  // SXC: the frame profiler
         this->WaitForFPSCap();
+        SXC::Profiler::Leave(SXC::Profiler::kFrameCap);
 
         this->IBringUpIfPending();
 
         if (this->m_context && context::Live()) {
+            if (this->m_drawPath) {
+                this->SxcShadowUploads();  // SXC: no draw is being recorded here
+            }
+
             if (frame::Present(this->IWindowVisible() != 0)) {
                 // A resize, or a surface that went out of date: the frame has dropped what named the
                 // old swapchain; the context rebuilds it on the window.

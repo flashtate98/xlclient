@@ -9,6 +9,7 @@
 #include "Engine/Source/Tempest/C3Vector.h"
 #include "Engine/Source/Tempest/CImVector.h"
 #include "Engine/Source/Storm/H/storm.h"
+#include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler
 #include "WarcraftXL/Seams.h"
 
 // STATIC: 0x00A2D57C
@@ -1105,7 +1106,10 @@ void GxScenePresent() {
     wxl::seam::Gx::ScenePresent::Before();
     C3Vector viewPos(0.0f, 0.0f, 0.0f);
     GxuFlushDrawList(GxuCat_2, viewPos);
+    SXC::Profiler::Enter(SXC::Profiler::kPresent);  // SXC: the frame profiler
     g_theGxDevicePtr->ScenePresent();
+    SXC::Profiler::Leave(SXC::Profiler::kPresent);
+    SXC::Profiler::FrameEnd();
 }
 
 // VERIFY: 6d471ae7 auto

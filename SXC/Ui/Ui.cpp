@@ -8,6 +8,7 @@
 #include "SXC/Data/Data.h"
 #include "SXC/Grass/Grass.h"
 #include "SXC/Log.h"
+#include "SXC/Profiler/Profiler.h"
 #include "SXC/Settings/Settings.h"
 #include "SXC/ThirdParty/imgui/imgui.h"
 #include "SXC/ThirdParty/imgui/imgui_internal.h"
@@ -171,6 +172,7 @@ namespace {
         s_done = true;
         const int client = SXC::Ui::AddModule("Client", "The client itself.");
         SXC::Ui::AddPanel(client, "Info", DrawClientInfo);
+        SXC::Ui::AddPanel(client, "Profiler", SXC::Profiler::DrawPanel);
         SXC::Ui::AddQuick(client, "Frame rate", DrawClientQuick);
     }
 

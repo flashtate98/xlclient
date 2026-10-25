@@ -18,6 +18,7 @@
 #include "Engine/Source/SoundEngine/SoundEngine.h"
 #include "Engine/Source/Storm/H/storm.h"
 #include "Engine/Source/Tempest/C44Matrix.h"
+#include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler
 #include "WarcraftXL/Seams.h"
 
 // STATIC: 0x009EDCB8
@@ -157,6 +158,7 @@ static int32_t CaptureScreen() {
 static int32_t OnPaint(const void* data, void* param) {
     wxl::seam::Scrn::OnPaint::Before(data, param);
     if (GxHasContext() && GxIsWindowVisible()) {
+        SXC::Profiler::Enter(SXC::Profiler::kInterface);  // SXC: the frame profiler (the world inside is its own)
         HSRGN rgn;
         SRgnCreate(&rgn, 0);
 
@@ -212,6 +214,7 @@ static int32_t OnPaint(const void* data, void* param) {
 
         GxXformSetViewport(minX, maxX, minY, maxY, minZ, maxZ);
         GxuFontUpdate();
+        SXC::Profiler::Leave(SXC::Profiler::kInterface);
 
         if (!s_noPresent) {
             if (s_screenshotCallback) {

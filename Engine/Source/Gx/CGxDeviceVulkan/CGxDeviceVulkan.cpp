@@ -21,6 +21,7 @@
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Queries.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Shaders.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Texture.hpp"
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Timings.hpp"  // SXC: the frame profiler's GPU times
 #include "Engine/Source/Gx/CGxPool.h"
 #include "Engine/Source/Gx/Gx.h"
 #include "Engine/Source/Os/Error.h"
@@ -29,6 +30,7 @@
 #include "SXC/Cover/Cover.h"  // SXC: surface covers
 #include "SXC/Lights/Lights.h" // SXC: point lights
 #include "SXC/Log.h"
+#include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler
 
 namespace context   = gxvk::vk::context;
 namespace frame     = gxvk::vk::frame;
@@ -266,6 +268,21 @@ void CGxDeviceVulkan::ICreateDrawPath() {
         static const SXC::Grass::Device s_grass = { gxvk::vk::grass::Mesh, gxvk::vk::grass::Allocate, gxvk::vk::grass::Write, gxvk::vk::grass::Release,
                                                     &CGxDeviceVulkan::SxcGrassDraw, gxvk::vk::grass::PlantsInUse };
         SXC::Grass::SetDevice(gxvk::vk::grass::Init() ? &s_grass : nullptr);
+
+        // SXC: the frame profiler's GPU times (the pre-pass kinds into the profiler's pre-pass rows).
+        static_assert(SXC::Profiler::kMaxCategories <= gxvk::vk::timings::kMaxCategories, "the timings carry every profiler category");
+
+        if (gxvk::vk::timings::Init()) {
+            gxvk::vk::timings::SetSink([](const double* main, const double* pre) {
+                double ms[SXC::Profiler::kMaxCategories];
+                memcpy(ms, main, sizeof(ms));
+                ms[SXC::Profiler::kUploads] += pre[static_cast<int>(gxvk::vk::timings::Pre::Uploads)];
+                ms[SXC::Profiler::kShadowMaps] += pre[static_cast<int>(gxvk::vk::timings::Pre::ShadowMaps)];
+                SXC::Profiler::GpuTimes(ms, SXC::Profiler::kMaxCategories);
+            });
+            static const SXC::Profiler::Gpu s_gpu = { gxvk::vk::timings::Mark, gxvk::vk::timings::Enable, gxvk::vk::timings::Status };
+            SXC::Profiler::SetGpu(&s_gpu);
+        }
     }
 }
 
@@ -327,8 +344,20 @@ bool CGxDeviceVulkan::SxcGrassDraw(CGxTex* texture, const SXC::Grass::Run* runs,
     d.runCount = count;
 
     VkCommandBuffer cmd = gxvk::vk::frame::Pass();
-    return cmd && gxvk::vk::pipelines::Record(cmd, gxvk::vk::frame::RenderPass(), gxvk::vk::frame::PassGeneration(), gxvk::vk::frame::Serial(),
-                                              gxvk::vk::frame::Slot(), d);
+
+    if (!cmd || !gxvk::vk::pipelines::Record(cmd, gxvk::vk::frame::RenderPass(), gxvk::vk::frame::PassGeneration(), gxvk::vk::frame::Serial(),
+                                             gxvk::vk::frame::Slot(), d)) {
+        return false;
+    }
+
+    // The frame profiler's draw count: a draw per run.
+    if (SXC::Profiler::On()) {
+        for (uint32_t i = 0; i < count; i++) {
+            SXC::Profiler::CountDraw(runs[i].indexCount / 3 * runs[i].instanceCount);
+        }
+    }
+
+    return true;
 }
 
 // SXC: our point lights, gathered once per frame at its first terrain draw (SXC/Lights).
@@ -415,6 +444,7 @@ bool CGxDeviceVulkan::SxcLightsFrame(gxvk::vk::lights::Frame& out) {
 // SXC: the covers' data for our terrain shader, once per frame at its first terrain draw: what the mod
 // set (SXC/Cover), the cover textures resolved to this device's images (and stamped with this frame).
 bool CGxDeviceVulkan::SxcCoverFrame(gxvk::vk::cover::Frame& out) {
+    SXC::Profiler::Scope profile(SXC::Profiler::kCoverFrame);
     CGxDeviceVulkan* device = static_cast<CGxDeviceVulkan*>(g_theGxDevicePtr);
     const SXC::Cover::Frame& in = SXC::Cover::Current();
 
@@ -596,6 +626,7 @@ void CGxDeviceVulkan::IDestroyVulkan() {
     SXC::Fog::SetRenderer(nullptr, nullptr);  // SXC: volumetric fog
     SXC::Cover::SetDevice(false, 0, nullptr); // SXC: surface covers
     SXC::Grass::SetDevice(nullptr);           // SXC: the instanced grass (its buffers go below)
+    SXC::Profiler::SetGpu(nullptr);           // SXC: the frame profiler's GPU times (the pools go below)
     frame::ReleaseSwapchain();
     this->IReleasePools();
     this->IReleaseTextures();
@@ -605,6 +636,7 @@ void CGxDeviceVulkan::IDestroyVulkan() {
     pipelines::Shutdown();
     present::Shutdown();
     queries::Shutdown();
+    gxvk::vk::timings::Shutdown();  // SXC:
     shaders::Shutdown();
     texture::Shutdown();
     memory::Shutdown();

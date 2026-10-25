@@ -18,6 +18,7 @@
 #include <vector>
 #include "SXC/Api/sxc_lights.h"
 #include "SXC/Log.h"
+#include "SXC/Profiler/Profiler.h"
 #include "Engine/Source/Model2/M2Data.h"
 #include "Engine/Source/Model2/M2Model.h"
 #include "Engine/Source/Model2/M2ModelLight.h"
@@ -640,6 +641,7 @@ namespace {
         bool valid = false;        // drawn for this key, position and radius
         uint32_t usedFrame = 0;
         uint32_t checkMs = 0;      // when to look at its surroundings again
+        uint32_t incomplete = 0;   // drawn with textures missing, in a row (the next look waits longer each time)
     };
     std::vector<ShadowSlot> s_shadowSlots;
     uint32_t s_shadowFrame = 0;
@@ -1072,7 +1074,12 @@ namespace {
                     Gathered sig;
                     sig.centre = s.pos;
                     sig.radius = s.radius;
+                    SXC::Profiler::Scope p(SXC::Profiler::kShadowChecks);
                     draw = Gather(sig) != s.signature;
+
+                    if (!draw) {
+                        s.incomplete = 0;   // the last map came out whole
+                    }
                 }
             } else {
                 // A free slot, else the one unused longest (never one chosen this frame).
@@ -1119,7 +1126,9 @@ namespace {
                 g.parts = &s_shadowParts;
                 g.partBase = s_shadowParts.size();
                 const size_t first = s_shadowVertices.size();
+                SXC::Profiler::Enter(SXC::Profiler::kShadowGather);
                 s.signature = Gather(g);
+                SXC::Profiler::Leave(SXC::Profiler::kShadowGather);
 
                 if (g.truncated) {
                     SXC::LogOnce("lights-shadow-full", "lights: a shadow map was cut short at %u triangles (light at %.1f %.1f %.1f, radius %.1f)", g.added / 3, f.pos.x,
@@ -1506,6 +1515,7 @@ namespace SXC::Lights {
             return s_frame;
         }
 
+        SXC::Profiler::Enter(SXC::Profiler::kLightsScan);
         const sxc_lights_settings& set = s_settings;
         const float range = std::fmax(set.range, 8.0f);
         const float radius = std::fmax(set.radius, 1.0f);
@@ -1580,8 +1590,9 @@ namespace SXC::Lights {
         }
 
         s_stats.active = static_cast<uint32_t>(s_lights.size());
-        AssignShadows(nowMs);
-        BuildGrid(camera, range, cell, perCell);
+        SXC::Profiler::Leave(SXC::Profiler::kLightsScan);
+        { SXC::Profiler::Scope p(SXC::Profiler::kLightsShadows); AssignShadows(nowMs); }
+        { SXC::Profiler::Scope p(SXC::Profiler::kLightsGrid); BuildGrid(camera, range, cell, perCell); }
 
         // For the light editor's markers.
         for (uint32_t i = 0; i < s_lights.size(); i++) {
@@ -1623,8 +1634,12 @@ namespace SXC::Lights {
 
     void ShadowIncomplete(uint32_t slot) {
         if (slot < s_shadowSlots.size()) {
-            s_shadowSlots[slot].signature = 0;   // differs from any gathered one: redrawn at its next look
-            s_shadowSlots[slot].checkMs = OsGetAsyncTimeMs() + 500;
+            // Redrawn at its next look (a zero signature differs from any gathered one), each time a little
+            // later: a texture that never comes costs a gathering every 16 s, not every half second.
+            ShadowSlot& s = s_shadowSlots[slot];
+            s.signature = 0;
+            s.checkMs = OsGetAsyncTimeMs() + std::min(500u << std::min(s.incomplete, 5u), 16000u);
+            s.incomplete++;
         }
     }
 

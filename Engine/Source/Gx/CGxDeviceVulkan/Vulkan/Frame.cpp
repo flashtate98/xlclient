@@ -3,12 +3,14 @@
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Frame/Internal.hpp"
 
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Present.hpp"
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Timings.hpp"   // SXC: the profiler's GPU times
 
 using namespace gxvk::vk::frame::detail;
 
 namespace
 {
     namespace present = gxvk::vk::present;
+    namespace timings = gxvk::vk::timings;
 
     /// vkCmdClearAttachments over `rect` (clamped to the target) or the whole target, colour and
     /// depth as the mask says.
@@ -111,6 +113,7 @@ namespace gxvk::vk::frame::detail
         s.queryPool          = VK_NULL_HANDLE;
         s.clearColourPending = false;
         s.clearDepthPending  = false;
+        timings::FrameOpened(s.fi, slot.pre, slot.cmd);   // SXC: the profiler's GPU times
         return true;
     }
 
@@ -196,6 +199,7 @@ namespace gxvk::vk::frame::detail
 
         EndPass();
         StagingFrameEnd(slot);
+        timings::FrameClosing();   // SXC: the profiler's GPU times
 
         VkResult r = d.EndCommandBuffer(slot.pre);
         if (r == VK_SUCCESS) r = d.EndCommandBuffer(slot.cmd);

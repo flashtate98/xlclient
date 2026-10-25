@@ -10,6 +10,7 @@
 #include "SXC/Api/sxc_cover.h"
 #include "SXC/Api/sxc_lights.h"
 #include "SXC/Api/sxc_grass.h"
+#include "SXC/Api/sxc_profiler.h"
 
 #include <cstdio>
 #include <cstring>
@@ -44,6 +45,10 @@ namespace SXC::Lights {
 
 namespace SXC::Grass {
     const sxc_grass_api* Api();
+}
+
+namespace SXC::Profiler {
+    const sxc_profiler_api* Api();
 }
 
 namespace {
@@ -500,6 +505,10 @@ extern "C" __declspec(dllexport) const void* WXL_CALL sxc_get_service(const char
 
     if (strcmp(name, SXC_GRASS_SERVICE) == 0 && version == SXC_GRASS_SERVICE_VERSION) {
         return SXC::Grass::Api();
+    }
+
+    if (strcmp(name, SXC_PROFILER_SERVICE) == 0 && version == SXC_PROFILER_SERVICE_VERSION) {
+        return SXC::Profiler::Api();
     }
 
     return nullptr;

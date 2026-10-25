@@ -101,6 +101,7 @@
 #include "WoW/Source/Game/GameClient/ProjectTex.h"
 #include "WarcraftXL/Seams.h"
 #include "SXC/Grass/Grass.h"  // SXC: the instanced grass
+#include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler
 
 // STATIC: 0x00ADEE48
 static const char* s_zonePaths[11] = {
@@ -3552,7 +3553,11 @@ void CWorldScene::RenderDetailDoodads() {
         inst->m_age = 0;
 
         // SXC: instanced: no lights to select, no bake, no draw of its own here.
-        if (SXC::Grass::Take(inst)) {
+        SXC::Profiler::Enter(SXC::Profiler::kGrassPrepare);
+        const bool taken = SXC::Grass::Take(inst);
+        SXC::Profiler::Leave(SXC::Profiler::kGrassPrepare);
+
+        if (taken) {
             inst->m_link.Unlink();
             CMap::s_detailDoodadUpdateList.LinkToTail(inst);
             continue;
@@ -3582,7 +3587,9 @@ void CWorldScene::RenderDetailDoodads() {
         CMap::s_detailDoodadUpdateList.LinkToTail(inst);
     }
 
-    SXC::Grass::End();  // SXC:
+    SXC::Profiler::Enter(SXC::Profiler::kGrassPrepare);  // SXC: its draws' GPU time stays the grass's
+    SXC::Grass::End();
+    SXC::Profiler::Leave(SXC::Profiler::kGrassPrepare);
 
     GxXformPop(GxXform_Tex1);
     GxXformPop(GxXform_World);

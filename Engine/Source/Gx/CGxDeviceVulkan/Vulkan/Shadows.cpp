@@ -6,6 +6,7 @@
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Loader.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Log.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Memory.hpp"
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Timings.hpp"
 
 #include "Engine/Source/Gx/CGxDeviceVulkan/Shaders/ShadowSpirv.inc"
 
@@ -18,6 +19,7 @@ namespace
     namespace frame   = gxvk::vk::frame;
     namespace loader  = gxvk::vk::loader;
     namespace memory  = gxvk::vk::memory;
+    namespace timings = gxvk::vk::timings;
     using gxvk::vk::shadows::Job;
     using gxvk::vk::shadows::Part;
     using gxvk::vk::shadows::kMaxTexturedParts;
@@ -375,6 +377,7 @@ namespace gxvk::vk::shadows
         if (!first && count == 0) return 0;
         VkCommandBuffer cmd = frame::PrePass();
         if (!cmd) return 0;
+        timings::PreMark(timings::Pre::ShadowMaps);   // SXC: the profiler's GPU times
         if (first) LayOut(cmd);
 
         const loader::Device& d = *s.dapi;
@@ -466,6 +469,7 @@ namespace gxvk::vk::shadows
         }
 
         if (used) memory::FlushHost(buffer.block);
+        timings::PreMark(timings::Pre::Uploads);
         return drawn;
     }
 

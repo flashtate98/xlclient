@@ -13,6 +13,7 @@
 #include "Engine/Source/Os/System.h"
 #include "Engine/Source/Os/TimeManager.h"
 #include "Engine/Source/Storm/H/storm.h"
+#include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler
 #include "WarcraftXL/Seams.h"
 
 namespace Event {
@@ -122,7 +123,9 @@ int32_t SynthesizeInitialize(EvtContext* context) {
 // VERIFY: b9c7171f manual
 // OFFSET: 0x0047DB70
 void IEvtDispatchUpdate(EvtContext* context, uint32_t currTime, float elapsedSec) {
+    SXC::Profiler::Enter(SXC::Profiler::kMods);  // SXC: the frame profiler (the mods' update event)
     wxl::seam::Event::DispatchUpdate::Before(context, currTime, elapsedSec);
+    SXC::Profiler::Leave(SXC::Profiler::kMods);
     context->m_critsect.Enter();
     int32_t closed = context->m_schedState == SCHEDSTATE_CLOSED;
     context->m_critsect.Leave();
@@ -132,7 +135,9 @@ void IEvtDispatchUpdate(EvtContext* context, uint32_t currTime, float elapsedSec
         data.m_elapsedSec = elapsedSec;
         data.m_time = currTime;
 
+        SXC::Profiler::Enter(SXC::Profiler::kGameUpdate);  // SXC: the frame profiler
         IEvtQueueDispatch(context, EVENT_ID_UPDATE, &data);
+        SXC::Profiler::Leave(SXC::Profiler::kGameUpdate);
     }
 }
 

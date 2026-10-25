@@ -1,5 +1,6 @@
 #include "WorldFrame.h"
 #include "SXC/Fog/Fog.h"  // SXC:
+#include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler
 #include "Engine/Source/Base/ConvertUTF.h"
 #include <cstring>
 #include <typeinfo>
@@ -1748,6 +1749,8 @@ void CGWorldFrame::OnWorldRender() {
 
     scene->SetFloat18(-CWorld::s_unk_CD7758);
     scene->m_passMask = CWorld::m_M2PassMask;
+    namespace prof = SXC::Profiler;  // SXC: the frame profiler's scopes below
+    prof::Enter(prof::kModels);
     scene->Draw(M2PASS_0);
 
     if (s_spellShadowStyle < 2) {
@@ -1756,22 +1759,27 @@ void CGWorldFrame::OnWorldRender() {
 
     GxuSortDrawList(GxuCat_0, GxuSort_VtxStream, *World::GetCamPos());
     GxuFlushDrawList(GxuCat_0, *World::GetCamPos());
+    prof::Leave(prof::kModels);
+    prof::Enter(prof::kGrass);
     CWorldScene::RenderDetailDoodads();
+    prof::Leave(prof::kGrass);
 
     if (World::SceneCamLiquidStatus(nullptr)) {
-        CWorldScene::RenderBarriers(this->m_elapsedSec);
-        scene->Draw(M2PASS_1);
-        CWorldScene::RenderWeather();
-        CWorldScene::RenderLiquidPass();
-        scene->Draw(M2PASS_2);
+        { prof::Scope p(prof::kWeather); CWorldScene::RenderBarriers(this->m_elapsedSec); }
+        { prof::Scope p(prof::kModels); scene->Draw(M2PASS_1); }
+        { prof::Scope p(prof::kWeather); CWorldScene::RenderWeather(); }
+        { prof::Scope p(prof::kLiquids); CWorldScene::RenderLiquidPass(); }
+        { prof::Scope p(prof::kModels); scene->Draw(M2PASS_2); }
     } else {
-        scene->Draw(M2PASS_2);
-        CWorldScene::RenderLiquidPass();
-        SXC::Fog::Composite();  // SXC: volumetric fog, over the opaque world and the water
-        CWorldScene::RenderWeather();
-        CWorldScene::RenderBarriers(this->m_elapsedSec);
-        scene->Draw(M2PASS_1);
+        { prof::Scope p(prof::kModels); scene->Draw(M2PASS_2); }
+        { prof::Scope p(prof::kLiquids); CWorldScene::RenderLiquidPass(); }
+        { prof::Scope p(prof::kFog); SXC::Fog::Composite(); }  // SXC: volumetric fog, over the opaque world and the water
+        { prof::Scope p(prof::kWeather); CWorldScene::RenderWeather(); }
+        { prof::Scope p(prof::kWeather); CWorldScene::RenderBarriers(this->m_elapsedSec); }
+        { prof::Scope p(prof::kModels); scene->Draw(M2PASS_1); }
     }
+
+    prof::Enter(prof::kTransparent);
 
     if (s_spellShadowStyle < 2) {
         DrawSpellCursorShadow(0x20000);
@@ -1784,7 +1792,8 @@ void CGWorldFrame::OnWorldRender() {
     CWorldScene::RenderParticulate();
     GxuSortDrawList(GxuCat_1, GxuSort_B2F, *World::GetCamPos());
     GxuFlushDrawList(GxuCat_1, *World::GetCamPos());
-    DayNight::RenderGlares();
+    prof::Leave(prof::kTransparent);
+    { prof::Scope p(prof::kSky); DayNight::RenderGlares(); }
     PlayerNameUpdateLate();
 
     if (CWorld::enables & 0x20000000) {
@@ -1795,7 +1804,7 @@ void CGWorldFrame::OnWorldRender() {
     SmartScreenRectClearGrid(1);
     CGChatBubbleFrame::OnWorldRender(this);
     GxXformSetViewport(minX, maxX, minY, maxY, minZ, maxZ);
-    FFX::Finish();
+    { prof::Scope p(prof::kGlow); FFX::Finish(); }
     CVehiclePassenger_C::PostRenderUpdateAll();
 }
 
@@ -2104,9 +2113,13 @@ void CGWorldFrame::RenderWorld(void* param) {
     projection = g_theGxDevicePtr->m_projection;
     GxXformView(view);
 
+    SXC::Profiler::Enter(SXC::Profiler::kWorldUpdate);  // SXC: the frame profiler
     worldFrame->OnWorldUpdate();
     PlayerNameUpdateWorldText();
+    SXC::Profiler::Leave(SXC::Profiler::kWorldUpdate);
+    SXC::Profiler::Enter(SXC::Profiler::kWorldRest);
     worldFrame->OnWorldRender();
+    SXC::Profiler::Leave(SXC::Profiler::kWorldRest);
     WorldTextRenderBatch();
 
     g_theGxDevicePtr->XformSetProjection(projection);

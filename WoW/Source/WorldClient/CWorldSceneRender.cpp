@@ -28,6 +28,7 @@
 #include "Engine/Source/Gx/CGxMatrixStack.h"
 #include "Engine/Source/ShaderEffect/ShadowCache.h"
 #include "Engine/Source/Tempest/C44Matrix.h"
+#include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler
 
 // VERIFY: 78b69e1a manual
 // OFFSET: 0x007D5610
@@ -69,6 +70,9 @@ void CWorldScene::RenderCollisionDebug() {
 // VERIFY: cd492c82 manual
 // OFFSET: 0x0079A870
 void CWorldScene::Render(const C3Vector& cameraPos, float time) {
+    namespace prof = SXC::Profiler;  // SXC: the frame profiler's scopes below
+    prof::Enter(prof::kCulling);
+
     if (!CWorldScene::s_viewerMapObjDef) {
         CWorldScene::ComputeExteriorSortDistances();
     }
@@ -151,6 +155,7 @@ void CWorldScene::Render(const C3Vector& cameraPos, float time) {
     CWorldScene::CullMapObjDefGroup();
     CWorldScene::UpdateSortedModels();
     CWorldScene::sortTable.m_pendingExteriorGroupList.UnlinkAll();
+    prof::Leave(prof::kCulling);
 
     DayNight::DNInfo* info = DayNight::GetInfo();
     CImVector clearColor;
@@ -172,7 +177,7 @@ void CWorldScene::Render(const C3Vector& cameraPos, float time) {
     }
 
     GxSceneClear(3, clearColor);
-    CWorldScene::s_unk_B2EB68.Render();
+    { prof::Scope p(prof::kSceneObjects); CWorldScene::s_unk_B2EB68.Render(); }
 
     if (CWorldScene::camTargetEntity) {
         C3Vector position = C3Vector(CWorldScene::camTargetEntity->m_position.x, CWorldScene::camTargetEntity->m_position.y, CWorldScene::camTargetEntity->m_position.z + 2.0f);
@@ -184,6 +189,7 @@ void CWorldScene::Render(const C3Vector& cameraPos, float time) {
     CM2Scene* scene = World::s_m2Scene;
 
     if (scene) {
+        prof::Scope p(prof::kAnimation);
         scene->m_flags |= 0x1;
         scene->AdvanceTime(static_cast<uint32_t>(CMath::fint_(time * 1000.0f)));
         scene->Animate(cameraPos);
@@ -191,14 +197,16 @@ void CWorldScene::Render(const C3Vector& cameraPos, float time) {
     }
 
     CGUnit_C::UpdateMissileTrajectoryTargeting();
-    CShadowQuery::Update();
+    { prof::Scope p(prof::kUnitShadows); CShadowQuery::Update(); }
     CShaderEffect::UpdateProjMatrix();
     CWorldScene::ApplyFogState();
-    CWorldScene::RenderChunks();
-    CWorldScene::RenderMapObjDefGroups();
-    CWorldScene::RenderHorizon();
+    { prof::Scope p(prof::kTerrain); CWorldScene::RenderChunks(); }
+    { prof::Scope p(prof::kWmo); CWorldScene::RenderMapObjDefGroups(); }
+    { prof::Scope p(prof::kSky); CWorldScene::RenderHorizon(); }
 
     if (CWorldScene::s_unk_ADF570.m_maxViewDepth >= 0.0f) {
+        prof::Enter(prof::kWmo);
+
         if (CWorldScene::s_exteriorPortalViews.Count()) {
             CWorldScene::CreateInversePortalList();
             CWorldScene::RenderPortalList(&CWorldScene::s_exteriorPortalViews, 1);
@@ -208,23 +216,29 @@ void CWorldScene::Render(const C3Vector& cameraPos, float time) {
             CWorldScene::RenderPortalList(&CWorldScene::s_portalViews, 0);
         }
 
+        prof::Leave(prof::kWmo);
+
         if (CWorldScene::s_interiorSkybox) {
             DayNight::SetBlendSky(0, CWorldScene::s_interiorSkybox, 0, info->m_interiorFogBlend);
             DayNight::SetBlendSky(1, nullptr, 0, 0.0f);
         }
 
         if (!s_liquidTypeId) {
+            prof::Scope p(prof::kSky);
             DayNight::RenderSky(&CWorldScene::s_unk_ADF570);
         }
     }
 
-    CWorldScene::RenderEntitys();
+    { prof::Scope p(prof::kEntities); CWorldScene::RenderEntitys(); }
+    prof::Enter(prof::kLiquids);
     Liquid::UpdateProceduralTextures();
     CWorldScene::PrepareLiquidInstances();
 
     if ((CWorld::enables & 0x1000000) && CWorldScene::s_liquidRenderer) {
         CWorldScene::s_liquidRenderer->Flush(CWorldScene::s_activeWorldView, 0);
     }
+
+    prof::Leave(prof::kLiquids);
 
     CAaBox weatherBounds;
     weatherBounds.b = C3Vector(0.0f, 0.0f, 0.0f);

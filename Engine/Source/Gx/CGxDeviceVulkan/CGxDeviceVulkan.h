@@ -156,6 +156,7 @@ class CGxDeviceVulkan : public CGxDevice {
     void ITexTouch(CGxTex* texId);
     void IReleaseTextures();
     VkImageView SxcShadowTexture(CGxTex* texId);  // SXC: alpha-keyed shadow casters
+    void SxcShadowUploads();                      // SXC: the ones they asked for, at the frame's end
     // CGxDeviceVulkanTarget.cpp: the render targets, the back-buffer copies, the read-back
     int32_t ITargetImage(CGxTex* texId, gxvk::vk::texture::Image*& image, uint32_t plane, uint32_t& layer);
     // CGxDeviceVulkanCursor.cpp: the hardware cursor

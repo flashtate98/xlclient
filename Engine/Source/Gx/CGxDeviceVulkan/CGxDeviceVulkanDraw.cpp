@@ -13,6 +13,7 @@
 #include "Engine/Source/Gx/CGxPool.h"
 #include "Engine/Source/Gx/CGxTex.h"
 #include "SXC/Cover/Cover.h"  // SXC: projected textures on the raised covers
+#include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler's draw count
 
 namespace frame     = gxvk::vk::frame;
 namespace pipelines = gxvk::vk::pipelines;
@@ -209,6 +210,12 @@ void CGxDeviceVulkan::Draw(CGxBatch* batch, int32_t count) {
 
     if (!pipelines::Record(cmd, frame::RenderPass(), frame::PassGeneration(), frame::Serial(), frame::Slot(), d)) {
         return;
+    }
+
+    // SXC: the frame profiler's draw count.
+    if (SXC::Profiler::On()) {
+        const uint32_t n = d.count;
+        SXC::Profiler::CountDraw(d.topology == GxPrim_Triangles ? n / 3 : d.topology == GxPrim_TriangleStrip || d.topology == GxPrim_TriangleFan ? (n > 2 ? n - 2 : 0) : 0);
     }
 
     for (uint32_t stream = 0; stream < d.streamCount; stream++) {
