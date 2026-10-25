@@ -421,20 +421,6 @@ uint32_t RetailModelOf(const CCharacterComponent* character, uint32_t& retailRac
     return Retail::Appearance::ChrModelFor(race->second, prefs.m_sexID);
 }
 
-// How many values the facial hair selector has on a Retail body: the choices of the option it drives
-// (Goblin female Earrings), 0 for stock bodies or when it drives none.
-uint32_t RetailCharacterFacialCount(const CCharacterComponent* character) {
-    uint32_t retailRace = 0;
-    const uint32_t chrModel = RetailModelOf(character, retailRace);
-    if (!chrModel) return 0;
-    std::vector<ResolvedOption> resolved;
-    std::vector<uint32_t> choices;
-    Resolve(character, chrModel, resolved, choices);
-    for (const auto& option : resolved)
-        if (option.stock == static_cast<int32_t>(Stock::Facial)) return static_cast<uint32_t>(option.offered.size());
-    return 0;
-}
-
 // The Retail look of a character with a Retail body, or null for stock bodies and unmapped races.
 std::shared_ptr<Look> RetailLook(CCharacterComponent* character) {
     uint32_t retailRace = 0;
@@ -900,6 +886,20 @@ uint32_t RetailCharacterHelmetRace(const CCharacterComponent* character) {
     uint32_t retailRace = 0;
     const uint32_t stock = RetailModelOf(character, retailRace) ? StockRaceFor(race) : 0;
     return stock ? stock : race;
+}
+
+// How many values the facial hair selector has on a Retail body: the choices of the option it drives
+// (Goblin female Earrings), 0 for stock bodies or when it drives none.
+uint32_t RetailCharacterFacialCount(const CCharacterComponent* character) {
+    uint32_t retailRace = 0;
+    const uint32_t chrModel = RetailModelOf(character, retailRace);
+    if (!chrModel) return 0;
+    std::vector<ResolvedOption> resolved;
+    std::vector<uint32_t> choices;
+    Resolve(character, chrModel, resolved, choices);
+    for (const auto& option : resolved)
+        if (option.stock == static_cast<int32_t>(Stock::Facial)) return static_cast<uint32_t>(option.offered.size());
+    return 0;
 }
 
 void RetailCharacterSetBodyOwner(const CCharacterComponent* character, RetailBodyOwner swap, void* owner) {
