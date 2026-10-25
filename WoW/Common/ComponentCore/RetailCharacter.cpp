@@ -1393,6 +1393,11 @@ void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
     // Retail head gear has no 3.3.5 slot: group 37 is the headdress or circlet on every race that has one
     // (Draenei Circlet, Tauren and Dwarf female Headdress). It goes with the hair, under the same helmets.
     if (hides(0)) model->SetGeometryVisible(3701, 3799, 0);
+    // Some races keep hair, not facial hair, in group 2: the Tauren long Hair and the Void Elf Tentacles,
+    // which hang from the scalp. They go with the hair rather than waiting for a full-face helmet.
+    uint32_t retailRace = 0;
+    if (hides(0) && RetailModelOf(character, retailRace) && (retailRace == 6 || retailRace == 29))
+        model->SetGeometryVisible(201, 299, 0);
 }
 
 #endif
