@@ -1464,7 +1464,7 @@ void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
     RetailModelOf(character, retailRace);
     for (uint32_t slot = 0; slot < 7; ++slot) {
         if (!hides(slot) || (slot >= 1 && slot <= 3 && !wholeFace)) continue;
-        if (slot == 2 && retailRace == 35) continue;    // Vulpera ears, below
+        if (slot == 2 && (retailRace == 35 || retailRace == 22)) continue;    // Vulpera and Worgen ears, below
         const uint32_t group = kGroups[slot];
         model->SetGeometryVisible(group ? group * 100 : 1, group * 100 + 99, 0);
     }
@@ -1481,9 +1481,9 @@ void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
     // The Lightforged forehead Rune (group 25) is a glowing mesh standing off the brow; 3.3.5 hats, made for
     // the old heads, do not cover it, so it shines through their crowns. It goes with the hair.
     if (hides(0) && retailRace == 30) model->SetGeometryVisible(2501, 2599, 0);
-    // The Vulpera Ears (group 2) are the ears, not facial hair: they go with the 3.3.5 ears slot only, full-face
-    // helmets included, so each helmet's HelmetGeosetVisData ears bit decides whether they stick out.
-    if (hides(4) && retailRace == 35)
+    // The Vulpera and Worgen Ears (group 2) are the ears, not facial hair: they go with the 3.3.5 ears slot only,
+    // full-face helmets included, so each helmet's HelmetGeosetVisData ears bit decides whether they stick out.
+    if (hides(4) && (retailRace == 35 || retailRace == 22))
         model->SetGeometryVisible(201, 299, 0);
     // The Pandaren Eyebrows (group 34) are tufts standing off the brow, above the head's front; hat brims
     // and helmet rims cut through them, so they go with the hair.
