@@ -28,6 +28,8 @@
 #include "Engine/Source/Os/TimeManager.h"
 #include "Engine/Source/Services/Texture.h"
 #include "Engine/Source/Tempest/C44Matrix.h"
+#include "WoW/Source/Object/ObjectClient/GameObject_C.h"
+#include "WoW/Source/ObjectMgrClient/ObjectMgrClient.h"
 #include "WoW/Source/WorldClient/CMapBaseObjLink.h"
 #include "WoW/Source/WorldClient/Map.h"
 #include "WoW/Source/WorldClient/MapChunk.h"
@@ -734,7 +736,7 @@ namespace {
         return p.x >= b.b.x - margin && p.x <= b.t.x + margin && p.y >= b.b.y - margin && p.y <= b.t.y + margin && p.z >= b.b.z - margin && p.z <= b.t.z + margin;
     }
 
-    // A placed doodad's solid and alpha-keyed batches (blended ones: glows, flames, glass cast nothing), at
+    // A placed doodad's solid, alpha-keyed and alpha-blended batches (additive ones: glows, flames cast nothing), at
     // rest through its placement. Its alpha-keyed textures' readiness goes into the signature (a map drawn
     // before they loaded is drawn again).
     uint32_t AddModel(Gathered& g, CM2Model* model, const C44Matrix& placement, uint32_t h) {
@@ -763,13 +765,15 @@ namespace {
 
             const uint16_t blend = data->m_materials[batch.m_materialIndex].m_blendMode;
 
-            if (blend >= 2 || sectionDone[batch.m_skinSectionIndex]) {
+            // Additive and modulating parts (glows, flames) cast nothing; alpha-blended ones (fence panes, nets;
+            // glass is mostly under the cut) cast where their texture is at least half opaque, as alpha-keyed ones.
+            if (blend >= 3 || sectionDone[batch.m_skinSectionIndex]) {
                 continue;
             }
 
             CGxTex* texture = nullptr;
 
-            if (blend == 1) {
+            if (blend == 1 || blend == 2) {
                 const uint32_t combo = batch.m_textureComboIndex < data->m_textureCombos.m_count ? data->m_textureCombos[batch.m_textureComboIndex] : 0xFFFF;
                 CTexture* t = combo < data->m_textures.m_count && model->m_textures ? model->m_textures[combo] : nullptr;
                 texture = t ? TextureGetGxTex(t, 0, nullptr) : nullptr;
@@ -810,6 +814,53 @@ namespace {
     }
 
     void GatherDoodad(Gathered& g, const CMapBaseObjLink* link, uint32_t& h);
+
+    // Game objects the server spawned (chairs, braziers, mailboxes, lamp posts: in no chunk's or WMO group's
+    // doodad list), collected once per frame for the shadow maps: the model and its box in the world.
+    // Doors, transports and destructible buildings move or are WMOs: left out.
+    struct CasterObject {
+        CM2Model* model;
+        CAaBox box;
+        uint64_t guid;
+    };
+    std::vector<CasterObject> s_objects;
+
+    int32_t CollectObject(WOWGUID guid, void* param) {
+        CGObject_C* object = ClntObjMgrObjectPtr(guid, TYPEMASK_GAMEOBJECT, __FILE__, __LINE__);
+
+        if (!object) {
+            return 1;
+        }
+
+        const CGGameObjectData* data = static_cast<CGGameObject_C*>(object)->m_gameObject;
+        const int type = data ? data->m_typeID : -1;
+
+        if (type < 0 || type == 0 || type == 11 || type == 15 || type == 33) {  // door, transport, map object transport, destructible building
+            return 1;
+        }
+
+        CM2Model* model = object->GetObjectModel();
+
+        if (!model || !model->m_shared || !model->m_shared->m_data) {
+            return 1;
+        }
+
+        const CAaBox& e = model->m_shared->m_data->m_bounds.m_extent;
+        CasterObject o;
+        o.model = model;
+        o.guid = guid.m_guid;
+        o.box.b = C3Vector(1e30f, 1e30f, 1e30f);
+        o.box.t = C3Vector(-1e30f, -1e30f, -1e30f);
+
+        for (int k = 0; k < 8; k++) {
+            const C3Vector corner = C3Vector(k & 1 ? e.t.x : e.b.x, k & 2 ? e.t.y : e.b.y, k & 4 ? e.t.z : e.b.z) * model->m_worldTransform;
+            o.box.b = C3Vector(std::fmin(o.box.b.x, corner.x), std::fmin(o.box.b.y, corner.y), std::fmin(o.box.b.z, corner.z));
+            o.box.t = C3Vector(std::fmax(o.box.t.x, corner.x), std::fmax(o.box.t.y, corner.y), std::fmax(o.box.t.z, corner.z));
+        }
+
+        static_cast<std::vector<CasterObject>*>(param)->push_back(o);
+        return 1;
+    }
 
     // What a light's map is drawn from (into g.out when set); the surroundings' signature either way.
     uint32_t Gather(Gathered& g) {
@@ -933,6 +984,27 @@ namespace {
             }
         }
 
+        // The game objects (this frame's, collected by AssignShadows), as the doodads: where one stands goes
+        // into the signature too (one put down or moved: the map again).
+        for (const CasterObject& o : s_objects) {   // empty without doodads casting
+            if (!BoxReaches(o.box, g.centre, g.radius) || Holds(o.box, g.centre, 0.1f)) {
+                continue;
+            }
+
+            CM2Model* model = o.model;
+            const bool ready = model->m_shared && model->m_shared->m_data && model->m_shared->m_skinData && model->IsLoaded(0, 0);
+            const C44Matrix& at = model->m_worldTransform;
+            h = Mix(h, o.guid);
+            h = Mix(h, ready ? 3 : 4);
+            h = Mix(h, (static_cast<uint64_t>(static_cast<int64_t>(at.d0 * 4.0f)) << 42) ^ (static_cast<uint64_t>(static_cast<int64_t>(at.d1 * 4.0f)) << 21)
+                           ^ static_cast<uint64_t>(static_cast<int64_t>(at.d2 * 4.0f)));
+
+            if (ready) {
+                g.doodadCount++;
+                h = AddModel(g, model, at, h);
+            }
+        }
+
         return h;
     }
 
@@ -978,6 +1050,13 @@ namespace {
 
         if (s_shadowSlots.size() != s_shadowSlotCount) {
             s_shadowSlots.assign(s_shadowSlotCount, ShadowSlot{});
+        }
+
+        // The game objects that cast, for this frame's gatherings.
+        s_objects.clear();
+
+        if (s_settings.shadow_doodads != WXL_FALSE) {
+            ClntObjMgrEnumVisibleObjects(&CollectObject, &s_objects);
         }
 
         // Where each keyed light stands.
