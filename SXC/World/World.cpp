@@ -200,7 +200,7 @@ namespace {
         out->subzone_text = "";
 
         const WOWGUID guid = ClntObjMgrGetActivePlayer();
-        CGPlayer_C* player = guid ? static_cast<CGPlayer_C*>(ClntObjMgrObjectPtr(guid, TYPEMASK_PLAYER, __FILE__, __LINE__)) : nullptr;
+        CGPlayer_C* player = guid ? static_cast<CGPlayer_C*>(ClntObjMgrObjectPtr(guid, TYPE_PLAYER, __FILE__, __LINE__)) : nullptr;
 
         if (player) {
             out->in_world = WXL_TRUE;
@@ -566,9 +566,9 @@ namespace {
 
     int32_t CollectUnit(WOWGUID guid, void* param) {
         UnitQuery& q = *static_cast<UnitQuery*>(param);
-        CGObject_C* object = ClntObjMgrObjectPtr(guid, TYPEMASK_OBJECT, __FILE__, __LINE__);
+        CGObject_C* object = ClntObjMgrObjectPtr(guid, TYPE_OBJECT, __FILE__, __LINE__);
 
-        if (!object || !(object->m_obj->m_type & TYPEMASK_UNIT)) {
+        if (!object || !(object->m_obj->m_type & TYPE_UNIT)) {
             return 1;
         }
 

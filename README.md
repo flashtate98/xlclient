@@ -6,7 +6,7 @@
 
 [![Client](https://img.shields.io/badge/client-3.3.5a%20(12340)-orange.svg)](#-what-it-is)
 [![Target](https://img.shields.io/badge/target-x64-lightgrey.svg)](#-building)
-[![ABI](https://img.shields.io/badge/ABI-0.2-blue.svg)](https://github.com/WarcraftXL/sdk)
+[![ABI](https://img.shields.io/badge/ABI-0.1.20-blue.svg)](https://github.com/WarcraftXL/sdk)
 [![Runtime](https://img.shields.io/badge/runtime-WarcraftXL%20core-blue.svg)](https://github.com/WarcraftXL/core)
 
 </div>
@@ -21,7 +21,7 @@
 ## 🚀 Overview
 
 A 64-bit `WowClient64.exe` that plays like the original and loads mods written against the
-[WarcraftXL SDK](https://github.com/WarcraftXL/sdk). It is a hard fork of
+[WarcraftXL SDK](https://github.com/WarcraftXL/sdk). It is a fork of
 [wowdecomp](https://github.com/SatyPardus/wowdecomp), the C++ decompilation of `Wow.exe`, with
 [WarcraftXL core](https://github.com/WarcraftXL/core) linked in: the same runtime that loads into
 the stock 32-bit client by detour is called here by the client's own source.
@@ -48,6 +48,7 @@ the stock 32-bit client by detour is called here by the client's own source.
 - [Adding a seam](#-adding-a-seam)
 - [Layout](#-layout)
 - [Troubleshooting](#-troubleshooting)
+- [Contributors](#-contributors)
 - [License](#-license)
 
 ## ⚡ Building
@@ -85,6 +86,10 @@ The client and its runtime are written to `bin/Win/`:
 | `Wow64.exe` | the client without it (`--target Wow`) |
 | `WarcraftXL.dll` | the runtime, built from `../core` as `win-x64` |
 | `XvidDecoder.dll` | the cinematic decoder |
+| `Mods/wxl.lua/` | the runtime of the Lua mods, built from `../sdk/lua`: a Lua mod needs nothing else |
+
+The first configure downloads LuaJIT, which `wxl.lua` embeds, at a fixed commit; core's README
+says how to give it one already built instead.
 
 The decompiled sources carry around a thousand warning sites of their own (narrowing conversions,
 enumerator values, unreferenced parameters); the fork does not try to silence them. The code under
@@ -102,11 +107,12 @@ Win32; the seam calls compile to nothing there.
 ## 📦 Installing
 
 1. Copy the `Data` folder of your 3.3.5a client into `bin/Win/`, so that `bin/Win/Data/` holds
-   the `.MPQ` archives, or copy `WowClient64.exe`, `WarcraftXL.dll` and `XvidDecoder.dll` into a
-   folder that already has one.
+   the `.MPQ` archives, or copy `WowClient64.exe`, `WarcraftXL.dll`, `XvidDecoder.dll` and the
+   `Mods/wxl.lua/` folder into a folder that already has one.
 2. Point `Data/<locale>/realmlist.wtf` at the server you want to connect to.
 3. Copy the mods you want into `Mods/` next to the executable, each as its own folder with a
-   `mod.json` and `bin/x64/<name>.dll`. The SDK's template builds exactly that shape.
+   `mod.json` and `bin/x64/<name>.dll`. The SDK's template builds exactly that shape. A Lua mod is
+   a folder with its `init.lua`, run by `Mods/wxl.lua/`.
 4. Start `WowClient64.exe`. The runtime's log is `Logs/WarcraftXL.log` next to it; the client's own
    logs are in the same folder.
 
@@ -182,10 +188,16 @@ NOTICE.md                provenance and what is, and is not, licensed
 | `refused … requires service wxl.hook` | the mod wants to detour a named point; here they are seams, so subscribe to the events they raise instead |
 | Win32: 8 unresolved externals | expected at this fork point, see [Win32](#win32) |
 
+## 🤝 Contributors
+
+Upstream's contributors are credited in [UPSTREAM.md](UPSTREAM.md). Tyrallis brought the model and
+appearance seams, skins over 65535 indices, the optional geometry's geoset ids and textures over
+4 MB (pull request #1).
+
 ## 📄 License
 
 This tree is a decompilation and carries no license; [NOTICE.md](NOTICE.md) says why and what that
-implies. The runtime it links is [WarcraftXL core](https://github.com/WarcraftXL/core), GPLv3; the
+implies. The runtime it links is [WarcraftXL core](https://github.com/WarcraftXL/core), MIT; the
 contract mods are written against is [WarcraftXL sdk](https://github.com/WarcraftXL/sdk), MIT.
 
 <div align="center">

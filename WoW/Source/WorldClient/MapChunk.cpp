@@ -1,4 +1,5 @@
 #include "MapChunk.h"
+#include "WoW/Source/WorldClient/WorldConstants.h"
 #include "WoW/Source/WorldClient/DetailDoodad.h"
 #include "WoW/Source/WorldClient/CDetailDoodadData.h"
 #include "Engine/Source/Tempest/CRandom.h"
@@ -249,18 +250,18 @@ void CMapChunk::InitializeVertexGrid() {
     C3Vector* vertex = CMapChunk::vertexList;
 
     for (int32_t row = 0; row < 9; row++) {
-        float x = row * -4.1666665f;
+        float x = row * -SMOLTILE_SIZE;
 
         for (int32_t col = 0; col < 9; col++) {
             vertex->x = x;
-            vertex->y = 0.0f - col * 4.1666665f;
+            vertex->y = 0.0f - col * SMOLTILE_SIZE;
             vertex++;
         }
 
         if (row < 8) {
             for (int32_t col = 0; col < 8; col++) {
-                vertex->x = x - 2.0833333f;
-                vertex->y = 0.0f - col * 4.1666665f - 2.0833333f;
+                vertex->x = x - HALF_SMOLTILE_SIZE;
+                vertex->y = 0.0f - col * SMOLTILE_SIZE - HALF_SMOLTILE_SIZE;
                 vertex++;
             }
         }
@@ -360,14 +361,14 @@ void CMapChunk::CreateVerticesWorld(CGxVertexPN* v, const C3Vector& offset) {
     float top = 17066.666f - this->m_cOffset.y * 33.333332f;
     rows[0] = top;
     cols[0] = left;
-    rows[1] = top - 4.1666665f;
+    rows[1] = top - SMOLTILE_SIZE;
     rows[2] = top - 8.333333f;
     rows[3] = top - 12.5f;
     rows[4] = top - 16.666666f;
     rows[5] = top - 20.833332f;
     rows[6] = top - 25.0f;
     rows[7] = top - 29.166666f;
-    cols[1] = left - 4.1666665f;
+    cols[1] = left - SMOLTILE_SIZE;
     cols[2] = left - 8.333333f;
     cols[3] = left - 12.5f;
     cols[4] = left - 16.666666f;
@@ -396,8 +397,8 @@ void CMapChunk::CreateVerticesWorld(CGxVertexPN* v, const C3Vector& offset) {
 
         if (row < 8) {
             for (int32_t col = 0; col < 8; col++) {
-                v->m_position.x = rows[row] - 2.0833333f;
-                v->m_position.y = cols[col] - 2.0833333f;
+                v->m_position.x = rows[row] - HALF_SMOLTILE_SIZE;
+                v->m_position.y = cols[col] - HALF_SMOLTILE_SIZE;
                 v->m_position.z = this->m_topLeftCoords.z + height[col];
                 v->m_normal.x = normals[3 * col + 0] * 0.0078740157f;
                 v->m_normal.y = normals[3 * col + 1] * 0.0078740157f;
@@ -421,14 +422,14 @@ void CMapChunk::CreateVerticesWorld(CGxVertexPNC* v, const C3Vector& offset) {
     float top = 17066.666f - this->m_cOffset.y * 33.333332f;
     rows[0] = top;
     cols[0] = left;
-    rows[1] = top - 4.1666665f;
+    rows[1] = top - SMOLTILE_SIZE;
     rows[2] = top - 8.333333f;
     rows[3] = top - 12.5f;
     rows[4] = top - 16.666666f;
     rows[5] = top - 20.833332f;
     rows[6] = top - 25.0f;
     rows[7] = top - 29.166666f;
-    cols[1] = left - 4.1666665f;
+    cols[1] = left - SMOLTILE_SIZE;
     cols[2] = left - 8.333333f;
     cols[3] = left - 12.5f;
     cols[4] = left - 16.666666f;
@@ -471,8 +472,8 @@ void CMapChunk::CreateVerticesWorld(CGxVertexPNC* v, const C3Vector& offset) {
 
         if (row < 8) {
             for (int32_t col = 0; col < 8; col++) {
-                v->m_position.x = rows[row] - 2.0833333f;
-                v->m_position.y = cols[col] - 2.0833333f;
+                v->m_position.x = rows[row] - HALF_SMOLTILE_SIZE;
+                v->m_position.y = cols[col] - HALF_SMOLTILE_SIZE;
                 v->m_position.z = this->m_topLeftCoords.z + *height;
                 v->m_normal.x = normals[0] * 0.0078740157f;
                 v->m_normal.y = normals[1] * 0.0078740157f;
@@ -989,7 +990,7 @@ void CMapChunk::CreateRefs(CMapArea* area, uint32_t* mcrfPtr, uint32_t doodadRef
 
             if (proxy.m_sphere.r < 0.001f) {
                 proxy.m_sphere.r = 50.0f;
-                SysMsgPrintf(STATUS_ERROR, 2, "Destructible building WMO(%s) has invalid geobox", &area->m_wmoFileNames[area->m_wmoFilenamesOffsets[def->m_nameId]]);
+                SysMsgPrintf(SYSMSG_ERROR, 2, "Destructible building WMO(%s) has invalid geobox", &area->m_wmoFileNames[area->m_wmoFilenamesOffsets[def->m_nameId]]);
             }
 
             World::FindOrCreateDestructibleProxy(&proxy);
@@ -1166,8 +1167,8 @@ void CMapChunk::CreateDetailDoodads() {
             shadeCenter = shadeCorner + 9 * sizeof(uint32_t);
         }
 
-        float offsetX = y * -4.1666665f;
-        float offsetY = x * -4.1666665f;
+        float offsetX = y * -SMOLTILE_SIZE;
+        float offsetY = x * -SMOLTILE_SIZE;
 
         verts[0] = C3Vector(CMap::s_subchunkCoords[4].x + offsetX, CMap::s_subchunkCoords[4].y + offsetY, CMap::s_subchunkCoords[4].z);
         verts[0].z = height[9];
@@ -1235,8 +1236,8 @@ void CMapChunk::CreateDetailDoodads() {
     const float steepest = SXC::Grass::SteepestGround();
 
     auto placePlant = [&](uint32_t cellBase, float cellX, float cellY, uint32_t id, float u, float v) {
-        float px = u * 2.0833333f + 2.0833333f;
-        float py = v * 2.0833333f + 2.0833333f;
+        float px = u * HALF_SMOLTILE_SIZE + HALF_SMOLTILE_SIZE;
+        float py = v * HALF_SMOLTILE_SIZE + HALF_SMOLTILE_SIZE;
 
         CDetailDoodadData* data = CDetailDoodad::s_doodadList[id];
         position.x = -py;
@@ -1249,7 +1250,7 @@ void CMapChunk::CreateDetailDoodads() {
             tri = 1;
         }
 
-        if (px - 4.1666665f - -py > 0.0f) {
+        if (px - SMOLTILE_SIZE - -py > 0.0f) {
             tri += 2;
         }
 
@@ -1303,9 +1304,9 @@ void CMapChunk::CreateDetailDoodads() {
         color.a = 0xFF;
 
         if (this->m_shadowMap) {
-            float shadowX = (px + cellX) * 1.92f;
+            float shadowX = (px + cellX) * OO_COORD_TO_SHADOW;
             int32_t sx = CMath::fint_(shadowX - 0.5f);
-            float shadowY = (py + cellY) * 1.92f;
+            float shadowY = (py + cellY) * OO_COORD_TO_SHADOW;
             int32_t sy = CMath::fint_(shadowY - 0.5f);
 
             if (this->m_shadowMap[8 * sy + (sx >> 3)] & (1 << (sx & 7))) {
@@ -1343,8 +1344,8 @@ void CMapChunk::CreateDetailDoodads() {
         for (int32_t a = 0; a < 4; a++) {
             for (int32_t b = 0; b < 4; b++) {
                 float weights[4] = {};
-                const float wx = this->m_topLeftCoords.x - (y + (a + 0.5f) * 0.25f) * 4.1666665f;
-                const float wy = this->m_topLeftCoords.y - (x + (b + 0.5f) * 0.25f) * 4.1666665f;
+                const float wx = this->m_topLeftCoords.x - (y + (a + 0.5f) * 0.25f) * SMOLTILE_SIZE;
+                const float wy = this->m_topLeftCoords.y - (x + (b + 0.5f) * 0.25f) * SMOLTILE_SIZE;
                 const int32_t n = SXC::WorldApi::LayerWeights(wx, wy, weights, 4);
 
                 for (int32_t l = 0; l < n; l++) {
@@ -1379,8 +1380,8 @@ void CMapChunk::CreateDetailDoodads() {
         }
 
         uint32_t cellBase = 4 * (x + 8 * y);
-        float cellX = x * 4.1666665f;
-        float cellY = y * 4.1666665f;
+        float cellX = x * SMOLTILE_SIZE;
+        float cellY = y * SMOLTILE_SIZE;
 
         if (painted) {
             for (uint32_t layer = 0; layer < this->m_header->m_nLayers && layer < 4; layer++) {
@@ -1406,8 +1407,8 @@ void CMapChunk::CreateDetailDoodads() {
 
                     // The layer's share where the plant would stand.
                     float weights[4] = {};
-                    const float wx = this->m_topLeftCoords.x - (v * 2.0833333f + 2.0833333f) - cellY;
-                    const float wy = this->m_topLeftCoords.y - (u * 2.0833333f + 2.0833333f) - cellX;
+                    const float wx = this->m_topLeftCoords.x - (v * HALF_SMOLTILE_SIZE + HALF_SMOLTILE_SIZE) - cellY;
+                    const float wy = this->m_topLeftCoords.y - (u * HALF_SMOLTILE_SIZE + HALF_SMOLTILE_SIZE) - cellX;
 
                     if (SXC::WorldApi::LayerWeights(wx, wy, weights, 4) <= static_cast<int32_t>(layer) || weights[layer] < minShare || keep >= weights[layer]) {
                         continue;

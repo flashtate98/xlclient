@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <cstring>
 #include "Engine/Source/BlizzardCore/SFile2-Core.h"
+#include "WarcraftXL/Seams.h"
 #include "Engine/Source/BLPFile/blp.h"
 #include "Engine/Source/Event/Event.h"
 #include "Engine/Source/Gx/CGxDevice/CGxDevice.h"
@@ -96,6 +97,11 @@ static int32_t s_gxTexCacheMaxSize;
 
 // STATIC: 0x00B49CA0
 static uint32_t s_asyncLoadBufferUsed;
+
+// The edge of the largest image the shared decode scratch (s_mipBits) holds, and so of the largest
+// mip a texture loads at: a texture is never decoded larger than the scratch, so a 2048 file (later
+// models ship them) loads whole instead of overrunning it.
+static const uint32_t s_maxImageSize = 2048;
 
 // STATIC: 0x00B49CA4
 static TSHashTableReuse<CTexture, HASHKEY_TEXTUREFILE> s_textureCache;
@@ -396,14 +402,14 @@ TEXFILETYPE TextureDiscoverFileType(const char* fileName) {
     const char* extension = SStrChrR(const_cast<char*>(fileName), '.');
 
     if (!extension || SStrLen(extension) != 4) {
-        return TEXFILE_UNKNOWN;
+        return TEXFILETYPE_UNKNOWN;
     }
 
     if (!SStrCmpI(extension, ".TGA", STORM_MAX_STR)) {
-        return TEXFILE_TGA;
+        return TEXFILETYPE_TGA;
     }
 
-    return SStrCmpI(extension, ".BLP", STORM_MAX_STR) ? TEXFILE_UNKNOWN : TEXFILE_BLP;
+    return SStrCmpI(extension, ".BLP", STORM_MAX_STR) ? TEXFILETYPE_UNKNOWN : TEXFILETYPE_BLP;
 }
 
 // VERIFY: 813fa654 manual
@@ -414,7 +420,7 @@ TEXFILETYPE TexturePickAlternateFilename(const char* fileName, TEXFILETYPE type,
     }
 
     if (!type) {
-        return TEXFILE_UNKNOWN;
+        return TEXFILETYPE_UNKNOWN;
     }
 
     char* extension = SStrChrR(buffer, '.');
@@ -423,14 +429,14 @@ TEXFILETYPE TexturePickAlternateFilename(const char* fileName, TEXFILETYPE type,
         *extension = '\0';
     }
 
-    if (type == TEXFILE_TGA) {
+    if (type == TEXFILETYPE_TGA) {
         SStrPack(buffer, ".BLP", size);
-        return TEXFILE_BLP;
+        return TEXFILETYPE_BLP;
     }
 
-    if (type == TEXFILE_BLP) {
+    if (type == TEXFILETYPE_BLP) {
         SStrPack(buffer, ".TGA", size);
-        return TEXFILE_TGA;
+        return TEXFILETYPE_TGA;
     }
 
     return type;
@@ -516,7 +522,7 @@ void ResolveMipLevel(EGxTexCommand command, uint32_t width, uint32_t height, uin
     // STATIC: 0x00B4A1E8
     static uint32_t s_emptyTexel;
 
-    if (command == GxTex_3) {
+    if (command == GxTex_Recreate) {
         return;
     }
 
@@ -618,6 +624,10 @@ void RequestImageDimensions(uint32_t* width, uint32_t* height, uint32_t* bestMip
     CGxCaps caps = g_theGxDevicePtr->Caps();
     uint32_t maxSize = caps.m_texMaxSize[0];
 
+    if (maxSize > s_maxImageSize) {
+        maxSize = s_maxImageSize;
+    }
+
     if (!maxSize) {
         SErrSetLastError(STORM_ERROR_INVALID_PARAMETER);
         return;
@@ -654,7 +664,7 @@ int32_t TextureLoadBlpMips(char* fileName, char* extension, int32_t flags, MipBi
     EGxTexFormat format = GxTex_Argb8888;
     PIXEL_FORMAT pixels = PIXEL_ARGB8888;
 
-    if (image.m_header.m_colorEncoding == 2) {
+    if (image.m_header.m_colorEncoding == COLOR_DXT) {
         pixels = static_cast<PIXEL_FORMAT>(image.m_header.m_preferredFormat);
 
         if (pixels == PIXEL_DXT1) {
@@ -1204,6 +1214,20 @@ void FillInSolidTexture(const CImVector& color, CTexture* texture) {
     SStrCopy(texture->m_filename, "SolidTexture", 260);
 }
 
+// Whether a texture file of `size` bytes may be read now, with `available` bytes of the 4 MB read
+// budget left. The budget's counter is given back on more paths than it is taken on and wraps,
+// which reads as room. A file larger than the whole budget (a 2048 DXT5 BLP is 5.6 MB) asks for
+// the whole budget, so it is read once nothing else is, instead of never.
+static bool AsyncTextureFits(uint32_t size, uint32_t available) {
+    return available >= (size < 0x400000 ? size : 0x400000);
+}
+
+// What is left of `available` once a file of `size` bytes was read: nothing, after a file that
+// took more than there was, rather than a wrapped counter every other file of the pass fits.
+static uint32_t AsyncTextureLeft(uint32_t size, uint32_t available) {
+    return size < available ? available - size : 0;
+}
+
 // VERIFY: f77dd4dd manual
 // OFFSET: 0x004B69E0
 void AsyncTextureHandler() {
@@ -1212,9 +1236,9 @@ void AsyncTextureHandler() {
     for (CAsyncObject* object = s_asyncLoadList.Head(); !s_asyncLoadList.IsEnd(object); ) {
         CAsyncObject* next = s_asyncLoadList.RawNext(object);
 
-        if (available >= object->m_size) {
+        if (AsyncTextureFits(object->m_size, available)) {
             AsyncTextureProcess(object, 0);
-            available -= object->m_size;
+            available = AsyncTextureLeft(object->m_size, available);
         }
 
         object = next;
@@ -1223,9 +1247,9 @@ void AsyncTextureHandler() {
     for (CAsyncObject* object = s_asyncTextureList.Head(); !s_asyncTextureList.IsEnd(object); ) {
         CAsyncObject* next = s_asyncTextureList.RawNext(object);
 
-        if (available >= object->m_size) {
+        if (AsyncTextureFits(object->m_size, available)) {
             AsyncTextureProcess(object, 0);
-            available -= object->m_size;
+            available = AsyncTextureLeft(object->m_size, available);
         }
 
         object = next;
@@ -1855,6 +1879,10 @@ int32_t PumpBlpTextureAsync(CTexture* texture, void* data) {
 // VERIFY: 85a7ce70 manual
 // OFFSET: 0x004B7E80
 void AsyncTextureSuccessCallback(CTexture* texture) {
+    if (wxl::seam::Listening(WXL_EV_TextureDecode)) {
+        wxl::seam::Texture::AsyncTextureSuccessCallback::Before(texture);
+    }
+
     if (!PumpBlpTextureAsync(texture, texture->m_asyncObject->m_buffer)) {
         if (!texture->m_status.IsEmpty()) {
             SysMsgAdd(&texture->m_status);
@@ -1890,13 +1918,13 @@ int32_t AsyncTextureStatus() {
 // VERIFY: f4a9a3e6 manual
 // OFFSET: 0x004B7F80
 void TextureInitialize() {
-    s_mipBits = static_cast<MipBits*>(SMemAlloc(MippedImgCalcSize(PIXEL_ARGB8888, 1024, 1024), __FILE__, __LINE__, 0));
+    s_mipBits = static_cast<MipBits*>(SMemAlloc(MippedImgCalcSize(PIXEL_ARGB8888, s_maxImageSize, s_maxImageSize), __FILE__, __LINE__, 0));
     AsyncFileReadAddPollHandler(AsyncTextureHandler);
     AsyncFileReadAddStatusHandler(AsyncTextureStatus);
     s_currentTime = OsGetAsyncTimeMs();
     s_gxTexCacheSize = 0;
     s_gxTexCacheMaxSize = 0;
-    EventRegisterEx(EVENT_ID_POLL, TextureUpdate, nullptr, 0.0f);
+    EventRegisterEx(EVENT_ID_POLL, TextureUpdate, nullptr, EVENT_PRIORITY_NORMAL);
 }
 
 // VERIFY: 7711ba71 manual
@@ -2242,7 +2270,7 @@ CTexture* CreateBlpAsync(char* extension, const char* fileName, uint32_t flags, 
 
     CAsyncObject* object = texture->m_asyncObject;
 
-    if (0x400000 - s_asyncLoadBufferUsed < object->m_size) {
+    if (!AsyncTextureFits(object->m_size, 0x400000 - s_asyncLoadBufferUsed)) {
         s_asyncTextureList.LinkNode(object, 2, nullptr);
     } else {
         AsyncTextureProcess(object, 0);
@@ -2474,6 +2502,10 @@ CTexture* CreateTgaTexture(const char* fileName, char* extension, int32_t flags,
 // VERIFY: 8821b223 manual
 // OFFSET: 0x004B9760
 CTexture* TextureCreate(const char* fileName, CGxTexFlags texFlags, CStatus* status, uint32_t flags) {
+    if (wxl::seam::Listening(WXL_EV_TextureLoad)) {
+        wxl::seam::Texture::Create::Before(fileName, WarcraftXL::Bits(texFlags), status, flags);
+    }
+
     if (!fileName) {
         DebugValidate("fileName");
         SErrSetLastError(STORM_ERROR_INVALID_PARAMETER);

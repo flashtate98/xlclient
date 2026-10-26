@@ -16,7 +16,7 @@ namespace
      *   2 Alpha         SRCALPHA / INVSRCALPHA  9 SrcAlphaOpaque    SRCALPHA / ZERO
      *   3 Add           SRCALPHA / ONE         10 NoAlphaAdd        ONE / ONE
      *   4 Mod           DSTCOLOR / ZERO        11 ConstantAlpha     CONSTANT_COLOR / ONE_MINUS_CONSTANT_COLOR
-     *   5 Mod2x         DSTCOLOR / SRCCOLOR
+     *   5 Mod2x         DSTCOLOR / SRCCOLOR    12 BlendAdd          ONE / INVSRCALPHA (WarcraftXL's, modern M2 blend 7)
      *   6 ModAdd        DSTCOLOR / ONE
      *
      * The same factors for alpha as for colour, op ADD on both: D3D9 with SEPARATEALPHABLENDENABLE
@@ -45,6 +45,7 @@ namespace
             case 9:  src = VK_BLEND_FACTOR_SRC_ALPHA;           dst = VK_BLEND_FACTOR_ZERO;                break;
             case 10: src = VK_BLEND_FACTOR_ONE;                 dst = VK_BLEND_FACTOR_ONE;                 break;
             case 11: src = VK_BLEND_FACTOR_CONSTANT_COLOR;      dst = VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR; break;
+            case 12: src = VK_BLEND_FACTOR_ONE;                 dst = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA; break;
             default: return false;
         }
 

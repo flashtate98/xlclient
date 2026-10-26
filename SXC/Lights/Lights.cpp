@@ -849,7 +849,7 @@ namespace {
     std::vector<CasterObject> s_objects;
 
     int32_t CollectObject(WOWGUID guid, void* param) {
-        CGObject_C* object = ClntObjMgrObjectPtr(guid, TYPEMASK_GAMEOBJECT, __FILE__, __LINE__);
+        CGObject_C* object = ClntObjMgrObjectPtr(guid, TYPE_GAMEOBJECT, __FILE__, __LINE__);
 
         if (!object) {
             return 1;

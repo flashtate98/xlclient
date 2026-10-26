@@ -569,7 +569,7 @@ void CGxDeviceVulkan::ITexUpload(CGxTex* texId) {
 // Mirrors CGxDeviceD3d::ITexForceRecreation (0x006A2AA0): every texture with an image (every
 // render target, with `all` every texture) loses it -- retired by the last frame that named it --
 // and is marked for creation and a whole update, its callback told the texels were dropped
-// (GxTex_3); the next bind makes it again. Then the engine's texture-recreation callbacks.
+// (GxTex_Recreate); the next bind makes it again. Then the engine's texture-recreation callbacks.
 void CGxDeviceVulkan::ITexForceRecreation(int32_t all) {
     for (CGxTex* texId = this->m_textures.Head(); texId; texId = this->m_textures.Next(texId)) {
         if (!texId->m_apiSpecificData || !(all || texId->m_flags.m_renderTarget)) {
@@ -585,7 +585,7 @@ void CGxDeviceVulkan::ITexForceRecreation(int32_t all) {
         if (texId->m_userFunc) {
             uint32_t texelStrideInBytes;
             const void* texels;
-            texId->m_userFunc(GxTex_3, texId->m_width, texId->m_height, 0, 0, texId->m_userArg, texelStrideInBytes, texels);
+            texId->m_userFunc(GxTex_Recreate, texId->m_width, texId->m_height, 0, 0, texId->m_userArg, texelStrideInBytes, texels);
         }
 
         g_stats.recreated++;

@@ -315,11 +315,11 @@ void CGxDeviceVulkan::ITexTransforms(pipelines::Draw& d) {
         const C44Matrix& tex = xform.m_mtx[xform.m_level];
         C44Matrix m;
 
-        if (gen == GxTexGen_ObjectLinear || gen == GxTexGen_EyeLinear || gen == GxTexGen_Unk3) {
+        if (gen == GxTexGen_ObjectLinear || gen == GxTexGen_World || gen == GxTexGen_View) {
             const CGxMatrixStack& world = this->m_xforms[GxXform_World];
             const CGxMatrixStack& view = this->m_xforms[GxXform_View];
             m = gen == GxTexGen_ObjectLinear ? tex
-                : gen == GxTexGen_EyeLinear  ? world.m_mtx[world.m_level] * tex
+                : gen == GxTexGen_World  ? world.m_mtx[world.m_level] * tex
                                              : world.m_mtx[world.m_level] * view.m_mtx[view.m_level] * tex;
             d.params[1] = static_cast<float>(static_cast<uint32_t>(d.params[1]) | (4u << stage));
         } else if (gen != GxTexGen_Disabled) {
@@ -389,11 +389,11 @@ bool CGxDeviceVulkan::IDecalOnCover(pipelines::Draw& d, const SXC::Cover::Decal&
             const C44Matrix& tex = xform.m_mtx[xform.m_level];
             C44Matrix m;
 
-            if (gen == GxTexGen_EyeLinear) {
+            if (gen == GxTexGen_World) {
                 m = view.AffineInverse() * tex;
             } else if (gen == GxTexGen_ObjectLinear) {
                 m = view.AffineInverse() * world.Inverse() * tex;
-            } else if (gen == GxTexGen_Unk3) {
+            } else if (gen == GxTexGen_View) {
                 m = tex;
             } else {
                 continue;   // no coordinates from the position: the stage's reads stay at (0, 0)
@@ -451,7 +451,7 @@ bool CGxDeviceVulkan::IDecalOnCover(pipelines::Draw& d, const SXC::Cover::Decal&
 // enable: the depth function (ALWAYS when the test is off), the depth write, the colour write mask,
 // the culling (clamped to the table's three entries), the fill mode, D3D's DEPTHBIAS (the negated
 // GxRs_PolygonOffset, a depth-range value, scaled to the depth buffer's step) and D3D's BLENDFACTOR
-// (the Unk84 value replicated to every channel).
+// (the GxRs_BlendFactor value replicated to every channel).
 void CGxDeviceVulkan::IRenderStates(pipelines::Draw& d) {
     const uint32_t master = this->m_appMasterEnables;
 
@@ -482,7 +482,7 @@ void CGxDeviceVulkan::IRenderStates(pipelines::Draw& d) {
         d.depthBias = -this->m_appRenderStates[GxRs_PolygonOffset].m_value.m_data.f[0] * step;
     }
 
-    const float factor = this->m_appRenderStates[Unk84].m_value.m_data.f[0];
+    const float factor = this->m_appRenderStates[GxRs_BlendFactor].m_value.m_data.f[0];
     const float quantised = static_cast<float>(static_cast<uint32_t>(factor * 255.0f) & 0xFF) / 255.0f;
     d.blendConstant[0] = quantised;
     d.blendConstant[1] = quantised;

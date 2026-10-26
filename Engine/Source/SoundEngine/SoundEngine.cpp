@@ -17,6 +17,8 @@
 #include "Engine/Source/Storm/Source/SLock.h"
 #include "Engine/Source/Tempest/CMath.h"
 #include "Engine/Source/Tempest/CRandom.h"
+#include "GameVersion.h"
+#include "WarcraftXL/Seams.h"
 
 // STATIC: 0x00D4383C
 int32_t SE2::sm_bCaptureInitialized;
@@ -2762,6 +2764,8 @@ void SE2::StopAllSounds(int32_t restart) {
         }
 
         if (tries >= 20) {
+            TSGrowableArray<FMOD::Sound*> pendingRelease;
+
             s_soundListCritSect.Enter();
 
             SESoundInternal* sound = s_soundList.Head();
@@ -2771,6 +2775,23 @@ void SE2::StopAllSounds(int32_t restart) {
                     sound = s_soundList.Next(sound);
                 } else {
                     SESoundInternal* next = s_soundList.Next(sound);
+
+                    if (sound->m_type == SESOUNDTYPE_FILE) {
+                        SEFileSound* fileSound = static_cast<SEFileSound*>(sound);
+
+                        if (!fileSound->m_waveData && fileSound->m_sound) {
+                            *pendingRelease.New() = fileSound->m_sound;
+                            fileSound->m_sound = nullptr;
+                        }
+                    } else if (sound->m_type == SESOUNDTYPE_MEMORY) {
+                        SEMemorySound* memorySound = static_cast<SEMemorySound*>(sound);
+
+                        if (memorySound->m_sound) {
+                            *pendingRelease.New() = memorySound->m_sound;
+                            memorySound->m_sound = nullptr;
+                        }
+                    }
+
                     sound->~SESoundInternal();
                     SMemFree(sound, typeid(SESoundInternal).raw_name(), SLOG_OBJECT, 0);
                     sound = next;
@@ -2778,6 +2799,11 @@ void SE2::StopAllSounds(int32_t restart) {
             }
 
             s_soundListCritSect.Leave();
+
+            for (uint32_t i = 0; i < pendingRelease.Count(); i++) {
+                pendingRelease[i]->release();
+            }
+
             break;
         }
     }
@@ -2788,6 +2814,10 @@ void SE2::StopAllSounds(int32_t restart) {
 // VERIFY: 675bfdff manual
 // OFFSET: 0x0087EE60
 int32_t SE2::CreateWaveData(FMOD::System* system, const char* filename, FMOD_MODE mode, SESound* sound, FMOD::SoundGroup* loadSoundGroup, FMOD::SoundGroup* soundGroup, bool randomStart, int32_t priority, int32_t reverb, bool streaming, uint32_t decodeBufferSize, int32_t software, float coneInsideAngle, float coneOutsideAngle, float coneOutsideVolume, const C3Vector* coneOrientation) {
+    if (wxl::seam::Listening(WXL_EV_SoundFileLoad)) {
+        wxl::seam::Sound::CreateWaveData::Before(system, filename, mode, sound, loadSoundGroup, soundGroup, randomStart, priority, reverb, streaming, decodeBufferSize, software, coneInsideAngle, coneOutsideAngle, coneOutsideVolume, coneOrientation);
+    }
+
     s_createCritSect.Enter();
 
     SEWaveDataNode* waveData = nullptr;
@@ -2859,6 +2889,9 @@ int32_t SE2::CreateWaveData(FMOD::System* system, const char* filename, FMOD_MOD
             mode |= FMOD_MPEGSEARCH;
             cacheable = false;
             exinfo.suggestedsoundtype = FMOD_SOUND_TYPE_MPEG;
+        } else if (!SStrCmpI(extension, ".ogg", STORM_MAX_STR)) {
+            // WarcraftXL: retail's sounds (ported spells and creatures) are Ogg Vorbis
+            exinfo.suggestedsoundtype = FMOD_SOUND_TYPE_OGGVORBIS;
         }
     }
 
@@ -3118,7 +3151,7 @@ int32_t SE2::Init(int32_t maxChannels, bool (*positionCallback)(uint64_t, C3Vect
     OsDeleteFile("Logs\\Sound.log");
 
     if (!restart) {
-        SE2::Log_Write(__LINE__, __FILE__, FMOD_OK, "=> Version %s (%s) %s", "3.3.5", "12340", "Jun 24 2010");
+        SE2::Log_Write(__LINE__, __FILE__, FMOD_OK, "=> Version %s (%s) %s", GAME_VERSION, GAME_BUILD_STRING, GAME_BUILD_DATE);
     }
 
     SE2::Log_Write(__LINE__, __FILE__, FMOD_OK, " ");

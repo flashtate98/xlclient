@@ -2,7 +2,7 @@
   "id": "sxc.bridge",
   "name": "SXC bridge",
   "version": "1.0.0",
-  "abi": "0.5",
+  "abi": "0.1.15",
   "description": "Publishes the client's sxc.* services (data, settings, ui) for other mods. Only does something in an SXC build of the client.",
   "binaries": {
     "win-x64": "bin/x64/sxc-bridge.dll"

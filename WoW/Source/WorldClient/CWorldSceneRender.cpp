@@ -29,6 +29,7 @@
 #include "Engine/Source/ShaderEffect/ShadowCache.h"
 #include "Engine/Source/Tempest/C44Matrix.h"
 #include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler
+#include "WarcraftXL/Profile.h"
 
 // VERIFY: 78b69e1a manual
 // OFFSET: 0x007D5610
@@ -73,6 +74,7 @@ void CWorldScene::Render(const C3Vector& cameraPos, float time) {
     namespace prof = SXC::Profiler;  // SXC: the frame profiler's scopes below
     prof::Enter(prof::kCulling);
 
+    WXL_CORE_ZONE("WorldScene.Render");
     if (!CWorldScene::s_viewerMapObjDef) {
         CWorldScene::ComputeExteriorSortDistances();
     }
@@ -176,7 +178,7 @@ void CWorldScene::Render(const C3Vector& cameraPos, float time) {
         clearColor.a = 0x00;
     }
 
-    GxSceneClear(3, clearColor);
+    GxSceneClear(GxBufferBit_Color | GxBufferBit_Depth, clearColor);
     { prof::Scope p(prof::kSceneObjects); CWorldScene::s_unk_B2EB68.Render(); }
 
     if (CWorldScene::camTargetEntity) {

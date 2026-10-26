@@ -3,6 +3,8 @@
 #include "Engine/Source/Storm/H/storm.h"
 #include "SXC/Sky/Sky.h"  // SXC:
 
+static const float MAXMINUTES_PER_SECOND = 60.0f;
+
 // STATIC: 0x00D37F98
 CGameTime g_clientGameTime;
 
@@ -34,8 +36,8 @@ float CGameTime::GameTimeSetMinutesPerSecond(float minutesPerSecond) {
 
     if (minutesPerSecond < 1.0f / 60.0f) {
         this->m_minutesPerSecond = 1.0f / 60.0f;
-    } else if (minutesPerSecond > 60.0f) {
-        this->m_minutesPerSecond = 60.0f;
+    } else if (minutesPerSecond > MAXMINUTES_PER_SECOND) {
+        this->m_minutesPerSecond = MAXMINUTES_PER_SECOND;
     } else {
         this->m_minutesPerSecond = minutesPerSecond;
     }

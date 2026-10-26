@@ -505,7 +505,7 @@ namespace SXC::Cover::Trails {
         }
 
         s_stats.footsteps++;
-        CGUnit_C* unit = static_cast<CGUnit_C*>(ClntObjMgrObjectPtr(WOWGUID{ guid }, TYPEMASK_UNIT, __FILE__, __LINE__));
+        CGUnit_C* unit = static_cast<CGUnit_C*>(ClntObjMgrObjectPtr(WOWGUID{ guid }, TYPE_UNIT, __FILE__, __LINE__));
 
         if (!unit || !Grounded(unit) || model != Carrier(unit)) {
             return;
@@ -596,7 +596,7 @@ namespace SXC::Cover::Trails {
         uint32_t feet = 0, parts = 0;
 
         for (auto it = s_walkers.begin(); it != s_walkers.end();) {
-            CGUnit_C* unit = static_cast<CGUnit_C*>(ClntObjMgrObjectPtr(WOWGUID{ it->first }, TYPEMASK_UNIT, __FILE__, __LINE__));
+            CGUnit_C* unit = static_cast<CGUnit_C*>(ClntObjMgrObjectPtr(WOWGUID{ it->first }, TYPE_UNIT, __FILE__, __LINE__));
             Walker& w = it->second;
 
             // Gone, or standing on another model now (a morph, mounting, dismounting): its feet are learnt
