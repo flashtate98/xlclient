@@ -37,7 +37,6 @@
 #include "Engine/Source/Tempest/CImVector.h"
 #include "Engine/Source/Tempest/CRandom.h"
 #include "WoW/Common/ComponentCore/ComponentUtils.h"
-#include "WoW/Common/ComponentCore/ShellRaces.h"
 #include "WoW/Common/TextureCache.h"
 #include "WoW/Source/DB/DBClient/DBClient.h"
 #include "WoW/Source/DB/Rec/CharHairGeosetsRec.h"
@@ -1748,11 +1747,6 @@ void CCharacterComponent::ReplaceExtraSkinTexture(const char* debug) {
 
     if (texture) {
         this->m_data.m_model->ReplaceTexture(8, texture);
-
-        // FlashWOW: shell races take the skin row's second texture as their body scales (slot 11).
-        if (ShellRaces::IsShellRace(this->m_data.m_preferences.m_raceID)) {
-            this->m_data.m_model->ReplaceTexture(11, texture);
-        }
         HandleClose(reinterpret_cast<HOBJECT>(texture));
     }
 }
@@ -3580,9 +3574,6 @@ void CCharacterComponent::GeosRenderPrep() {
         this->m_data.m_model->SetGeometryVisible(rec.m_geosetGroup[0] + 1801, rec.m_geosetGroup[0] + 1801, 1);
     }
 
-    // FlashWOW: customization pieces and armor shells for shell races (Drakonid).
-    ShellRaces::ApplyGeosets(this);
-
     this->m_data.m_model->OptimizeVisibleGeometry();
     this->m_flags &= ~0x4;
 }
@@ -4260,7 +4251,6 @@ CCharacterComponent::CCharacterComponent() {
     this->m_dirtySections = 0xFFFFFFFF;
     this->m_request = nullptr;
     this->m_baseSkinTexture = nullptr;
-    this->m_shellClothingTexture = nullptr; // FlashWOW
     this->m_gxTexFormat = CCharacterComponent::s_gxFormat;
     memset(this->m_itemDisplayID, 0, sizeof(this->m_itemDisplayID));
     memset(this->m_itemSlotForAttachSlot, 0xFF, sizeof(this->m_itemSlotForAttachSlot));
@@ -4281,8 +4271,6 @@ CCharacterComponent::~CCharacterComponent() {
         HandleClose(reinterpret_cast<HOBJECT>(this->m_baseSkinTexture));
         this->m_baseSkinTexture = nullptr;
     }
-
-    ShellRaces::DestroyClothing(this); // FlashWOW
 
     if (this->m_data.m_model) {
         this->m_data.m_model->Release();
@@ -4984,7 +4972,6 @@ void CCharacterComponent::ProcessFinishedRequest() {
     }
 
     this->UpdateSections();
-    ShellRaces::RefreshClothing(this); // FlashWOW: before the layer textures are released
 #if defined(WOWDECOMP_RETAIL_MODELS)
     // Not in the original: a Retail body takes the composed Retail skin sheet with the items over it.
     RetailCharacterBody(this);
@@ -5165,7 +5152,6 @@ void CCharacterComponent::RenderPrepSections() {
     }
 
     this->PrepSections();
-    ShellRaces::RefreshClothing(this); // FlashWOW: before the layer textures are released
 #if defined(WOWDECOMP_RETAIL_MODELS)
     // Not in the original: a Retail body takes the composed Retail skin sheet with the items over it.
     RetailCharacterBody(this);
@@ -5607,8 +5593,6 @@ bool CCharacterComponent::Init(ComponentData* data, const char* debug) {
         HandleClose(reinterpret_cast<HOBJECT>(this->m_baseSkinTexture));
         this->m_baseSkinTexture = nullptr;
     }
-
-    ShellRaces::DestroyClothing(this); // FlashWOW: rebuilt for the new race/model on next refresh
 
     uint32_t dataFlags = this->m_data.m_flags;
 
