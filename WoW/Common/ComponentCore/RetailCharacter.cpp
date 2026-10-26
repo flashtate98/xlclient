@@ -881,10 +881,6 @@ static void ApplyGlueScale(CCharacterComponent* character) {
 
 uint32_t StockRaceFor(uint32_t raceId);
 uint32_t RetailCharacterStockRace(uint32_t raceId) { return StockRaceFor(raceId); }
-bool RetailCharacterRaceHasRetailBody(uint32_t raceId) {
-    return RaceMap().count(raceId) != 0;
-}
-
 uint32_t RetailCharacterHelmetRace(const CCharacterComponent* character) {
     const uint32_t race = character->m_data.m_preferences.m_raceID;
     uint32_t retailRace = 0;

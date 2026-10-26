@@ -146,7 +146,6 @@
 #if defined(WOWDECOMP_RETAIL_MODELS)
 #include "WoW/Source/RetailCustomizationNet.h"
 #include "Engine/Source/Retail/LocalSource.h"
-#include "WoW/Common/ComponentCore/RetailCharacter.h"
 #include "Engine/Source/BlizzardCore/SFile2-Core.h"
 #include "Engine/Source/BlizzardCore/Source/System/Log/Log.h"
 #include <set>
@@ -919,43 +918,11 @@ static float GetExtraDisplayScale(const CreatureDisplayInfoRec* displayInfo) {
     return rec ? rec->m_creatureModelScale : 1.0f;
 }
 
-#if defined(WOWDECOMP_RETAIL_MODELS)
-// Not in the original: the size of a unit drawn with a Retail character body. The stock scales on the way
-// (the race display's scale for NPCs, CreatureModelData's model scale) were set to size the old meshes
-// (Tauren male 1.35, Tauren female model 1.25); Retail bodies are made to size, so only an NPC display's
-// own scale (a large named NPC) is kept. Anything else (no Retail body, a creature model) keeps its scale.
-static float RetailBodyScale(const CGUnit_C* unit, const CreatureDisplayInfoRec* displayInfo,
-    const CreatureModelDataRec* modelData, float scale) {
-    if (!displayInfo || !modelData || !modelData->m_modelName || !*modelData->m_modelName) return scale;
-    const CreatureDisplayInfoExtraRec* extra = g_creatureDisplayInfoExtraDB.GetRecord(displayInfo->m_extendedDisplayInfoID);
-    uint32_t race = 0;
-    if (extra) {
-        race = static_cast<uint32_t>(extra->m_displayRaceID);
-    } else {
-        // A player in its race's own display, not a morph.
-        race = unit->m_unit->m_unitFieldBytes0[0];
-        const uint32_t sex = unit->m_unit->m_unitFieldBytes0[2];
-        const ChrRacesRec* raceRec = g_chrRacesDB.GetRecord(race);
-        if (!raceRec || (sex ? raceRec->m_femaleDisplayID : raceRec->m_maleDisplayID) != displayInfo->m_id) return scale;
-    }
-    if (!RetailCharacterRaceHasRetailBody(race)) return scale;
-    std::string m2(modelData->m_modelName);
-    const auto dot = m2.find_last_of('.');
-    if (dot != std::string::npos) m2 = m2.substr(0, dot) + ".m2";
-    if (!Retail::Source().Handles(m2.c_str())) return scale;
-    if (!extra) return 1.0f;
-    return displayInfo->m_creatureModelScale > 0.0f ? displayInfo->m_creatureModelScale : 1.0f;
-}
-#endif
-
 // VERIFY: 411bfb59 auto
 // OFFSET: 0x0071C110
 float CGUnit_C::GetModelScale(const CreatureDisplayInfoRec* displayInfo, const CreatureModelDataRec* modelData) {
     CreatureFamilyRec* family = g_creatureFamilyDB.GetRecord(this->m_creatureCacheEntry ? this->m_creatureCacheEntry->m_family : 0);
     float scale = GetExtraDisplayScale(displayInfo) * displayInfo->m_creatureModelScale * modelData->m_modelScale;
-#if defined(WOWDECOMP_RETAIL_MODELS)
-    scale = RetailBodyScale(this, displayInfo, modelData, scale);
-#endif
     float fraction = 0.0f;
 
     if (scale <= 0.0f) {

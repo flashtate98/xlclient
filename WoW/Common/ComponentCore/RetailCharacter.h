@@ -98,9 +98,6 @@ uint32_t RetailCharacterHelmetRace(const CCharacterComponent* character);
 // drives), 0 for stock bodies. Used when the race has no CharacterFacialHairStyles rows.
 uint32_t RetailCharacterFacialCount(const CCharacterComponent* character);
 
-// Whether a client race gets a Retail body (races 1-11 and the races.csv mappings).
-bool RetailCharacterRaceHasRetailBody(uint32_t raceId);
-
 // Drops the stored choices of a component that is going away.
 void RetailCustomizationForget(const CCharacterComponent* character);
 
