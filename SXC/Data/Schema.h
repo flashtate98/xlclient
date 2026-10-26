@@ -91,6 +91,9 @@ namespace SXC::Data {
         // The file is not reloaded when it changes on disk (only by the Reload button): for tables whose
         // consumers can't take new data mid-session.
         Schema& NoHotReload();
+        // The file the table had under an older name: read while the new file doesn't exist yet (the
+        // first save writes the new one; the old one is left as it is).
+        Schema& FormerPath(const char* path);
 
         Field& Id(const char* name = "ID");
         Field& Int(const char* name);
@@ -112,6 +115,7 @@ namespace SXC::Data {
 
         const std::string& Name() const { return m_name; }
         const std::string& FilePath() const { return m_path; }
+        const std::string& GetFormerPath() const { return m_formerPath; }
         const std::string& GetDescription() const { return m_description; }
         bool HotReload() const { return m_hotReload; }
         uint32_t Columns() const { return m_columns; }
@@ -127,6 +131,7 @@ namespace SXC::Data {
 
         std::string m_name;
         std::string m_path;
+        std::string m_formerPath;
         std::string m_description;
         std::deque<Field> m_fields;  // a deque: the Field& handed out stay valid
         uint32_t m_columns = 0;

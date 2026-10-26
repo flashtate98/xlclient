@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstring>
 #include <deque>
 #include <string>
@@ -183,6 +184,8 @@ namespace sxc::data {
 
         Schema& Description(const char* text) { m_description = text ? text : ""; return *this; }
         Schema& NoHotReload() { m_flags |= SXC_SCHEMA_NO_HOT_RELOAD; return *this; }
+        /// A renamed table: its file under the former name, read until the first save writes the new one.
+        Schema& FormerPath(const char* path) { m_formerPath = path ? path : ""; return *this; }
 
         Field& Id(const char* name = "ID") { return Add(FieldType::Id, name); }
         Field& Int(const char* name) { return Add(FieldType::Int, name); }
@@ -233,6 +236,10 @@ namespace sxc::data {
 
             const sxc_schema schema = api->schema_begin(m_name.c_str(), m_path.c_str(), m_description.c_str(), m_flags);
 
+            if (!m_formerPath.empty() && api->struct_size >= offsetof(sxc_data_api, schema_former_path) + sizeof(api->schema_former_path)) {
+                api->schema_former_path(schema, m_formerPath.c_str());
+            }
+
             for (const Field& f : m_fields) {
                 sxc_field_desc desc = {};
                 desc.struct_size = sizeof(desc);
@@ -275,6 +282,7 @@ namespace sxc::data {
 
         std::string m_name;
         std::string m_path;
+        std::string m_formerPath;
         std::string m_description;
         uint32_t m_flags = 0;
         std::deque<Field> m_fields;  // a deque: the Field& handed out stay valid

@@ -68,18 +68,31 @@ typedef struct sxc_lights_kind
     uint32_t flags;           ///< reserved
 } sxc_lights_kind;
 
-/// Where a light goes (a DoodadLightAssignment row): on every model of a file.
+/// Where a light and / or an emitter go (a DoodadSourceAssignment row): on every model of a file.
 typedef struct sxc_lights_assignment
 {
     const char* model_path;   ///< the model file (case and / vs \ don't matter); copied
     uint32_t    attach_type;  ///< SXC_LIGHTS_ATTACH_*
     int32_t     attach_index; ///< the attachment point's ID, the bone index or the particle emitter index
     float       offset[3];    ///< yd from the attachment, in the model's space (scaled with it)
-    float       direction[3]; ///< spot: where the cone points, in the model's space
+    float       direction[3]; ///< spot: where the cone points; an emitter's direction (a draft); in the model's space
     uint32_t    light_id;     ///< a kind's id; 0 = no light (with the flag: only suppresses)
     uint32_t    flags;        ///< SXC_LIGHTS_SUPPRESS_MODEL_LIGHTS
     uint32_t    id;           ///< the row's ID (the log names it)
+    uint32_t    emitter_id;   ///< the mod's emitter (heat, moisture, a draft) placed here too; 0 = none. The client only places it (emitters())
 } sxc_lights_assignment;
+
+/// An emitter where its row placed it (emitters()): what it does is the mod's (its emitter_id).
+typedef struct sxc_lights_emitter
+{
+    uint32_t    row_id;        ///< its DoodadSourceAssignment row
+    uint32_t    emitter_id;
+    float       pos[3];        ///< world
+    float       direction[3];  ///< world, unit: the row's direction through the model
+    float       scale;         ///< the model's scale (x the emitter's radius)
+    float       distance;      ///< from the camera
+    const char* model_path;    ///< valid until the next frame
+} sxc_lights_emitter;
 
 #define SXC_LIGHTS_POINT 0u
 #define SXC_LIGHTS_SPOT  1u
@@ -156,7 +169,7 @@ typedef struct sxc_lights_active
     float       spot_dir[3];
     wxl_bool    indoor;
     wxl_bool    shadowed;      ///< has a shadow map
-    uint32_t    row_id;        ///< its DoodadLightAssignment row; 0: a model's own light
+    uint32_t    row_id;        ///< its DoodadSourceAssignment row; 0: a model's own light
     const char* model_path;    ///< the model it is on; valid until the next frame
 } sxc_lights_active;
 
@@ -196,6 +209,18 @@ typedef struct sxc_lights_api
     /// The assignment rows (ids) whose attachment a model didn't have (placed at its origin) since the
     /// table was last set; how many were written.
     uint32_t(WXL_CALL* missing_rows)(uint32_t* out, uint32_t max);
+
+    // --- appended 2026-10-26: emitters (check struct_size) -----------------------------------------
+
+    /// The emitters the rows placed on the scene's models within the range (the settings'; nearest first
+    /// not guaranteed): from the lights' last gathering, or a scan of their own when the lights didn't
+    /// gather (off, another renderer). How many were written.
+    uint32_t(WXL_CALL* emitters)(sxc_lights_emitter* out, uint32_t max);
+
+    /// The placed model of file `path` nearest `pos`: its own x, y and z axes in the world (unit, 3 x 3,
+    /// a row per axis), to turn a world direction into the model's space. False: none placed, or it hangs
+    /// on another model.
+    wxl_bool(WXL_CALL* model_axes)(const char* path, const float pos[3], float axes[9]);
 } sxc_lights_api;
 
 #ifdef __cplusplus

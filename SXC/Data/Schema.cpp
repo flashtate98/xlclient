@@ -118,6 +118,11 @@ namespace SXC::Data {
         return *this;
     }
 
+    Schema& Schema::FormerPath(const char* path) {
+        m_formerPath = path ? path : "";
+        return *this;
+    }
+
     Field& Schema::Add(FieldType type, const char* name, uint32_t count) {
         Field field;
         field.type = type;

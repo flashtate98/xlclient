@@ -242,8 +242,16 @@ namespace SXC::Data {
                 source = "archives";
 
                 if (!ReadArchives(path, bytes)) {
-                    status = "no file yet; saving creates " + path;
-                    return;
+                    // A table renamed: its rows from the file under the old name until the first save.
+                    const std::string& former = schema.GetFormerPath();
+
+                    if (former.empty() || !((StampOf(former).exists && ReadLoose(former, bytes)) || ReadArchives(former, bytes))) {
+                        status = "no file yet; saving creates " + path;
+                        return;
+                    }
+
+                    source = "file under its former name (saving writes the new one)";
+                    SXC::Log("data: %s: no %s yet; read %s", schema.Name().c_str(), path.c_str(), former.c_str());
                 }
             }
 

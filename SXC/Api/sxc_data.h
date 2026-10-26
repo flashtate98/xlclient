@@ -157,6 +157,12 @@ typedef struct sxc_data_api
     void(WXL_CALL* draw_row_form)(sxc_table table, uint32_t index);
     /// Opens the row with `id` in a row window of the overlay.
     void(WXL_CALL* open_row)(sxc_table table, uint32_t id);
+
+    // --- appended 2026-10-26 (check struct_size) ---------------------------------------------------
+
+    /// A renamed table: the file under its former name, read while the new one doesn't exist yet (the
+    /// first save writes the new one). Before schema_register.
+    void(WXL_CALL* schema_former_path)(sxc_schema schema, const char* path);
 } sxc_data_api;
 
 #ifdef __cplusplus

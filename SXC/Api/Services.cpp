@@ -328,11 +328,17 @@ namespace {
         if (table) Data::Editor::OpenRowWindow(TableOf(table)->Name(), id);
     }
 
+    void WXL_CALL SchemaFormerPath(sxc_schema handle, const char* path) {
+        if (Data::Schema* schema = SchemaOf(handle)) {
+            schema->FormerPath(path);
+        }
+    }
+
     const sxc_data_api s_data = {
         sizeof(sxc_data_api), SchemaBegin, SchemaField, SchemaRegister, FindTable, Loaded, Generation, Status, RowCount, FindRow,
         FieldIndex, GetRaw, GetString, SetRaw, SetString, Subscribe, Unsubscribe,
         AddRow, CloneRow, RemoveRow, RevertRow, CanUndo, CanRedo, Undo, Redo, HasChanges, ChangedOnDisk, Save, Reload,
-        DrawRowForm, OpenRow,
+        DrawRowForm, OpenRow, SchemaFormerPath,
     };
 
     // --- sxc.settings --------------------------------------------------------------------------------

@@ -65,6 +65,7 @@ namespace {
     std::vector<Row> s_rows;
     std::unordered_map<std::string, std::vector<uint32_t>> s_byPath; // normalised path -> rows
     uint32_t s_tableGeneration = 1;
+    bool s_anyEmitterRows = false;    // a row places an emitter (else emitters() walks nothing)
 
     // Per model file (CM2Shared, shared by every model of the file): its rows, and whether its own lights
     // are left out. The file name is kept to notice a CM2Shared freed and reused by another file.
@@ -135,6 +136,8 @@ namespace {
     }
 
     std::vector<Found> s_found;
+    std::vector<sxc_lights_emitter> s_emitters;   // the rows' emitters, placed by the last gathering
+    uint32_t s_emitterStamp = 0;                  // the scene frame they were placed in (0: never)
     std::vector<GpuLight> s_lights;
     std::vector<float> s_strength;   // per light: its brightness before fade and flicker (full cells rank by it)
     std::vector<uint32_t> s_cellLights;
@@ -208,13 +211,15 @@ namespace {
         return Finite(out);
     }
 
-    // An assignment's light on one model.
-    void AddRow(const Placement& at, const Row& row, uint64_t key, const std::string* path, const C3Vector& camera, float reach) {
-        if (row.kind < 0) {
+    // An assignment's light and emitter on one model (`lights` false: the emitters' own scan, no lights).
+    void AddRow(const Placement& at, const Row& row, uint64_t key, const std::string* path, const C3Vector& camera, float reach, bool lights) {
+        const bool light = lights && row.kind >= 0;
+        const bool emitter = row.a.emitter_id != 0;
+
+        if (!light && !emitter) {
             return;
         }
 
-        const sxc_lights_kind& k = s_kinds[row.kind];
         const M2Data* data = at.model->m_shared->m_data;
         const sxc_lights_assignment& a = row.a;
         C3Vector local(a.offset[0], a.offset[1], a.offset[2]);
@@ -250,7 +255,7 @@ namespace {
             const uint32_t count = a.attach_type == SXC_LIGHTS_ATTACH_POINT ? data->m_attachmentIndicesById.m_count
                                  : a.attach_type == SXC_LIGHTS_ATTACH_BONE  ? data->m_bones.m_count
                                                                             : data->m_particles.m_count;
-            SXC::LogOnce(key, "lights: DoodadLightAssignment %u (%s): %s %d not on the model (it has %u%s); placed at its origin", a.id,
+            SXC::LogOnce(key, "lights: DoodadSourceAssignment %u (%s): %s %d not on the model (it has %u%s); placed at its origin", a.id,
                          at.model->m_shared->m_fileName, a.attach_type < 4 ? kTypes[a.attach_type] : "unknown attachment type", a.attach_index, count,
                          a.attach_type == SXC_LIGHTS_ATTACH_POINT ? " attachment IDs" : "");
         }
@@ -270,6 +275,24 @@ namespace {
             return;
         }
 
+        // The emitter: placed only; what it does is the mod's.
+        if (emitter) {
+            sxc_lights_emitter e = {};
+            e.row_id = a.id;
+            e.emitter_id = a.emitter_id;
+            std::memcpy(e.pos, &f.pos, sizeof e.pos);
+            std::memcpy(e.direction, &f.spotDir, sizeof e.direction);
+            e.scale = scale;
+            e.distance = f.distance;
+            e.model_path = path ? path->c_str() : "";
+            s_emitters.push_back(e);
+        }
+
+        if (!light) {
+            return;
+        }
+
+        const sxc_lights_kind& k = s_kinds[row.kind];
         f.color = C3Vector(k.color[0], k.color[1], k.color[2]);
         f.radius = k.radius > 0.0f ? k.radius * scale : 0.0f;
         f.falloff = k.falloff > 0.0f ? k.falloff : 1.0f;
@@ -298,7 +321,7 @@ namespace {
     // the client placed them this frame, else the file's position through the model's world matrix; the
     // colour as the client last had it, else the file's first diffuse colour x intensity). Then the
     // models hanging on it (a torch in a hand).
-    void Visit(const CM2Scene* scene, CM2Model* model, const C3Vector& camera, float reach, int depth) {
+    void Visit(const CM2Scene* scene, CM2Model* model, const C3Vector& camera, float reach, int depth, bool lights) {
         if (!model || depth > kMaxAttachDepth) {
             return;
         }
@@ -316,11 +339,11 @@ namespace {
 
             if (fileRows.rows) {
                 for (uint32_t r : *fileRows.rows) {
-                    AddRow(at, s_rows[r], LightKey(model, r), &fileRows.name, camera, reach);
+                    AddRow(at, s_rows[r], LightKey(model, r), &fileRows.name, camera, reach, lights);
                 }
             }
 
-            for (uint32_t i = 0; model->m_lights && !suppress && i < data->m_lights.m_count; i++) {
+            for (uint32_t i = 0; lights && model->m_lights && !suppress && i < data->m_lights.m_count; i++) {
                 const M2Light& file = data->m_lights[i];
                 const M2ModelLight& light = model->m_lights[i];
 
@@ -370,7 +393,7 @@ namespace {
         }
 
         for (CM2Model* child = model->m_attachList; child; child = child->m_attachNext) {
-            Visit(scene, child, camera, reach, depth + 1);
+            Visit(scene, child, camera, reach, depth + 1, lights);
         }
     }
 
@@ -1299,6 +1322,7 @@ namespace {
         s_kinds.assign(kinds && kindCount ? kinds : nullptr, kinds && kindCount ? kinds + kindCount : nullptr);
         s_rows.clear();
         s_byPath.clear();
+        s_anyEmitterRows = false;
         std::unordered_map<uint32_t, int> kindIndex;
 
         for (size_t k = 0; k < s_kinds.size(); k++) {
@@ -1317,6 +1341,7 @@ namespace {
                 continue;
             }
 
+            s_anyEmitterRows = s_anyEmitterRows || row.a.emitter_id != 0;
             s_byPath[row.path].push_back(static_cast<uint32_t>(s_rows.size()));
             s_rows.push_back(std::move(row));
         }
@@ -1413,11 +1438,12 @@ namespace {
         return n;
     }
 
-    uint32_t WXL_CALL ModelPoints(const char* path, const float pos[3], wxl_bool bones, sxc_lights_point* out, uint32_t max) {
+    // The placed model of file `path` nearest `pos` (valid until the next call), or null.
+    const SceneModel* NearestOf(const char* path, const float pos[3]) {
         const CM2Scene* scene = World::s_m2Scene;
 
-        if (!scene || !path || !pos || !out || !max) {
-            return 0;
+        if (!scene || !path || !pos) {
+            return nullptr;
         }
 
         static std::vector<SceneModel> models;
@@ -1440,6 +1466,44 @@ namespace {
                 bestDistance = d;
             }
         }
+
+        return best;
+    }
+
+    wxl_bool WXL_CALL ModelAxes(const char* path, const float pos[3], float axes[9]) {
+        const SceneModel* best = axes ? NearestOf(path, pos) : nullptr;
+
+        // An attached model's placement is its parent's bone: not a rotation to hand out.
+        if (!best || best->model->m_attachParent) {
+            return WXL_FALSE;
+        }
+
+        const C44Matrix& w = best->model->m_worldTransform;
+        const C3Vector unit[3] = { C3Vector(1.0f, 0.0f, 0.0f), C3Vector(0.0f, 1.0f, 0.0f), C3Vector(0.0f, 0.0f, 1.0f) };
+
+        for (int k = 0; k < 3; k++) {
+            const C3Vector a = Dir(unit[k], w);
+            const float len = Length(a);
+
+            if (!(len > 1e-6f)) {
+                return WXL_FALSE;
+            }
+
+            axes[k * 3 + 0] = a.x / len;
+            axes[k * 3 + 1] = a.y / len;
+            axes[k * 3 + 2] = a.z / len;
+        }
+
+        return WXL_TRUE;
+    }
+
+    uint32_t WXL_CALL ModelPoints(const char* path, const float pos[3], wxl_bool bones, sxc_lights_point* out, uint32_t max) {
+        if (!out || !max) {
+            return 0;
+        }
+
+        const CM2Scene* scene = World::s_m2Scene;
+        const SceneModel* best = NearestOf(path, pos);
 
         if (!best) {
             return 0;
@@ -1494,7 +1558,37 @@ namespace {
         return n;
     }
 
-    const sxc_lights_api s_api = { sizeof(sxc_lights_api), Available, SetSettings, Stats, Status, SetTable, ModelsNear, ModelPoints, ActiveLights, MissingRows };
+    uint32_t WXL_CALL Emitters(sxc_lights_emitter* out, uint32_t max) {
+        const CM2Scene* scene = World::s_m2Scene;
+
+        if (!scene || !s_anyEmitterRows) {
+            s_emitters.clear();
+            return 0;
+        }
+
+        // The lights' gathering of this frame or the last placed them; else (the lights off, another
+        // renderer) a walk of the scene for the emitters alone.
+        const uint32_t now = scene->m_frameStamp ? scene->m_frameStamp : 1;
+
+        if (!s_emitterStamp || now - s_emitterStamp > 1) {
+            s_emitters.clear();
+            const C3Vector camera(scene->m_viewInv.d0, scene->m_viewInv.d1, scene->m_viewInv.d2);
+            const float range = s_haveSettings ? std::fmax(s_settings.range, 8.0f) : 256.0f;
+
+            for (CM2Model* model = scene->m_modelList; model; model = model->m_sceneNext) {
+                Visit(scene, model, camera, range, 0, false);
+            }
+
+            s_emitterStamp = now;
+        }
+
+        const uint32_t n = static_cast<uint32_t>(std::min<size_t>(s_emitters.size(), out ? max : 0));
+        std::copy(s_emitters.begin(), s_emitters.begin() + n, out);
+        return n;
+    }
+
+    const sxc_lights_api s_api = { sizeof(sxc_lights_api), Available, SetSettings, Stats, Status, SetTable, ModelsNear, ModelPoints, ActiveLights, MissingRows,
+                                   Emitters, ModelAxes };
 }
 
 namespace SXC::Lights {
@@ -1610,9 +1704,13 @@ namespace SXC::Lights {
         // The camera: the scene's view origin in the world (row vectors: world = view x the view's inverse).
         const C3Vector camera(scene->m_viewInv.d0, scene->m_viewInv.d1, scene->m_viewInv.d2);
 
+        s_emitters.clear();
+
         for (CM2Model* model = scene->m_modelList; model; model = model->m_sceneNext) {
-            Visit(scene, model, camera, range, 0);
+            Visit(scene, model, camera, range, 0, true);
         }
+
+        s_emitterStamp = scene->m_frameStamp ? scene->m_frameStamp : 1;
 
         s_stats.in_range = static_cast<uint32_t>(s_found.size());
         Merge(set.merge_distance);
