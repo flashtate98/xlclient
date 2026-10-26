@@ -80,6 +80,9 @@ void SI2::InitEmoteSounds() {
     }
 
     s_numTextEmotes = count;
+    // Room for every lookup up front: s_textEmoteLookupById keeps pointers into s_textEmoteLookups, and New()
+    // moving the array while it grew left the earlier ones pointing at freed memory (wrong or no emote sounds).
+    s_textEmoteLookups.Reserve(static_cast<uint32_t>(count), 0);
 
     for (int32_t i = 0; i < g_emotesTextSoundDB.m_numRecords; i++) {
         EmotesTextSoundRec* rec = (i < 0 || i >= g_emotesTextSoundDB.m_numRecords) ? nullptr : &g_emotesTextSoundDB.m_records[i];
