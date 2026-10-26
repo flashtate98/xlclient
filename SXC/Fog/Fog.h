@@ -52,6 +52,9 @@ namespace SXC::Fog {
         bool perPixel = true;    // march each pixel's ray; false: the froxel volume
         int32_t maxSteps = 160;  // per pixel: the most steps a ray takes
         float handover = 16.0f;  // yd: the near field fades into the far map over this band
+        float lightStrength = 0.0f; // our lights in the fog: x their light; 0 off
+        float lightGlow = 0.3f;     // forward scattering (Henyey-Greenstein g)
+        float lightRange = 96.0f;   // yd
     };
 
     // Draws the fog over the current target; false when nothing was drawn.

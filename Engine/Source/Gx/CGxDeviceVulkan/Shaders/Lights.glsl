@@ -188,6 +188,8 @@ vec3 LightsCombine(vec3 stock, vec3 lamps)
     return total * (shaped / max(top, 0.001));
 }
 
+#ifndef LIGHTS_COMPUTE // the fog's light volume (FogLights.comp): no screen-space derivatives in compute
+
 // A translated model or WMO pixel's lit colour (step 6b): `stock` is the vertex module's lit colour
 // (color0: the sun, the ambient, the client's own point lights, x the material), `viewPos` /
 // `viewNormal` what the translator captured in the vertex module (w 1 when found: the projection's
@@ -222,3 +224,5 @@ vec4 LightsModelColor(vec4 stock, vec4 viewPos, vec4 viewNormal)
 
     return vec4(LightsCombine(clamp(stock.rgb, 0.0, 1.0), lamps), stock.a);
 }
+
+#endif

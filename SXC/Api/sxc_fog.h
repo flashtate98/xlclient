@@ -107,6 +107,14 @@ typedef struct sxc_fog_look
     /// yards: the near field fades into the far map over this band at its edge (wider: a softer seam,
     /// less near detail at its rim); 0 = 16
     float    handover;
+    // --- appended 2026-10-26 ---
+    /// Our lights (sxc.lights) in the fog: x their light where there is fog to scatter it; 0 off (also in an
+    /// older, shorter look).
+    float    light_strength;
+    /// Forward scattering (-0.9 .. 0.9; 0 the same every way): the fog glows brighter looking toward a lamp.
+    float    light_glow;
+    /// yards from the camera the lights light the fog out to; 0 = 96
+    float    light_range;
 } sxc_fog_look;
 
 typedef struct sxc_fog_api

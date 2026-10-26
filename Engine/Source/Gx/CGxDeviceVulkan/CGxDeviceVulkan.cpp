@@ -580,6 +580,9 @@ bool CGxDeviceVulkan::SxcFogRender(const SXC::Fog::Input& in) {
     f.perPixel = in.perPixel;
     f.maxSteps = in.maxSteps;
     f.handover = in.handover;
+    f.lightStrength = in.lightStrength;
+    f.lightGlow = in.lightGlow;
+    f.lightRange = in.lightRange;
     return gxvk::vk::fog::Record(f);
 }
 

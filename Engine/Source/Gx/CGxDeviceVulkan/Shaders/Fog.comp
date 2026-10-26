@@ -53,7 +53,7 @@ void main()
             vec4 medium = StepMedium(a, b, fa, fb, false);
             float sigma = medium.a;
             float step = exp(-sigma * len);
-            vec3 colour = sigma > 0.0 ? medium.rgb / sigma : fp.colour.rgb;
+            vec3 colour = sigma > 0.0 ? medium.rgb / sigma + FogLightIn(uv, from + len * (float(s) - 0.5)) : fp.colour.rgb;
             scattered += transmittance * (1.0 - step) * colour;
             transmittance *= step;
             a = b;

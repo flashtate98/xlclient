@@ -3,6 +3,7 @@
 
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Context.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Frame.hpp"
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Lights.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Loader.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Log.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Memory.hpp"
@@ -28,8 +29,10 @@ namespace
 
     constexpr uint32_t kSlots   = frame::kFramesInFlight;
     constexpr uint32_t kColumnsX = 160, kColumnsY = 90, kSlices = 128; // Fog.glsl's kSlices
+    constexpr uint32_t kLightSlices = 64;                               // Fog.glsl's kLightSlices
     constexpr uint32_t kMaxField = 512, kMaxFar = 256, kMaxWake = 256; // sxc_fog.h's limits
-    constexpr uint32_t kBindings = 10;
+    constexpr uint32_t kBindings = 12;
+    constexpr uint32_t kLightsSet = 3;                                  // Lights.glsl's set
     constexpr VkFormat kVolumeFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 
     /// Shaders/Fog.glsl's FogParams (std140).
@@ -48,6 +51,7 @@ namespace
         float farMap[4];
         float maps[4];
         float wake[4];
+        float lights[4];
     };
 
     /// An image this module owns, with its memory and the layout it is in.
@@ -78,6 +82,14 @@ namespace
         VkPipelineLayout      layout    = VK_NULL_HANDLE;
         VkDescriptorPool      pool      = VK_NULL_HANDLE;
         VkPipeline            compute   = VK_NULL_HANDLE;
+
+        // Our lights in the fog: FogLights.comp over the fog's set and the lights' (set 3; 1 and 2 empty).
+        // Made at the first frame the lights are ready; `lightsTried` once.
+        VkShaderModule        lightsComp   = VK_NULL_HANDLE;
+        VkDescriptorSetLayout emptyLayout  = VK_NULL_HANDLE;
+        VkPipelineLayout      lightsLayout = VK_NULL_HANDLE;
+        VkPipeline            lightsPipe   = VK_NULL_HANDLE;
+        bool                  lightsTried  = false;
         VkSampler             linearRepeat = VK_NULL_HANDLE, linearClamp = VK_NULL_HANDLE, nearestClamp = VK_NULL_HANDLE;
         Slot                  slots[kSlots];
 
@@ -87,6 +99,7 @@ namespace
         VkPipeline   composite = VK_NULL_HANDLE;
 
         Image    volume;
+        Image    lightVolume;                  ///< our lights per froxel (FogLights.comp); stays in GENERAL
         Image    fieldLight, fieldPool, fieldTint; ///< the near field's layers and colours
         bool     tintPresent = false;
         uint32_t fieldVersion = 0;     ///< what the field images hold
@@ -226,15 +239,16 @@ namespace
             || !CreateModule(kFogFrag, sizeof kFogFrag, s.frag, "vkCreateShaderModule (Fog.frag)"))
             return false;
 
-        // One set for both pipelines: 0 the parameters, 1 and 2 the near field, 3 the volume to
+        // One set for every pipeline: 0 the parameters, 1 and 2 the near field, 3 the volume to
         // write, 4 the scene depth, 5 the volume to read, 6 the near field's colours, 7 and 8 the far
-        // map, 9 the wake.
+        // map, 9 the wake, 10 the light volume to write, 11 the light volume to read.
         const VkShaderStageFlags both = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         VkDescriptorSetLayoutBinding bindings[kBindings] = {};
         VkDescriptorType types[kBindings];
         for (VkDescriptorType& t : types) t = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        types[0] = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        types[3] = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        types[0]  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        types[3]  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        types[10] = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         for (uint32_t i = 0; i < kBindings; ++i)
         {
             bindings[i].binding         = i;
@@ -258,9 +272,9 @@ namespace
         sizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         sizes[0].descriptorCount = kSlots;
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[1].descriptorCount = (kBindings - 2) * kSlots;
+        sizes[1].descriptorCount = (kBindings - 3) * kSlots;
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        sizes[2].descriptorCount = kSlots;
+        sizes[2].descriptorCount = 2 * kSlots;
         VkDescriptorPoolCreateInfo pool = {};
         pool.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pool.maxSets       = kSlots;
@@ -301,6 +315,7 @@ namespace
         // The volume: written by the compute shader, sampled by the composite; it stays in GENERAL.
         // The near field starts as 1 x 1 "no fog" until a field arrives.
         if (!CreateImage(VK_IMAGE_TYPE_3D, kColumnsX, kColumnsY, kSlices, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, s.volume)
+            || !CreateImage(VK_IMAGE_TYPE_3D, kColumnsX, kColumnsY, kLightSlices, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, s.lightVolume)
             || !CreateImage(VK_IMAGE_TYPE_2D, 1, 1, 1, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, s.fieldLight)
             || !CreateImage(VK_IMAGE_TYPE_2D, 1, 1, 1, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, s.fieldPool)
             || !CreateImage(VK_IMAGE_TYPE_2D, 1, 1, 1, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, s.fieldTint)
@@ -423,6 +438,44 @@ namespace
         pipeline.layout              = s.layout;
         pipeline.renderPass          = s.pass;
         return Check(d.CreateGraphicsPipelines(s.device, VK_NULL_HANDLE, 1, &pipeline, nullptr, &s.composite), "vkCreateGraphicsPipelines (fog)");
+    }
+
+    /// Our lights' pass (FogLights.comp): the fog's set as set 0, the lights' as set 3, empty sets between.
+    /// Tried once, when the lights are up; false while they aren't or it failed.
+    bool EnsureLightsPipeline()
+    {
+        if (s.lightsPipe != VK_NULL_HANDLE) return true;
+        if (s.lightsTried || !gxvk::vk::lights::Ready() || gxvk::vk::lights::SetLayout() == VK_NULL_HANDLE) return false;
+        s.lightsTried = true;
+        const loader::Device& d = *s.dapi;
+
+        if (!CreateModule(kFogLightsComp, sizeof kFogLightsComp, s.lightsComp, "vkCreateShaderModule (FogLights.comp)")) return false;
+
+        VkDescriptorSetLayoutCreateInfo empty = {};
+        empty.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        if (!Check(d.CreateDescriptorSetLayout(s.device, &empty, nullptr, &s.emptyLayout), "vkCreateDescriptorSetLayout (empty)")) return false;
+
+        const VkDescriptorSetLayout sets[kLightsSet + 1] = { s.setLayout, s.emptyLayout, s.emptyLayout, gxvk::vk::lights::SetLayout() };
+        VkPipelineLayoutCreateInfo layout = {};
+        layout.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        layout.setLayoutCount = kLightsSet + 1;
+        layout.pSetLayouts    = sets;
+        if (!Check(d.CreatePipelineLayout(s.device, &layout, nullptr, &s.lightsLayout), "vkCreatePipelineLayout (fog lights)")) return false;
+
+        VkComputePipelineCreateInfo compute = {};
+        compute.sType        = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        compute.stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        compute.stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+        compute.stage.module = s.lightsComp;
+        compute.stage.pName  = "main";
+        compute.layout       = s.lightsLayout;
+        if (!Check(d.CreateComputePipelines(s.device, VK_NULL_HANDLE, 1, &compute, nullptr, &s.lightsPipe), "vkCreateComputePipelines (fog lights)"))
+        {
+            s.lightsPipe = VK_NULL_HANDLE;
+            return false;
+        }
+        Write(Debug, "vulkan: fog: our lights in the fog ready (%ux%ux%u)", kColumnsX, kColumnsY, kLightSlices);
+        return true;
     }
 
     // Both shaders read the maps: the froxel fill (compute) and the per-pixel march (fragment).
@@ -612,6 +665,12 @@ namespace gxvk::vk::fog
         }
         ReadyPlaceholders(cmd); // images remade for a new map size and not filled (no colours): cleared
 
+        // Our lights: this frame's set (filled at its first use, normally the terrain's; the shadow maps
+        // with it, into the pre-pass), when they're on and the pass could be made.
+        VkDescriptorSet lightsSet = VK_NULL_HANDLE;
+        if (f.lightStrength > 0.0f && EnsureLightsPipeline())
+            lightsSet = gxvk::vk::lights::FrameSet(frame::Slot(), t.serial, gxvk::vk::lights::kSurfaceAny);
+
         // The parameters, into this slot's buffer (its previous frame has completed).
         Slot& slot = s.slots[frame::Slot()];
         p.origin[0]   = f.origin[0];
@@ -661,6 +720,10 @@ namespace gxvk::vk::fog
         p.wake[0]     = f.wakeOrigin[0];
         p.wake[1]     = f.wakeOrigin[1];
         p.wake[2]     = s.wakePresent ? 1.0f / (f.wakeTexel * static_cast<float>(s.wake.size)) : 0.0f;
+        p.lights[0]   = f.lightStrength;
+        p.lights[1]   = f.lightGlow < -0.9f ? -0.9f : (f.lightGlow > 0.9f ? 0.9f : f.lightGlow);
+        p.lights[2]   = f.lightRange < 16.0f ? 16.0f : (f.lightRange > 256.0f ? 256.0f : f.lightRange);
+        p.lights[3]   = lightsSet != VK_NULL_HANDLE ? 1.0f : 0.0f;
         std::memcpy(slot.params.block.mapped, &p, sizeof p);
         memory::FlushHost(slot.params.block);
 
@@ -676,6 +739,8 @@ namespace gxvk::vk::fog
         images[7] = { s.linearRepeat, s.farLayer.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         images[8] = { s.linearRepeat, s.farTint.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         images[9] = { s.linearClamp, s.wake.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        images[10] = { VK_NULL_HANDLE, s.lightVolume.view, VK_IMAGE_LAYOUT_GENERAL };
+        images[11] = { s.linearClamp, s.lightVolume.view, VK_IMAGE_LAYOUT_GENERAL };
         VkWriteDescriptorSet writes[kBindings] = {};
         for (uint32_t i = 0; i < kBindings; ++i)
         {
@@ -689,8 +754,24 @@ namespace gxvk::vk::fog
         writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         writes[0].pImageInfo     = nullptr;
         writes[0].pBufferInfo    = &params;
-        writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[3].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[10].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         d.UpdateDescriptorSets(s.device, kBindings, writes, 0, nullptr);
+
+        // Our lights' volume first (the froxel fill and the march read it): the last frame's readers done
+        // before it's written; in GENERAL from its first frame on, filled or not.
+        Barrier(cmd, s.lightVolume.image, VK_IMAGE_ASPECT_COLOR_BIT, s.lightVolume.layout, VK_IMAGE_LAYOUT_GENERAL, kReaders, VK_ACCESS_SHADER_READ_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT);
+        s.lightVolume.layout = VK_IMAGE_LAYOUT_GENERAL;
+        if (lightsSet != VK_NULL_HANDLE)
+        {
+            d.CmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s.lightsPipe);
+            d.CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s.lightsLayout, 0, 1, &slot.set, 0, nullptr);
+            d.CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s.lightsLayout, kLightsSet, 1, &lightsSet, 0, nullptr);
+            d.CmdDispatch(cmd, (kColumnsX + 7) / 8, (kColumnsY + 7) / 8, kLightSlices);
+        }
+        Barrier(cmd, s.lightVolume.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_ACCESS_SHADER_WRITE_BIT, kReaders, VK_ACCESS_SHADER_READ_BIT);
 
         // The volume: the last frame's composite has read it before this frame's compute writes it.
         Barrier(cmd, s.volume.image, VK_IMAGE_ASPECT_COLOR_BIT, s.volume.layout, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
@@ -747,8 +828,9 @@ namespace gxvk::vk::fog
                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
 
         char line[160];
-        std::snprintf(line, sizeof line, "drawn: %ux%u target, field %s, far map %s, wake %s", t.extent.width, t.extent.height,
-                      s.fieldPresent ? "present" : "none", s.farPresent ? "present" : "none", s.wakePresent ? "present" : "none");
+        std::snprintf(line, sizeof line, "drawn: %ux%u target, field %s, far map %s, wake %s, lights %s", t.extent.width, t.extent.height,
+                      s.fieldPresent ? "present" : "none", s.farPresent ? "present" : "none", s.wakePresent ? "present" : "none",
+                      lightsSet != VK_NULL_HANDLE ? "in" : (f.lightStrength > 0.0f ? "unavailable" : "off"));
         SetStatus(line);
         return drawn;
     }
@@ -762,7 +844,12 @@ namespace gxvk::vk::fog
         if (s.composite != VK_NULL_HANDLE) d.DestroyPipeline(s.device, s.composite, nullptr);
         if (s.pass != VK_NULL_HANDLE) d.DestroyRenderPass(s.device, s.pass, nullptr);
         if (s.compute != VK_NULL_HANDLE) d.DestroyPipeline(s.device, s.compute, nullptr);
+        if (s.lightsPipe != VK_NULL_HANDLE) d.DestroyPipeline(s.device, s.lightsPipe, nullptr);
+        if (s.lightsLayout != VK_NULL_HANDLE) d.DestroyPipelineLayout(s.device, s.lightsLayout, nullptr);
+        if (s.emptyLayout != VK_NULL_HANDLE) d.DestroyDescriptorSetLayout(s.device, s.emptyLayout, nullptr);
+        if (s.lightsComp != VK_NULL_HANDLE) d.DestroyShaderModule(s.device, s.lightsComp, nullptr);
         DestroyImage(s.volume);
+        DestroyImage(s.lightVolume);
         DestroyImage(s.fieldLight);
         DestroyImage(s.fieldPool);
         DestroyImage(s.fieldTint);

@@ -64,6 +64,11 @@ namespace gxvk::vk::fog
         bool  perPixel      = true;    ///< march each pixel's ray (sharp thin layers); false: the froxel volume
         int   maxSteps      = 160;     ///< per pixel: the most steps a ray takes
         float handover      = 16.0f;   ///< yd: the near field fades into the far map over this band
+
+        // Our lights in the fog (Vulkan/Lights' set, FogLights.comp): a light volume over the viewport.
+        float lightStrength = 0.0f;    ///< x their light in the fog; 0 off
+        float lightGlow     = 0.3f;    ///< forward scattering (Henyey-Greenstein g, -0.9 .. 0.9): brighter looking toward a lamp
+        float lightRange    = 96.0f;   ///< yd: the light volume's reach from the camera
     };
 
     /// Records the fog over the current target. False when nothing was drawn; Status() says why.

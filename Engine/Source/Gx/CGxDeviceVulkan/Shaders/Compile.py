@@ -36,6 +36,7 @@ OUTPUTS = [
     ("FogSpirv.inc", [
         ("Fog.comp", "kFogComp"),
         ("Fog.frag", "kFogFrag"),
+        ("FogLights.comp", "kFogLightsComp"),  # our lights in the fog: the light volume
     ]),
     # SXC: the lights' cube shadow maps (Vulkan/Shadows.cpp), depth only; alpha-keyed parts discard.
     ("ShadowSpirv.inc", [

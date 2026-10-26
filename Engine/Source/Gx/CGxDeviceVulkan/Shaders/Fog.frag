@@ -24,7 +24,7 @@ float Dither(vec2 pixel)
 // fp.march.z of them; each step's medium averaged exactly (Fog.glsl). Past the march's reach, up to the
 // terrain drawn there (`surface`), one long step through the far map (WXL's): flying, the fog then
 // covers the ground below instead of ending in mid-air.
-vec4 March(vec3 dir, float distance, float surface, float jitter)
+vec4 March(vec3 dir, vec2 uv, float distance, float surface, float jitter)
 {
     vec3 scattered = vec3(0.0);
     float transmittance = 1.0;
@@ -55,7 +55,8 @@ vec4 March(vec3 dir, float distance, float surface, float jitter)
         vec4 medium = StepMedium(a, b, fa, fb, false);
         float sigma = medium.a;
         float step = exp(-sigma * (next - t));
-        vec3 colour = sigma > 0.0 ? medium.rgb / sigma : fp.colour.rgb;
+        // The fog's own colour, and our lights where they reach (only where there is fog to scatter it).
+        vec3 colour = sigma > 0.0 ? medium.rgb / sigma + FogLightIn(uv, 0.5 * (t + next)) : fp.colour.rgb;
         scattered += transmittance * (1.0 - step) * colour;
         transmittance *= step;
         a = b;
@@ -107,7 +108,7 @@ void main()
 
     if (fp.march.x > 0.5)
     {
-        fog = March(dir, distance, surface, Dither(pixel));
+        fog = March(dir, uv, distance, surface, Dither(pixel));
     }
     else
     {

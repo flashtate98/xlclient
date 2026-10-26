@@ -362,6 +362,9 @@ namespace SXC::Fog {
         in.perPixel = s_look.method == 0;
         in.maxSteps = s_look.max_steps > 0 ? s_look.max_steps : 160;
         in.handover = s_look.handover > 2.0f ? s_look.handover : 16.0f; // zero in a shorter (older) look
+        in.lightStrength = s_look.light_strength > 0.0f ? s_look.light_strength : 0.0f; // zero (off) in an older look
+        in.lightGlow = s_look.light_glow;
+        in.lightRange = s_look.light_range > 0.0f ? s_look.light_range : 96.0f;
         s_renderer(in);
     }
 }

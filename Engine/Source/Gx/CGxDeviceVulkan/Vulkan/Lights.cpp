@@ -101,8 +101,9 @@ namespace gxvk::vk::lights
             return false;
         }
 
-        // Read where the pixels are lit (and where the vertices or the tessellation may light later).
-        VkShaderStageFlags stages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        // Read where the pixels are lit (and where the vertices or the tessellation may light later), and by
+        // the fog's light volume (FogLights.comp).
+        VkShaderStageFlags stages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
         if (context::Caps().enabled & gxvk::vk::kCapTessellation)
             stages |= VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
         VkDescriptorSetLayoutBinding bindings[kBindings] = {};

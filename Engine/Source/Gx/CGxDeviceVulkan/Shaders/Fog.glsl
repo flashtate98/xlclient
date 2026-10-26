@@ -24,6 +24,7 @@ layout(std140, set = 0, binding = 0) uniform FogParams
     vec4 far;          // the far map: cell size (yd), cells per side, first cell i, first cell j
     vec4 maps;         // x the far map present (1/0), y its colours present (1/0), z the wake present (1/0), w the hand-over band (yd)
     vec4 wake;         // the wake map: world x, y of its corner, 1 / its extent (yd)
+    vec4 lights;       // our lights in the fog: x strength (0 off), y forward glow (Henyey-Greenstein g), z the light volume's reach (yd), w the volume filled (1/0)
 } fp;
 
 layout(set = 0, binding = 1) uniform sampler2D fieldLight; // per cell: density (1/yd), layer floor (world z), thickness (yd; < 0 not ready), patchiness
@@ -32,8 +33,33 @@ layout(set = 0, binding = 6) uniform sampler2D fieldTint;  // per cell: the fog'
 layout(set = 0, binding = 7) uniform sampler2D farLayer;   // per far cell: density (1/yd), floor (world z), thickness (yd), unused
 layout(set = 0, binding = 8) uniform sampler2D farTint;    // per far cell: colour (rgb), unused
 layout(set = 0, binding = 9) uniform sampler2D wakeMap;    // per texel: push (< 0 at a rim), its top (world z), displacement x, y (yd)
+layout(set = 0, binding = 11) uniform sampler3D lightVolume; // FogLights.comp: our lights' light per froxel (rgb), unused
 
 const int kSlices = 128;
+const int kLightSlices = 64; // the light volume's slices, near to fp.lights.z
+
+// The light volume's slice edge e (0 .. kLightSlices) as a distance, and back.
+float LightSliceEdge(float e)
+{
+    return fp.depth.z * pow(fp.lights.z / fp.depth.z, e / float(kLightSlices));
+}
+
+float LightSliceOf(float d)
+{
+    return log(max(d, fp.depth.z) / fp.depth.z) / log(fp.lights.z / fp.depth.z) * float(kLightSlices);
+}
+
+// Our lights' light scattered toward the camera at a distance along the ray through screen uv (per unit
+// of the fog's scattering): added to the fog's own colour where it scatters.
+vec3 FogLightIn(vec2 uv, float d)
+{
+    if (fp.lights.w < 0.5 || d >= fp.lights.z)
+    {
+        return vec3(0.0);
+    }
+
+    return textureLod(lightVolume, vec3(uv, LightSliceOf(d) / float(kLightSlices)), 0.0).rgb;
+}
 
 // The distance (yd) of slice edge e (0 .. kSlices).
 float SliceEdge(float e)
