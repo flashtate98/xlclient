@@ -25,6 +25,7 @@
 #include "WoW/Source/WorldClient/Types.h"
 #include "WoW/Source/WorldClient/World.h"
 #include "SXC/Cover/Cover.h"  // SXC:
+#include "SXC/Log.h"  // SXC:
 #if defined(_MSC_VER)
 #include <malloc.h>
 #else
@@ -2626,6 +2627,33 @@ void CMapRenderChunk::RenderMultiPassVertexPixelShader(CMapRenderChunk* renderCh
     GxRsSet(GxRs_Texture1, 0);
 }
 
+// SXC: the reflective chunk's shaders sample stage 0 (layer 0) as a cube map. Reports once per texture
+// set when layer 0 isn't one (a 2D image or not loaded yet): which layer carries the 0x400 flag and
+// what each layer is, to tell bad data from a draw the device drops.
+static void SxcReportReflectiveLayer(const CMapRenderChunk* chunk) {
+    CGxTex* first = chunk->m_layersCount ? TextureGetGxTex(chunk->m_layers[0].m_texture, 0, nullptr) : nullptr;
+
+    if (first && first->m_target == GxTex_CubeMap) {
+        return;
+    }
+
+    char key[600] = "reflective|";
+    char layers[1200] = "";
+
+    for (int32_t i = 0; i < chunk->m_layersCount; i++) {
+        const CMapRenderChunkLayer& layer = chunk->m_layers[i];
+        CGxTex* gxTex = TextureGetGxTex(layer.m_texture, 0, nullptr);
+        const char* name = layer.m_texture ? layer.m_texture->m_filename : "(none)";
+        char line[300];
+        SStrPrintf(line, sizeof(line), "  layer %d: %s, flags 0x%X%s, %s\n", i, name, layer.m_flags, (layer.m_flags & 0x400) ? " (reflective)" : "",
+                   !gxTex ? "no image yet" : gxTex->m_target == GxTex_CubeMap ? "cube map" : "2D");
+        SStrPack(layers, line, sizeof(layers));
+        SStrPack(key, name, sizeof(key));
+    }
+
+    SXC::LogOnce(key, "terrain: a reflective chunk's layer 0 is no cube map; the cube shaders sample it as one\n%s", layers);
+}
+
 // VERIFY: 22069b93 manual
 // OFFSET: 0x007D28B0
 void CMapRenderChunk::RenderSinglePassPixelShader() {
@@ -2676,6 +2704,10 @@ void CMapRenderChunk::RenderSinglePassPixelShader() {
         }
     }
 
+    if (specular) {
+        SxcReportReflectiveLayer(this);  // SXC:
+    }
+
     g_theGxDevicePtr->RsSet(static_cast<EGxRenderState>(GxRs_Texture0 + i), TextureGetGxTex(this->m_terrainBlendTexture, 1, nullptr));
     GxXformSet(static_cast<EGxXform>(GxXform_Tex0 + i), alphaMatrix);
     g_theGxDevicePtr->Draw(&this->m_batch, 1);
@@ -2720,6 +2752,10 @@ void CMapRenderChunk::RenderSinglePassVertexPixelShader() {
             consts.m_texOffset[i].x = -(dir.x * moveScale * 0.125f);
             consts.m_texOffset[i].y = -(dir.y * moveScale * 0.125f);
         }
+    }
+
+    if (specular) {
+        SxcReportReflectiveLayer(this);  // SXC:
     }
 
     CGxTex* blendTex = this->m_terrainBlendTexture ? TextureGetGxTex(this->m_terrainBlendTexture, 1, nullptr) : nullptr;

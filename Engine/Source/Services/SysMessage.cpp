@@ -3,6 +3,7 @@
 #include <cstdio>
 #include "Engine/Source/Services/SysMessage.h"
 #include "Engine/Source/Storm/H/storm.h"
+#include "SXC/Log.h"  // SXC:
 
 // STATIC: 0x00AC3208
 static const SYSMSGSEVERITY s_severities[SYSMSG_NUMTYPES] = { { 0xFF, 0xFF, 0xFF, 0, 10.0f }, { 0xFF, 0xFF, 0x7F, 0, 15.0f }, { 0xFF, 0x7F, 0x7F, 0, 15.0f }, { 0x7F, 0xFF, 0xFF, 0, 20.0f } };
@@ -33,6 +34,12 @@ int32_t SysMsgAdd(const char* text, SYSMSG_TYPE severity) {
     if (!text || severity >= SYSMSG_NUMTYPES) {
         SErrSetLastError(STORM_ERROR_INVALID_PARAMETER);
         return 0;
+    }
+
+    // SXC: the stock client shows these nowhere (a texture that fails to decode is a silent solid
+    // stand-in); warnings and worse go to sxc.log, once per text.
+    if (severity >= SYSMSG_WARNING) {
+        SXC::LogOnce(text, "client: %s", text);
     }
 
     return 1;

@@ -3,6 +3,7 @@
 #include <cstring>
 #include "Engine/Source/Services/AsyncFile.h"
 #include "Engine/Source/Storm/H/storm.h"
+#include "Engine/Source/BlizzardCore/SFile2-Core.h"  // SXC: the _s fallback
 #include "Engine/Source/Tempest/CiRect.h"
 #include "Engine/Source/Tempest/CImVector.h"
 #include "Engine/Source/Services/Texture.h"
@@ -168,9 +169,27 @@ void CMapArea::LoadTerrainTexture(CMapAreaTexture* areaTexture, int32_t textureI
         flags = this->m_textureFlags[textureId];
     }
 
+    // SXC: the file the texture loads from, its MTEX name left as it is (our tables look textures up by
+    // it). Later ADTs name the _s file and derive the base from it; converted ones keep that name, which
+    // here loaded the _s file as the base (or asked for an "_s_s"). Such a name loads the base the
+    // _s belongs to, when that file exists.
+    char baseName[256];
+    SStrCopy(baseName, areaTexture->m_textureName, sizeof(baseName));
+    const size_t length = SStrLen(baseName);
+
+    if (length > 6 && !SStrCmpI(baseName + length - 6, "_s.blp", 6)) {
+        char stripped[256];
+        SStrCopy(stripped, baseName, sizeof(stripped));
+        SStrCopy(stripped + length - 6, ".blp", sizeof(stripped) - (length - 6));
+
+        if (SFile::FileExists(stripped)) {
+            SStrCopy(baseName, stripped, sizeof(baseName));
+        }
+    }
+
     if ((flags & 0x1) || !CMap::enableSpecularTerrain) {
         if (!(flags & 0x1) || shaders) {
-            areaTexture->m_texture = CMap::LoadTexture(areaTexture->m_textureName);
+            areaTexture->m_texture = CMap::LoadTexture(baseName);
         } else {
             CImVector color;
             color.b = 0x00;
@@ -181,9 +200,16 @@ void CMapArea::LoadTerrainTexture(CMapAreaTexture* areaTexture, int32_t textureI
         }
     } else {
         char fileName[256];
-        SStrCopy(fileName, areaTexture->m_textureName, STORM_MAX_STR);
+        SStrCopy(fileName, baseName, STORM_MAX_STR);
         char* ext = SStrChrR(fileName, '.');
         SStrCopy(ext, "_s.blp", STORM_MAX_STR);
+
+        // SXC: stock loads only the _s file, and a texture without one (a converted map's cube maps,
+        // their MTXF "no specular" flag lost) became a solid stand-in. Then the base itself.
+        if (!SFile::FileExists(fileName)) {
+            SStrCopy(fileName, baseName, STORM_MAX_STR);
+        }
+
         areaTexture->m_texture = CMap::LoadTexture(fileName);
     }
 }

@@ -16,10 +16,12 @@ using namespace gxvk::vk::pipelines::detail;
 namespace
 {
     /// The set-0 images of a draw for a layout: the draw's texture at each slot of the mask, or the
-    /// white image of the slot's kind when the draw has none there. False when a texture is bound
+    /// white image of the slot's kind when the draw has none there. SXC: also when a texture is bound
     /// of the other kind (a 2D image under a cube sampler or the reverse), which the module cannot
-    /// sample.
-    bool StageImages(const Draw& draw, const LayoutEntry& layout, uint32_t cubeMask, Texture* out)
+    /// sample: D3D9 draws such a draw, and skipping it left whole terrain chunks invisible (a
+    /// converted map's reflective layer on a plain texture). @p mismatched counts those slots. False
+    /// only when a white image is missing.
+    bool StageImages(const Draw& draw, const LayoutEntry& layout, uint32_t cubeMask, Texture* out, uint32_t& mismatched)
     {
         for (uint32_t slot = 0; slot < kTextureStages; ++slot)
         {
@@ -27,9 +29,12 @@ namespace
             const bool wantCube = (cubeMask & (1u << slot)) != 0;
             if ((draw.textureMask & (1u << slot)) && draw.textures[slot].view != VK_NULL_HANDLE)
             {
-                if (draw.textures[slot].cube != wantCube) return false;
-                out[slot] = draw.textures[slot];
-                continue;
+                if (draw.textures[slot].cube == wantCube)
+                {
+                    out[slot] = draw.textures[slot];
+                    continue;
+                }
+                ++mismatched;
             }
             const texture::Image* white = White(wantCube);
             if (!white) return false;
@@ -234,11 +239,16 @@ namespace gxvk::vk::pipelines
         // Set 0: the images of the mask's slots (the fragment programs sample what they declare
         // unconditionally, so every slot binds a valid image of its kind).
         Texture stages[kTextureStages];
-        if (!StageImages(draw, layout, cubeMask, stages))
+        uint32_t mismatched = 0;
+        if (!StageImages(draw, layout, cubeMask, stages, mismatched))
         {
-            ++s.stats.cubeMismatch;
             ++s.stats.skipped;
             return false;
+        }
+        if (mismatched && s.stats.cubeMismatch++ == 0)
+        {
+            Write(Warn, "vulkan: pipelines: a draw binds a texture of the other kind than its sampler (2D / cube); "
+                        "drawn with white there instead (counted in the cube mismatches)");
         }
         const VkDescriptorSet set0 = DescriptorFor(slot, serial, layout, stages);
         if (set0 == VK_NULL_HANDLE)
