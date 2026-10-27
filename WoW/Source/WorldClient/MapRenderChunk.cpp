@@ -418,7 +418,8 @@ static float SxcLayerUvScale(CMapRenderChunkLayer& layer) {
 
 // SXC: the layers' height textures (stages 9..12), their height scales and offsets (pixel p14, p15 as
 // offset - 1: all zero is the stock blend), normal strengths (vertex v58, zero: the stock light) and
-// parallax depths and smoothing (v59, v60) for our terrain shader's height blending, bumps and parallax; or all off.
+// parallax depths and smoothing (v59, v60), the covers' burying of them (v61.x, [Terrain] PatternBuried)
+// for our terrain shader's height blending, bumps and parallax; or all off.
 static void SxcSetHeights(CMapRenderChunk* chunk, bool on) {
     float scale[4] = {};
     float offset[4] = {};
@@ -454,6 +455,8 @@ static void SxcSetHeights(CMapRenderChunk* chunk, bool on) {
     GxShaderConstantsSet(GxSh_Vertex, 58, normal, 1);
     GxShaderConstantsSet(GxSh_Vertex, 59, parallax, 1);
     GxShaderConstantsSet(GxSh_Vertex, 60, smoothing, 1);
+    const float buried[4] = { SXC::Terrain::PatternBuried(), 0.0f, 0.0f, 0.0f };
+    GxShaderConstantsSet(GxSh_Vertex, 61, buried, 1);
 }
 
 // VERIFY: 6c5dc3eb manual

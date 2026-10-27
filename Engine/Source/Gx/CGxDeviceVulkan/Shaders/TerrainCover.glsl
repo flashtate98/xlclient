@@ -655,6 +655,10 @@ struct CoverResult
     int   entry;    // debug: the strongest painted entry
 };
 
+// SXC: the share of the covers the ground pokes through here (Terrain.frag sets it: stones rising above
+// a trail's pressed cover); 0 = none.
+float coverPoke = 0.0;
+
 // c: the stock layers (rgb lit per layer when the chunk has unlit layers, a their gloss); w: the layers'
 // weights; twice: twice the diffuse light (what unlit-layer chunks light each layer by).
 CoverResult Covers(vec4 c, vec4 w, vec3 twice, bool litLayers)
@@ -679,8 +683,8 @@ CoverResult Covers(vec4 c, vec4 w, vec3 twice, bool litLayers)
     CoverSpot s = CoverEvaluate(xy, coverTint.w, coverWorld.w, w);
     int entries = int(cover.tuning2.w + 0.5);
     r.under = s.under;
-    r.painted = s.painted;
-    r.snow = s.snow;
+    r.painted = s.painted * (1.0 - coverPoke);
+    r.snow = s.snow * (1.0 - coverPoke);
     r.entry = s.entry;
 
     // The painted look: each layer's entry by its weight here.

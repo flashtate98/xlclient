@@ -155,6 +155,60 @@ bool ParallaxOn()
     return any(notEqual(regs.v[59], vec4(0.0)));
 }
 
+// SXC: covers and the pattern (parallax and bumps). Untouched, a cover buries it: thin snow still shows
+// it, then it fades as the cover deepens, gone at v61.x ([Terrain] PatternBuried, default 2) times a
+// layer's relief (its parallax depth or normal strength: ~5 cm cobbles by ~10 cm). In a trail the cover
+// is pressed flat (no pattern on it), down to what's left of it: where the stones' tops rise above that,
+// they poke through (the ground with its pattern shows there, the pressed cover stays in the gaps).
+float gCoverLeft = 0.0;   // yd: the cover's height here after the trails
+float gInTrail = 0.0;     // how much this spot is a trail (its cover pressed down)
+const float kPokeEdge = 0.005;   // yd: the soft edge where a stone's top meets the pressed cover
+
+vec4 Relief()
+{
+    return max(regs.v[59], regs.v[58]);
+}
+
+// The stones' tops here (yd above the gaps): the layers' heights (at gUV) times their reliefs, by weight.
+float StoneTop(vec4 w)
+{
+    vec4 h = vec4(Tex(sH0, 0).a, 0.0, 0.0, 0.0);
+#if LAYERS >= 2
+    h.y = Tex(sH1, 1).a;
+#endif
+#if LAYERS >= 3
+    h.z = Tex(sH2, 2).a;
+#endif
+#if LAYERS >= 4
+    h.w = Tex(sH3, 3).a;
+#endif
+    return dot(w * Relief(), h);
+}
+
+vec4 PatternKept(vec4 alpha)
+{
+    if (cover.enable.x < 0.5)
+    {
+        return vec4(1.0);
+    }
+
+    vec4 w = CoverLayerWeights(alpha, kBigAlpha);
+    CoverSpot s = CoverEvaluate(coverWorld.xy, coverTint.w, coverWorld.w, w);
+    float h = s.paintedHeight + s.snowHeight;
+    float buried = regs.v[61].x > 0.0 ? regs.v[61].x : 2.0;
+    vec4 kept = vec4(1.0) - smoothstep(vec4(0.0), max(Relief(), vec4(1e-4)) * buried, vec4(h));
+
+    if (h > 0.0)
+    {
+        gCoverLeft = max(CoverTrailed(coverWorld.xy, coverTint.w, h, s), 0.0);
+        gInTrail = smoothstep(0.05, 0.3, (h - gCoverLeft) / h);
+        float poke = smoothstep(gCoverLeft - kPokeEdge, gCoverLeft + kPokeEdge, StoneTop(w));
+        kept = mix(kept, vec4(poke), gInTrail);
+    }
+
+    return kept;
+}
+
 // Layer k's coordinates moved for a view direction (world, toward the eye) over a surface of normal n.
 // `smoothing` (ParallaxSmooth, v60): the height is read that many mip levels blurrier (noise in a height
 // map made for blending turned into bulbs on the stones).
@@ -271,18 +325,19 @@ vec2 BumpSlope(sampler2D h, int k, float strength)
     return strength * vec2(dv / (2.0 * t.y) * perYard.x, du / (2.0 * t.x) * perYard.y);
 }
 
-// The world normal tilted by the layers' slopes, mixed by their weights, along the surface.
-vec3 BumpNormal(vec3 n, vec4 w)
+// The world normal tilted by the layers' slopes (strength: each layer's), mixed by their weights, along
+// the surface.
+vec3 BumpNormal(vec3 n, vec4 w, vec4 strength)
 {
-    vec2 g = BumpSlope(sH0, 0, regs.v[58].x) * w.x;
+    vec2 g = BumpSlope(sH0, 0, strength.x) * w.x;
 #if LAYERS >= 2
-    g += BumpSlope(sH1, 1, regs.v[58].y) * w.y;
+    g += BumpSlope(sH1, 1, strength.y) * w.y;
 #endif
 #if LAYERS >= 3
-    g += BumpSlope(sH2, 2, regs.v[58].z) * w.z;
+    g += BumpSlope(sH2, 2, strength.z) * w.z;
 #endif
 #if LAYERS >= 4
-    g += BumpSlope(sH3, 3, regs.v[58].w) * w.w;
+    g += BumpSlope(sH3, 3, strength.w) * w.w;
 #endif
     vec3 slope = vec3(g, 0.0);
     return normalize(n - (slope - n * dot(n, slope)));
@@ -311,23 +366,28 @@ void main()
     vec3 nv = normalize(coverNormal.xyz);
     vec3 n = normalize(vec3(dot(regs.v[0].xyz, nv), dot(regs.v[1].xyz, nv), dot(regs.v[2].xyz, nv)));
 
+    // SXC: how much of each layer's pattern (parallax, bumps) the covers leave showing.
+    bool parallax = ParallaxOn(), bumps = BumpsOn();
+    vec4 kept = parallax || bumps ? PatternKept(alpha) : vec4(1.0);
+
     // SXC: the parallax moves the coordinates of the layers that have a depth and show here.
-    if (ParallaxOn())
+    if (parallax)
     {
         vec3 vv = -normalize(coverView.xyz);
         vec3 view = vec3(dot(regs.v[0].xyz, vv), dot(regs.v[1].xyz, vv), dot(regs.v[2].xyz, vv));
         float distance = length(coverView.xyz);
         vec4 shown = CoverLayerWeights(alpha, kBigAlpha);
+        vec4 depth = regs.v[59] * kept;
 
-        if (shown.x > 0.01) gUV[0] = Parallax(sH0, 0, regs.v[59].x, regs.v[60].x, view, n, distance);
+        if (shown.x > 0.01) gUV[0] = Parallax(sH0, 0, depth.x, regs.v[60].x, view, n, distance);
 #if LAYERS >= 2
-        if (shown.y > 0.01) gUV[1] = Parallax(sH1, 1, regs.v[59].y, regs.v[60].y, view, n, distance);
+        if (shown.y > 0.01) gUV[1] = Parallax(sH1, 1, depth.y, regs.v[60].y, view, n, distance);
 #endif
 #if LAYERS >= 3
-        if (shown.z > 0.01) gUV[2] = Parallax(sH2, 2, regs.v[59].z, regs.v[60].z, view, n, distance);
+        if (shown.z > 0.01) gUV[2] = Parallax(sH2, 2, depth.z, regs.v[60].z, view, n, distance);
 #endif
 #if LAYERS >= 4
-        if (shown.w > 0.01) gUV[3] = Parallax(sH3, 3, regs.v[59].w, regs.v[60].w, view, n, distance);
+        if (shown.w > 0.01) gUV[3] = Parallax(sH3, 3, depth.w, regs.v[60].w, view, n, distance);
 #endif
     }
 
@@ -343,9 +403,9 @@ void main()
     // SXC: the normal tilted by the layers' bumps, and the sun's diffuse light redone per pixel for it
     // (the stock light comes per vertex: color0 changes by the difference, so a flat spot keeps it
     // exactly).
-    if (BumpsOn())
+    if (bumps)
     {
-        n = BumpNormal(n, weights);
+        n = BumpNormal(n, weights, regs.v[58] * kept);
         vec3 nb = n.x * regs.v[0].xyz + n.y * regs.v[1].xyz + n.z * regs.v[2].xyz;
         float change = clamp(dot(regs.v[24].xyz, nb), 0.0, 1.0) - clamp(dot(regs.v[24].xyz, nv), 0.0, 1.0);
         lit0.xyz = max(lit0.xyz + regs.v[26].xyz * change * coverTint.xyz, vec3(0.0));
@@ -403,7 +463,13 @@ void main()
 #endif
     }
 
-    // SXC: the covers over the layers (painted, fallen snow, wetness); unchanged while they're off.
+    // SXC: the covers over the layers (painted, fallen snow, wetness); unchanged while they're off. In a
+    // trail the stones that rise above the pressed cover poke through it (PatternKept).
+    if (gInTrail > 0.0)
+    {
+        coverPoke = gInTrail * smoothstep(gCoverLeft - kPokeEdge, gCoverLeft + kPokeEdge, StoneTop(weights));
+    }
+
     CoverResult cov = Covers(c, weights, twice, !kUnlit);
     c = cov.c;
 

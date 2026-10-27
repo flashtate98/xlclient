@@ -220,8 +220,16 @@ namespace SXC::Terrain {
         return s_setting;
     }
 
+    float PatternBuried() {
+        static Settings::Float s_setting("Terrain", "PatternBuried", 2.0f, 0.5f, 8.0f, "Covers hide the pattern at (x relief)",
+                                         "How deep snow or another cover must lie, in times a texture's relief (its ParallaxDepth or "
+                                         "NormalStrength), until the texture's parallax and bumps are gone; thinner covers show them less.");
+        return s_setting.Get();
+    }
+
     void Register() {
         Enabled();
+        PatternBuried();
 
         if (!s_table) {
             s_table = Data::Register(MakeSchema());

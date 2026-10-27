@@ -26,8 +26,12 @@ namespace SXC::Terrain {
         bool matched = false;       // a row applied
     };
 
-    // Registers the table (SXC::Startup, before the tables load).
+    // Registers the table (SXC::Startup, before the tables load) and the settings.
     void Register();
+
+    // [Terrain] PatternBuried: the cover depth, in times a texture's relief, that hides its parallax and
+    // bumps (our terrain shader).
+    float PatternBuried();
 
     // Changes with every reload and edit of the table and with the [Terrain] TextureParams switch:
     // cache what Resolve gave by it.
