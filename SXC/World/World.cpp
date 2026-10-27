@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <vector>
 #include "SXC/World/World.h"
+#include "SXC/Terrain/TextureParams.h"
 #include "Engine/Source/Tempest/C4Vector.h"
 #include "Engine/Source/Tempest/CMath.h"
 #include "WoW/Source/UIUtil/Camera.h"
@@ -327,6 +328,10 @@ namespace {
         uint32_t effect[SXC_TERRAIN_MAX_LAYERS] = {};
         int32_t terrainType[SXC_TERRAIN_MAX_LAYERS] = { -1, -1, -1, -1 };
         std::string texture[SXC_TERRAIN_MAX_LAYERS];
+        uint32_t layerFlags[SXC_TERRAIN_MAX_LAYERS] = {};      // MCLY
+        uint32_t textureFlags[SXC_TERRAIN_MAX_LAYERS] = {};    // MTXF as applied (TerrainTextureParams over the ADT's)
+        uint32_t adtTextureFlags[SXC_TERRAIN_MAX_LAYERS] = {}; // MTXF as the ADT has it, 0 where it has none
+        uint32_t paramsGeneration = 0;                         // SXC::Terrain::Generation() they were resolved for
     };
 
     std::unordered_map<const CMapChunk*, DecodedChunk> s_decoded;
@@ -390,7 +395,8 @@ namespace {
         auto found = s_decoded.find(chunk);
 
         if (found != s_decoded.end() && found->second.layers == layers && found->second.alpha == alpha && found->second.count == count &&
-            found->second.cornerX == chunk->m_topLeftCoords.x && found->second.cornerY == chunk->m_topLeftCoords.y) {
+            found->second.cornerX == chunk->m_topLeftCoords.x && found->second.cornerY == chunk->m_topLeftCoords.y &&
+            found->second.paramsGeneration == SXC::Terrain::Generation()) {
             return found->second;
         }
 
@@ -407,6 +413,7 @@ namespace {
         d.cornerY = chunk->m_topLeftCoords.y;
         d.serial = ++s_serial;
         d.count = count;
+        d.paramsGeneration = SXC::Terrain::Generation();
         const bool fix = !(chunk->m_header->m_flags & 0x8000);
 
         if (count > 1) {
@@ -420,8 +427,16 @@ namespace {
 
             if (layer.m_textureId < textures.Count() && textures[layer.m_textureId].m_textureName) {
                 d.texture[l] = textures[layer.m_textureId].m_textureName;
+
+                if (at.area->m_textureFlags) {
+                    d.adtTextureFlags[l] = static_cast<uint32_t>(at.area->m_textureFlags[layer.m_textureId]);
+                }
+
+                d.textureFlags[l] = SXC::Terrain::Resolve(CMap::mapName, at.area->m_index.x, at.area->m_index.y, textures[layer.m_textureId].m_textureName,
+                                                          d.adtTextureFlags[l]).mtxf;
             }
 
+            d.layerFlags[l] = layer.m_flags;
             d.effect[l] = layer.m_offectId;
 
             if (const GroundEffectTextureRec* rec = g_groundEffectTextureDB.GetRecord(static_cast<int32_t>(layer.m_offectId))) {
@@ -454,21 +469,25 @@ namespace {
     wxl_bool WXL_CALL TerrainSample(float x, float y, sxc_terrain_sample* out) {
         Spot at;
 
-        if (!out || out->struct_size < sizeof(sxc_terrain_sample) || !FindSpot(x, y, at) || IsHole(at)) {
+        // A caller built before the flags (2026-10-27) passes the shorter struct: answered up to its size.
+        constexpr uint32_t kFirstSize = offsetof(sxc_terrain_sample, layer_flags);
+
+        if (!out || out->struct_size < kFirstSize || !FindSpot(x, y, at) || IsHole(at)) {
             return WXL_FALSE;
         }
 
+        const uint32_t size = out->struct_size < sizeof(sxc_terrain_sample) ? out->struct_size : static_cast<uint32_t>(sizeof(sxc_terrain_sample));
         const DecodedChunk& d = Decoded(at);
-        *out = sxc_terrain_sample{};
-        out->struct_size = sizeof(sxc_terrain_sample);
-        out->area = static_cast<uint32_t>(at.chunk->m_areaId);
-        out->layer_count = d.count;
-        out->chunk_serial = d.serial;
-        out->dominant_layer = -1;
+        sxc_terrain_sample full{};
+        full.struct_size = size;
+        full.area = static_cast<uint32_t>(at.chunk->m_areaId);
+        full.layer_count = d.count;
+        full.chunk_serial = d.serial;
+        full.dominant_layer = -1;
 
         if (at.chunk->m_lowQualityTexMap) {
             const uint16_t bits = reinterpret_cast<const uint16_t*>(at.chunk->m_lowQualityTexMap)[at.row];
-            out->dominant_layer = static_cast<int32_t>((CMap::s_2bitSplatMask[at.col] & bits) >> CMap::s_2bitSplatShft[at.col]);
+            full.dominant_layer = static_cast<int32_t>((CMap::s_2bitSplatMask[at.col] & bits) >> CMap::s_2bitSplatShft[at.col]);
         }
 
         // Texel centres at (i + 0.5) / 8 cells.
@@ -476,10 +495,13 @@ namespace {
         float rest = 1.0f;
 
         for (int32_t l = 0; l < d.count; l++) {
-            sxc_terrain_layer& layer = out->layers[l];
+            sxc_terrain_layer& layer = full.layers[l];
             layer.texture = d.texture[l].c_str();
             layer.ground_effect = d.effect[l];
             layer.terrain_type = d.terrainType[l];
+            full.layer_flags[l] = d.layerFlags[l];
+            full.texture_flags[l] = d.textureFlags[l];
+            full.adt_texture_flags[l] = d.adtTextureFlags[l];
 
             if (l > 0) {
                 layer.weight = Texel(d.map.data() + static_cast<size_t>(l - 1) * 64 * 64, u, v);
@@ -488,9 +510,10 @@ namespace {
         }
 
         if (d.count > 0) {
-            out->layers[0].weight = rest < 0.0f ? 0.0f : rest;
+            full.layers[0].weight = rest < 0.0f ? 0.0f : rest;
         }
 
+        std::memcpy(out, &full, size);
         return WXL_TRUE;
     }
 

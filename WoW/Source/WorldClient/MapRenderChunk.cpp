@@ -26,6 +26,7 @@
 #include "WoW/Source/WorldClient/World.h"
 #include "SXC/Cover/Cover.h"  // SXC:
 #include "SXC/Log.h"  // SXC:
+#include "SXC/Terrain/TextureParams.h"  // SXC:
 #if defined(_MSC_VER)
 #include <malloc.h>
 #else
@@ -374,7 +375,29 @@ void CMapRenderChunk::CreateLayer(CMapArea* area, SMLayer* layer, int32_t checkD
         this->m_renderFlags |= 0x4;
     }
 
+    renderLayer->m_sxcArea = area;  // SXC: for its texture scale (SxcLayerUvScale)
+    renderLayer->m_sxcParamsGeneration = ~0u;
     this->m_layersCount++;
+}
+
+// SXC: a layer's UV scale from its texture's MTXF scale bits, TerrainTextureParams over the tile's own;
+// again whenever the table changes (an edit shows at once).
+static float SxcLayerUvScale(CMapRenderChunkLayer& layer) {
+    const uint32_t generation = SXC::Terrain::Generation();
+
+    if (layer.m_sxcParamsGeneration != generation) {
+        layer.m_sxcParamsGeneration = generation;
+        layer.m_sxcUvScale = 1.0f;
+        CMapArea* area = layer.m_sxcArea;
+
+        if (area && layer.m_textureId >= 0 && static_cast<uint32_t>(layer.m_textureId) < area->m_textures.Count()) {
+            const uint32_t mtxf = area->m_textureFlags ? static_cast<uint32_t>(area->m_textureFlags[layer.m_textureId]) : 0u;
+            const char* name = area->m_textures[layer.m_textureId].m_textureName;
+            layer.m_sxcUvScale = SXC::Terrain::UvScale(SXC::Terrain::Resolve(CMap::mapName, area->m_index.x, area->m_index.y, name, mtxf).mtxf);
+        }
+    }
+
+    return layer.m_sxcUvScale;
 }
 
 // VERIFY: 6c5dc3eb manual
@@ -2086,8 +2109,18 @@ void CMapRenderChunk::SetVertexShader(CMapRenderChunk* renderChunk, int32_t laye
     layerScale.z = 0.0f;
     layerScale.w = 0.0f;
 
+    // SXC: a single-pass draw (all the chunk's layers, then the alpha) gives each layer its texture
+    // scale (MTXF bits 4-7 with TerrainTextureParams over them); the multi-pass fallback stays stock.
+    const bool allLayers = layerCount == renderChunk->m_layersCount + 1;
+
     for (int32_t i = 1; i < layerCount; i++) {
         consts.m_texScale[i] = layerScale;
+
+        if (allLayers) {
+            const float uv = SxcLayerUvScale(renderChunk->m_layers[i - 1]);
+            consts.m_texScale[i].x *= uv;
+            consts.m_texScale[i].y *= uv;
+        }
     }
 
     C4Vector alphaScale;

@@ -4,6 +4,7 @@
 #include "Engine/Source/Services/AsyncFile.h"
 #include "Engine/Source/Storm/H/storm.h"
 #include "Engine/Source/BlizzardCore/SFile2-Core.h"  // SXC: the _s fallback
+#include "SXC/Terrain/TextureParams.h"  // SXC:
 #include "Engine/Source/Tempest/CiRect.h"
 #include "Engine/Source/Tempest/CImVector.h"
 #include "Engine/Source/Services/Texture.h"
@@ -163,11 +164,14 @@ void CMapArea::BatchChunks(const C2iVector& pos) {
 void CMapArea::LoadTerrainTexture(CMapAreaTexture* areaTexture, int32_t textureId) {
     bool shaders = g_theGxDevicePtr->Caps().m_texTarget[1] && g_theGxDevicePtr->Caps().m_shaderTargets[0] && g_theGxDevicePtr->Caps().m_shaderTargets[4];
 
-    uint8_t flags = 0;
+    uint32_t flags = 0;
 
     if (this->m_textureFlags) {
-        flags = this->m_textureFlags[textureId];
+        flags = static_cast<uint32_t>(this->m_textureFlags[textureId]);
     }
+
+    // SXC: TerrainTextureParams' MTXF bits over the tile's own (a cube map's lost "no specular").
+    flags = SXC::Terrain::Resolve(CMap::mapName, this->m_index.x, this->m_index.y, areaTexture->m_textureName, flags).mtxf;
 
     // SXC: the file the texture loads from, its MTEX name left as it is (our tables look textures up by
     // it). Later ADTs name the _s file and derive the base from it; converted ones keep that name, which

@@ -3,6 +3,7 @@
 #include "Engine/Source/Event/Event.h"
 #include "SXC/Data/Data.h"
 #include "SXC/Settings/Settings.h"
+#include "SXC/Terrain/TextureParams.h"
 
 namespace SXC::Api {
     void Keep();
@@ -28,6 +29,7 @@ namespace SXC {
         s_started = true;
         // The services mods reach through the sxc.bridge mod (SXC/Api): keep their object linked.
         Api::Keep();
+        Terrain::Register();
         Data::Start();
         EventRegister(EVENT_ID_IDLE, Idle);
     }

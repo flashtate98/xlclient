@@ -132,6 +132,15 @@ namespace SXC::Data {
     // Watches the loose files. Called every frame (SXC::Startup registers it).
     void Tick();
 
+    // A button of a table's own beside Add / Clone / Delete in the Data view, for the selected row.
+    // `run` returns the row to select (or an empty Row) and may set `note`, shown beside the buttons.
+    struct RowAction {
+        const char* label;
+        const char* tooltip;
+        Row (*run)(Table& table, Row selected, std::string& note);
+    };
+    void AddRowAction(const char* table, RowAction action);
+
     // The "Data" view's content: the registered tables, the selected one's rows and the selected row's
     // form. Inside an ImGui window.
     void DrawBrowser();

@@ -57,6 +57,12 @@ class CMapRenderChunkLayer {
     /* 000C */ CTexture* m_layerTexture;
     /* 0010 */ CMapRenderChunk* m_owner;
 
+    // SXC: the tile the layer's texture belongs to, its UV scale and the TerrainTextureParams
+    // generation that was resolved for (SxcLayerUvScale, MapRenderChunk.cpp).
+    CMapArea* m_sxcArea = nullptr;
+    float m_sxcUvScale = 1.0f;
+    uint32_t m_sxcParamsGeneration = ~0u;
+
     CMapRenderChunkLayer();
 };
 

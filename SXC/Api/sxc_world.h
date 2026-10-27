@@ -68,6 +68,12 @@ typedef struct sxc_terrain_sample
     int32_t           dominant_layer; ///< the client's own dominant layer for the cell (footsteps, grass); -1 none
     uint32_t          chunk_serial;   ///< changes whenever the chunk under the point is loaded anew
     sxc_terrain_layer layers[SXC_TERRAIN_MAX_LAYERS];
+
+    // --- appended 2026-10-27: filled when struct_size reaches them ----------------------------
+    uint32_t layer_flags[SXC_TERRAIN_MAX_LAYERS];   ///< each layer's MCLY flags (0x400 reflective, 0x100 alpha map...)
+    uint32_t texture_flags[SXC_TERRAIN_MAX_LAYERS];     ///< each layer's texture's MTXF flags as applied (TerrainTextureParams over
+                                                        ///< the ADT's); bits 4-7: retail's texture scale (1 << those bits)
+    uint32_t adt_texture_flags[SXC_TERRAIN_MAX_LAYERS]; ///< the same as the ADT has them, 0 where the tile has no MTXF
 } sxc_terrain_sample;
 
 /// LiquidType.dbc's Type column.

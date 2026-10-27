@@ -23,6 +23,8 @@ namespace {
     std::unordered_map<std::string, Selection> s_rowSelection;
     char s_filter[128];
     std::string s_saveError;
+    std::unordered_map<std::string, std::vector<RowAction>> s_rowActions;
+    std::unordered_map<std::string, std::string> s_actionNotes;  // the last action's note per table
 
     Row SelectedRow(Table& table) {
         Selection& selection = s_rowSelection[table.Name()];
@@ -213,7 +215,37 @@ namespace {
             ImGui::OpenPopup("##delete");
         }
 
+        // The table's own actions (AddRowAction).
+        const auto actions = s_rowActions.find(table.Name());
+
+        if (actions != s_rowActions.end()) {
+            for (const RowAction& action : actions->second) {
+                ImGui::SameLine();
+
+                if (ImGui::Button(action.label) && selected) {
+                    std::string& note = s_actionNotes[table.Name()];
+                    note.clear();
+                    const Row row = action.run(table, selected, note);
+
+                    if (row) {
+                        Select(table, row);
+                    }
+                }
+
+                if (action.tooltip) {
+                    ImGui::SetItemTooltip("%s", action.tooltip);
+                }
+            }
+        }
+
         ImGui::EndDisabled();
+
+        const auto note = s_actionNotes.find(table.Name());
+
+        if (note != s_actionNotes.end() && !note->second.empty()) {
+            ImGui::SameLine();
+            ImGui::TextColored(kWarning, "%s", note->second.c_str());
+        }
 
         if (ImGui::BeginPopup("##delete")) {
             ImGui::Text("Delete row %u? (Reload brings it back until you save.)", selected.Id());
@@ -334,6 +366,10 @@ namespace {
 }
 
 namespace SXC::Data {
+    void AddRowAction(const char* table, RowAction action) {
+        s_rowActions[table].push_back(action);
+    }
+
     void DrawBrowser() {
         if (TableCount() == 0) {
             ImGui::TextDisabled("no tables registered");
