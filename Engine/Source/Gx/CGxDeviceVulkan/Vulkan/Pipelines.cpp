@@ -185,7 +185,10 @@ namespace gxvk::vk::pipelines
             cubeMask    = draw.fragmentRecord->cubeMask;
         }
         else if (draw.fragment == FragmentProgram::Terrain)
+        {
             samplerMask = terrain::SamplerMask(draw.terrainFragment);  // SXC: what the module declares
+            cubeMask    = (draw.terrainFragment & terrain::kFragmentCube) ? 1u : 0u;
+        }
         else if (draw.fragment == FragmentProgram::FixedFunction || draw.fragment == FragmentProgram::FixedFunctionTranslated
                  || draw.fragment == FragmentProgram::Decal)
             samplerMask = 3u;

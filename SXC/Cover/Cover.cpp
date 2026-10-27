@@ -367,12 +367,14 @@ namespace {
     void WXL_CALL SetFar(const sxc_cover_map* map) { SetMap(s_far, map); }
 
     void WXL_CALL SetLook(const sxc_cover_look* look) {
-        if (!look || look->struct_size < sizeof(sxc_cover_look)) {
+        // A mod built before the appended fields passes the size it knows; those stay 0.
+        if (!look || look->struct_size < offsetof(sxc_cover_look, steady_wind)) {
             s_haveLook = false;
             return;
         }
 
-        s_look = *look;
+        s_look = sxc_cover_look{};
+        std::memcpy(&s_look, look, look->struct_size < sizeof(sxc_cover_look) ? look->struct_size : sizeof(sxc_cover_look));
         s_haveLook = true;
     }
 
@@ -736,6 +738,10 @@ namespace SXC::Cover {
 
     const Decal* CurrentDecal() {
         return s_decalOn ? &s_decal : nullptr;
+    }
+
+    float SteadyWind() {
+        return s_haveLook && s_look.enabled ? std::fmax(s_look.steady_wind, 0.0f) : 0.0f;
     }
 
     void BeforeChunkDraw(CMapRenderChunk* rc) {

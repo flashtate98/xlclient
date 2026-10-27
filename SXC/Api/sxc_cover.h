@@ -136,6 +136,11 @@ typedef struct sxc_cover_look
     /// foot above the surface leaves nothing): SXC_COVER_CARVE_*.
     int32_t  trail_carve;
     float    trail_lift;      ///< yd above the unit: SXC_COVER_CARVE_UP_TO's height
+
+    // --- appended 2026-10-27: read when struct_size reaches them, else 0 ----------------------------
+    /// The steady wind at ground level around the player (0 calm .. 1 strong): covers lying in it are
+    /// levelled sooner, so a terrain texture's pattern (parallax, bumps) fades under thinner snow.
+    float    steady_wind;
 } sxc_cover_look;
 
 /// Wherever the foot is (up to 1.5 yd above the unit: not while jumping): its swing through deep cover

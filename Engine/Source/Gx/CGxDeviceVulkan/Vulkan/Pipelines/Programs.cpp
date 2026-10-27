@@ -40,21 +40,40 @@ namespace
         const uint32_t* words;
         size_t          bytes;
     };
-    // [0] the cover textures in 16 slots, [1] in one array indexed per pixel (Vulkan/Cover's bindless mode).
-    const TerrainFragSource kTerrainFrags[2][4][3] = {
+    // [0] the cover textures in 16 slots, [1] in one array indexed per pixel (Vulkan/Cover's bindless mode);
+    // then [0] a plain layer 0, [1] a cube map (a reflective layer).
+#define SXC_FRAG(name) { name, sizeof name }
+    const TerrainFragSource kTerrainFrags[2][2][4][3] = {
         {
-            { { kTerrainFrag10, sizeof kTerrainFrag10 }, { kTerrainFrag11, sizeof kTerrainFrag11 }, { kTerrainFrag12, sizeof kTerrainFrag12 } },
-            { { kTerrainFrag20, sizeof kTerrainFrag20 }, { kTerrainFrag21, sizeof kTerrainFrag21 }, { kTerrainFrag22, sizeof kTerrainFrag22 } },
-            { { kTerrainFrag30, sizeof kTerrainFrag30 }, { kTerrainFrag31, sizeof kTerrainFrag31 }, { kTerrainFrag32, sizeof kTerrainFrag32 } },
-            { { kTerrainFrag40, sizeof kTerrainFrag40 }, { kTerrainFrag41, sizeof kTerrainFrag41 }, { kTerrainFrag42, sizeof kTerrainFrag42 } },
+            {
+                { SXC_FRAG(kTerrainFrag10), SXC_FRAG(kTerrainFrag11), SXC_FRAG(kTerrainFrag12) },
+                { SXC_FRAG(kTerrainFrag20), SXC_FRAG(kTerrainFrag21), SXC_FRAG(kTerrainFrag22) },
+                { SXC_FRAG(kTerrainFrag30), SXC_FRAG(kTerrainFrag31), SXC_FRAG(kTerrainFrag32) },
+                { SXC_FRAG(kTerrainFrag40), SXC_FRAG(kTerrainFrag41), SXC_FRAG(kTerrainFrag42) },
+            },
+            {
+                { SXC_FRAG(kTerrainFrag10C), SXC_FRAG(kTerrainFrag11C), SXC_FRAG(kTerrainFrag12C) },
+                { SXC_FRAG(kTerrainFrag20C), SXC_FRAG(kTerrainFrag21C), SXC_FRAG(kTerrainFrag22C) },
+                { SXC_FRAG(kTerrainFrag30C), SXC_FRAG(kTerrainFrag31C), SXC_FRAG(kTerrainFrag32C) },
+                { SXC_FRAG(kTerrainFrag40C), SXC_FRAG(kTerrainFrag41C), SXC_FRAG(kTerrainFrag42C) },
+            },
         },
         {
-            { { kTerrainFrag10B, sizeof kTerrainFrag10B }, { kTerrainFrag11B, sizeof kTerrainFrag11B }, { kTerrainFrag12B, sizeof kTerrainFrag12B } },
-            { { kTerrainFrag20B, sizeof kTerrainFrag20B }, { kTerrainFrag21B, sizeof kTerrainFrag21B }, { kTerrainFrag22B, sizeof kTerrainFrag22B } },
-            { { kTerrainFrag30B, sizeof kTerrainFrag30B }, { kTerrainFrag31B, sizeof kTerrainFrag31B }, { kTerrainFrag32B, sizeof kTerrainFrag32B } },
-            { { kTerrainFrag40B, sizeof kTerrainFrag40B }, { kTerrainFrag41B, sizeof kTerrainFrag41B }, { kTerrainFrag42B, sizeof kTerrainFrag42B } },
+            {
+                { SXC_FRAG(kTerrainFrag10B), SXC_FRAG(kTerrainFrag11B), SXC_FRAG(kTerrainFrag12B) },
+                { SXC_FRAG(kTerrainFrag20B), SXC_FRAG(kTerrainFrag21B), SXC_FRAG(kTerrainFrag22B) },
+                { SXC_FRAG(kTerrainFrag30B), SXC_FRAG(kTerrainFrag31B), SXC_FRAG(kTerrainFrag32B) },
+                { SXC_FRAG(kTerrainFrag40B), SXC_FRAG(kTerrainFrag41B), SXC_FRAG(kTerrainFrag42B) },
+            },
+            {
+                { SXC_FRAG(kTerrainFrag10CB), SXC_FRAG(kTerrainFrag11CB), SXC_FRAG(kTerrainFrag12CB) },
+                { SXC_FRAG(kTerrainFrag20CB), SXC_FRAG(kTerrainFrag21CB), SXC_FRAG(kTerrainFrag22CB) },
+                { SXC_FRAG(kTerrainFrag30CB), SXC_FRAG(kTerrainFrag31CB), SXC_FRAG(kTerrainFrag32CB) },
+                { SXC_FRAG(kTerrainFrag40CB), SXC_FRAG(kTerrainFrag41CB), SXC_FRAG(kTerrainFrag42CB) },
+            },
         },
     };
+#undef SXC_FRAG
 
     // SXC: boolean / integer constants as 32-bit values, ids 0.. in order.
     const VkSpecializationInfo* Specialize(TerrainSpecialization& sp, const uint32_t* values, uint32_t count)
@@ -99,9 +118,10 @@ namespace gxvk::vk::pipelines::detail
         // The bindless set (SPIR-V 1.5) only where the device is 1.2 with non-uniform indexing.
         const bool bindless = (context::Caps().enabled & gxvk::vk::kCapSampledArrayNonUniform) != 0;
         for (uint32_t b = 0; b < (bindless ? 2u : 1u); ++b)
-            for (uint32_t l = 0; l < 4; ++l)
-                for (uint32_t g = 0; g < 3; ++g)
-                    if (!CreateModule(kTerrainFrags[b][l][g].words, kTerrainFrags[b][l][g].bytes, s.terrainFrag[b][l][g], "Terrain.frag")) return false;
+            for (uint32_t c = 0; c < 2; ++c)
+                for (uint32_t l = 0; l < 4; ++l)
+                    for (uint32_t g = 0; g < 3; ++g)
+                        if (!CreateModule(kTerrainFrags[b][c][l][g].words, kTerrainFrags[b][c][l][g].bytes, s.terrainFrag[b][c][l][g], "Terrain.frag")) return false;
         // The raised chunks' stages (step 5c) only where the device tessellates.
         if (context::Caps().enabled & gxvk::vk::kCapTessellation)
         {
@@ -184,7 +204,8 @@ namespace gxvk::vk::pipelines::detail
             *m = VK_NULL_HANDLE;
         }
         for (auto& set : s.terrainFrag)
-            for (auto& row : set)
+            for (auto& kind : set)
+            for (auto& row : kind)
                 for (VkShaderModule& m : row)
                 {
                     if (m != VK_NULL_HANDLE) s.dapi->DestroyShaderModule(s.device, m, nullptr);
@@ -207,7 +228,8 @@ namespace gxvk::vk::pipelines::detail
         if (k.fragment == static_cast<uint32_t>(FragmentProgram::Terrain))
         {
             const uint32_t group = terrain::ShadowGroup(k.terrainFragment);
-            return group < 3 ? s.terrainFrag[gxvk::vk::cover::Bindless() ? 1 : 0][terrain::Layers(k.terrainFragment) - 1][group] : VK_NULL_HANDLE;
+            const uint32_t cube = (k.terrainFragment & terrain::kFragmentCube) ? 1u : 0u;
+            return group < 3 ? s.terrainFrag[gxvk::vk::cover::Bindless() ? 1 : 0][cube][terrain::Layers(k.terrainFragment) - 1][group] : VK_NULL_HANDLE;
         }
         return k.fragment < kFragmentPrograms ? s.frag[k.fragment] : VK_NULL_HANDLE;
     }

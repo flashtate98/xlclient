@@ -47,12 +47,13 @@ OUTPUTS = [
     # per layer count and shadow group (the samplers a module declares must all be bound), the finer
     # options as specialization constants. Twice: the cover textures in 16 slots (any device), and in
     # one array indexed per pixel ("B": a Vulkan 1.2 device with non-uniform indexing; SPIR-V 1.5).
+    # Each again with CUBE ("C"): a reflective layer 0, a cube map.
     ("TerrainSpirv.inc", [("Terrain.vert", "kTerrainVert")] + [
-        ("Terrain.frag", f"kTerrainFrag{layers}{shadow}", [f"LAYERS={layers}", f"SHADOW={shadow}"])
-        for layers in range(1, 5) for shadow in range(3)
+        ("Terrain.frag", f"kTerrainFrag{layers}{shadow}{c}", [f"LAYERS={layers}", f"SHADOW={shadow}", f"CUBE={int(c == 'C')}"])
+        for c in ("", "C") for layers in range(1, 5) for shadow in range(3)
     ] + [
-        ("Terrain.frag", f"kTerrainFrag{layers}{shadow}B", [f"LAYERS={layers}", f"SHADOW={shadow}", "COVER_BINDLESS=1"], "vulkan1.2")
-        for layers in range(1, 5) for shadow in range(3)
+        ("Terrain.frag", f"kTerrainFrag{layers}{shadow}{c}B", [f"LAYERS={layers}", f"SHADOW={shadow}", f"CUBE={int(c == 'C')}", "COVER_BINDLESS=1"], "vulkan1.2")
+        for c in ("", "C") for layers in range(1, 5) for shadow in range(3)
     ] + [
         # Chunks raised onto their covers (step 5c): the vertex as it is, the subdivision, the raised
         # points (both once per layer count: the alpha map's binding is the layer count).

@@ -5,7 +5,7 @@
 // finer options are specialization constants. The device sets them from the record the engine binds:
 //   Terrain1:n  n = 16 unlit + 8 bigAlpha + 2 (layers - 1) + cube
 //   Terrain3:n  n = 48 unlit + 24 bigAlpha + 8 (mode - 1) + 2 (layers - 1) + cube
-// (CMap::GetTerrainPixelShader). Records with a cube layer stay the stock ones.
+// (CMap::GetTerrainPixelShader). The cube records too, compiled again with CUBE (2026-10-27).
 //
 // Samplers: s0..s(LAYERS-1) the layers, s(LAYERS) the alpha map (rgb the layers' weights, a the baked
 // shadow), s5..s8 the shadow cascades, s9..s(8+LAYERS) the layers' height textures. Pixel registers: p1
@@ -45,7 +45,17 @@ layout(location = 10) in float fog0;
 
 layout(location = 0) out vec4 oC0;
 
+// SXC: CUBE, a reflective layer 0 (MCLY 0x400): a cube map read by the reflection vector the vertex
+// shader puts in texcoord0.xyz (kEnv), as the stock cube records do; it has no height, bumps or parallax
+// (the client sends none for it), the other layers keep theirs.
+#ifndef CUBE
+#define CUBE 0
+#endif
+#if CUBE
+layout(set = 0, binding = 0) uniform samplerCube s0;
+#else
 layout(set = 0, binding = 0) uniform sampler2D s0;
+#endif
 #if LAYERS >= 2
 layout(set = 0, binding = 1) uniform sampler2D s1;
 #endif
@@ -195,7 +205,8 @@ vec4 PatternKept(vec4 alpha)
     vec4 w = CoverLayerWeights(alpha, kBigAlpha);
     CoverSpot s = CoverEvaluate(coverWorld.xy, coverTint.w, coverWorld.w, w);
     float h = s.paintedHeight + s.snowHeight;
-    float buried = regs.v[61].x > 0.0 ? regs.v[61].x : 2.0;
+    // Wind levels a cover sooner (v61.y, the steady ground wind 0..1: a strong one buries at a third).
+    float buried = (regs.v[61].x > 0.0 ? regs.v[61].x : 2.0) / (1.0 + 2.0 * clamp(regs.v[61].y, 0.0, 1.0));
     vec4 kept = vec4(1.0) - smoothstep(vec4(0.0), max(Relief(), vec4(1e-4)) * buried, vec4(h));
 
     if (h > 0.0)
@@ -325,6 +336,14 @@ vec2 BumpSlope(sampler2D h, int k, float strength)
     return strength * vec2(dv / (2.0 * t.y) * perYard.x, du / (2.0 * t.x) * perYard.y);
 }
 
+// The sun's highlight factor for a view normal at this pixel (as the vertex shader's: Blinn-Phong to
+// v27.w, its colour v27.xyz applied by the caller).
+float SunHighlight(vec3 n)
+{
+    vec3 h = normalize(normalize(-coverView.xyz) + regs.v[24].xyz);
+    return pow(max(dot(h, n), 0.0), max(regs.v[27].w, 1.0));
+}
+
 // The world normal tilted by the layers' slopes (strength: each layer's), mixed by their weights, along
 // the surface.
 vec3 BumpNormal(vec3 n, vec4 w, vec4 strength)
@@ -379,7 +398,9 @@ void main()
         vec4 shown = CoverLayerWeights(alpha, kBigAlpha);
         vec4 depth = regs.v[59] * kept;
 
+#if !CUBE
         if (shown.x > 0.01) gUV[0] = Parallax(sH0, 0, depth.x, regs.v[60].x, view, n, distance);
+#endif
 #if LAYERS >= 2
         if (shown.y > 0.01) gUV[1] = Parallax(sH1, 1, depth.y, regs.v[60].y, view, n, distance);
 #endif
@@ -403,12 +424,22 @@ void main()
     // SXC: the normal tilted by the layers' bumps, and the sun's diffuse light redone per pixel for it
     // (the stock light comes per vertex: color0 changes by the difference, so a flat spot keeps it
     // exactly).
+    // SXC: the sun's highlight likewise, where the vertex shader gives one (color1.w): per pixel by the
+    // difference, and the covers' wet shine on the tilted normal.
+    vec3 sunHighlight = color1.xyz;
+
     if (bumps)
     {
         n = BumpNormal(n, weights, regs.v[58] * kept);
         vec3 nb = n.x * regs.v[0].xyz + n.y * regs.v[1].xyz + n.z * regs.v[2].xyz;
         float change = clamp(dot(regs.v[24].xyz, nb), 0.0, 1.0) - clamp(dot(regs.v[24].xyz, nv), 0.0, 1.0);
         lit0.xyz = max(lit0.xyz + regs.v[26].xyz * change * coverTint.xyz, vec3(0.0));
+        coverViewNormal = nb;
+
+        if (color1.w > 0.5)
+        {
+            sunHighlight = max(color1.xyz + regs.v[27].xyz * (SunHighlight(nb) - SunHighlight(nv)), vec3(0.0));
+        }
     }
 
     if (LightsOn())
@@ -419,7 +450,11 @@ void main()
     }
 
     vec3 twice = lit0.xyz + lit0.xyz;
+#if CUBE
+    vec4 c = Layer(texture(s0, texcoord0.xyz), regs.p[1].x, twice);
+#else
     vec4 c = Layer(Tex(s0, 0), regs.p[1].x, twice);
+#endif
 
     // SXC: the layers by their heights (HeightWeights), where a layer of the chunk has any.
     if (heights)
@@ -535,7 +570,7 @@ void main()
 
     if (kUnlit)
     {
-        vec3 highlight = c.www * color1.xyz + shine;
+        vec3 highlight = c.www * sunHighlight + shine;
         highlight = shadow * highlight;
         colour = c.xyz * shade + highlight;
     }
@@ -544,7 +579,7 @@ void main()
         colour = c.xyz * shade;
         colour = colour * lit0.xyz;
         colour = colour + colour;
-        vec3 highlight = c.www * color1.xyz + shine;
+        vec3 highlight = c.www * sunHighlight + shine;
         colour = highlight * shadow + colour;
     }
 

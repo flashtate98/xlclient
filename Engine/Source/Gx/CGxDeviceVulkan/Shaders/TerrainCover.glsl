@@ -784,6 +784,9 @@ CoverResult Covers(vec4 c, vec4 w, vec3 twice, bool litLayers)
 // The wet shine (WXL's cover: a stronger, tighter highlight): per pixel, the sun's Blinn-Phong with the
 // exponent sharpened by the wetness, by the gloss made stronger by it. Nothing while the stock highlight
 // is off.
+// SXC: the view normal the terrain's bumps tilted (Terrain.frag sets it); zero: the vertex one.
+vec3 coverViewNormal = vec3(0.0);
+
 float CoverWetShine(float wet, float gloss, float specularOn)
 {
     if (wet <= 0.0 || specularOn < 0.5)
@@ -791,7 +794,7 @@ float CoverWetShine(float wet, float gloss, float specularOn)
         return 0.0;
     }
 
-    vec3 n = normalize(coverNormal.xyz);
+    vec3 n = dot(coverViewNormal, coverViewNormal) > 0.0 ? coverViewNormal : normalize(coverNormal.xyz);
     vec3 v = normalize(-coverView.xyz);
     vec3 h = normalize(regs.v[24].xyz + v);
     float e = max(regs.v[27].w, 1.0) * (1.0 + 3.0 * wet);

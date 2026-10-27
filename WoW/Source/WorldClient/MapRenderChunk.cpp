@@ -418,7 +418,8 @@ static float SxcLayerUvScale(CMapRenderChunkLayer& layer) {
 
 // SXC: the layers' height textures (stages 9..12), their height scales and offsets (pixel p14, p15 as
 // offset - 1: all zero is the stock blend), normal strengths (vertex v58, zero: the stock light) and
-// parallax depths and smoothing (v59, v60), the covers' burying of them (v61.x, [Terrain] PatternBuried)
+// parallax depths and smoothing (v59, v60), the covers' burying of them (v61.x [Terrain] PatternBuried,
+// v61.y the steady wind)
 // for our terrain shader's height blending, bumps and parallax; or all off.
 static void SxcSetHeights(CMapRenderChunk* chunk, bool on) {
     float scale[4] = {};
@@ -430,7 +431,10 @@ static void SxcSetHeights(CMapRenderChunk* chunk, bool on) {
     for (int32_t i = 0; i < 4; i++) {
         CGxTex* gxTex = nullptr;
 
-        if (on && i < chunk->m_layersCount) {
+        // A reflective layer 0 (a cube map, read by the reflection vector) has none of them.
+        const bool reflective = i == 0 && (chunk->m_renderFlags & 0x4);
+
+        if (on && i < chunk->m_layersCount && !reflective) {
             CMapRenderChunkLayer& layer = SxcLayerParams(chunk->m_layers[i]);
             scale[i] = layer.m_sxcHeightScale;
             offset[i] = layer.m_sxcHeightOffset - 1.0f;
@@ -455,7 +459,7 @@ static void SxcSetHeights(CMapRenderChunk* chunk, bool on) {
     GxShaderConstantsSet(GxSh_Vertex, 58, normal, 1);
     GxShaderConstantsSet(GxSh_Vertex, 59, parallax, 1);
     GxShaderConstantsSet(GxSh_Vertex, 60, smoothing, 1);
-    const float buried[4] = { SXC::Terrain::PatternBuried(), 0.0f, 0.0f, 0.0f };
+    const float buried[4] = { SXC::Terrain::PatternBuried(), SXC::Cover::SteadyWind(), 0.0f, 0.0f };
     GxShaderConstantsSet(GxSh_Vertex, 61, buried, 1);
 }
 

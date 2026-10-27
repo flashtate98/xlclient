@@ -127,4 +127,8 @@ namespace SXC::Cover {
     // beyond the near map), asking the mod's resolver the first time a chunk is met, and counts the
     // textures the chunk shows.
     void BeforeChunkDraw(CMapRenderChunk* chunk);
+
+    // The steady ground wind the mod sent with the look (0 calm .. 1 strong; 0 without covers or from
+    // an older mod): covers level sooner in it (the terrain shader's pattern fade).
+    float SteadyWind();
 }

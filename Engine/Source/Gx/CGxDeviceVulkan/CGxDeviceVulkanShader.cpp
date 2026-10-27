@@ -148,8 +148,9 @@ namespace {
     //   vertex  "Terrain:n"   n = 64 point lights + 16 (layers - 1) + 8 specular + 4 vertex colour + 2 env + shadow
     //   pixel   "Terrain1:n"  n = 16 unlit + 8 big alpha + 2 (layers - 1) + cube   (no shadow map)
     //           "Terrain3:n"  n = 48 unlit + 24 big alpha + 8 (mode - 1) + 2 (layers - 1) + cube   (modes 1-3)
-    // (CMapRenderChunk::GetVertexShader, CMap::GetTerrainPixelShader). Not covered, so stock: the cube
-    // layer, Terrain2 and the _pcf families (this device takes the shadow cache's R32F path), Terrain0.
+    // (CMapRenderChunk::GetVertexShader, CMap::GetTerrainPixelShader); the cube records (a reflective
+    // layer 0) since 2026-10-27, with kFragmentCube. Not covered, so stock: Terrain2 and the _pcf families
+    // (this device takes the shadow cache's R32F path), Terrain0.
     SXC::Settings::Bool& OurTerrain() {
         static SXC::Settings::Bool s_setting("Terrain", "OurShader", true, "Our terrain shader (Vulkan)",
                                              "Draw the terrain with our own shader instead of the client's 128 + 128 translated ones. It looks the same; covers, wetness and our lights build on it.");
@@ -204,13 +205,14 @@ namespace {
             d.options = ((n >> 4) & 3u) | ((n & 1u) ? terrain::kVertexShadow : 0u) | ((n & 2u) ? terrain::kVertexEnv : 0u) |
                         ((n & 4u) ? terrain::kVertexColor : 0u) | ((n & 8u) ? terrain::kVertexSpecular : 0u) | ((n & 64u) ? terrain::kVertexPointLights : 0u);
             d.covered = true;
-        } else if (shader->m_target == GxSh_Pixel && !strcmp(family, "Terrain1") && n < 32 && !(n & 1u)) {
-            d.options = ((n >> 1) & 3u) | ((n & 8u) ? terrain::kFragmentBigAlpha : 0u) | ((n & 16u) ? terrain::kFragmentUnlit : 0u);
+        } else if (shader->m_target == GxSh_Pixel && !strcmp(family, "Terrain1") && n < 32) {
+            d.options = ((n >> 1) & 3u) | ((n & 8u) ? terrain::kFragmentBigAlpha : 0u) | ((n & 16u) ? terrain::kFragmentUnlit : 0u) |
+                        ((n & 1u) ? terrain::kFragmentCube : 0u);
             d.covered = true;
-        } else if (shader->m_target == GxSh_Pixel && !strcmp(family, "Terrain3") && n < 96 && !(n & 1u)) {
+        } else if (shader->m_target == GxSh_Pixel && !strcmp(family, "Terrain3") && n < 96) {
             const uint32_t mode = (n % 24u) / 8u + 1u;
             d.options = ((n >> 1) & 3u) | ((mode == 1 ? 1u : 2u) << 2) | (((n / 24u) & 1u) ? terrain::kFragmentBigAlpha : 0u) |
-                        ((n / 48u) ? terrain::kFragmentUnlit : 0u) | (mode == 3 ? terrain::kFragmentNineTaps : 0u);
+                        ((n / 48u) ? terrain::kFragmentUnlit : 0u) | (mode == 3 ? terrain::kFragmentNineTaps : 0u) | ((n & 1u) ? terrain::kFragmentCube : 0u);
             d.covered = true;
         }
 

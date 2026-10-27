@@ -235,7 +235,7 @@ namespace gxvk::vk::pipelines::detail
         VkShaderModule        vert[kVertexPrograms]   = {};   ///< the backend's own; Translated stays null
         VkShaderModule        frag[kFragmentPrograms] = {};
         VkShaderModule        terrainVert       = VK_NULL_HANDLE;   ///< SXC: Shaders/Terrain.vert
-        VkShaderModule        terrainFrag[2][4][3] = {};            ///< SXC: Shaders/Terrain.frag by bindless covers, layers - 1, shadow group
+        VkShaderModule        terrainFrag[2][2][4][3] = {};         ///< SXC: Shaders/Terrain.frag by bindless covers, cube layer 0, layers - 1, shadow group
         VkShaderModule        terrainPatchVert = VK_NULL_HANDLE;    ///< SXC: raised chunks (step 5c): Shaders/TerrainPatch.vert,
         VkShaderModule        terrainTesc[4]   = {};                ///<      Terrain.tesc by layers - 1,
         VkShaderModule        terrainTese[4]   = {};                ///<      Terrain.tese by layers - 1 (made where the device tessellates)
