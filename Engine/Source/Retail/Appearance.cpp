@@ -205,6 +205,16 @@ bool DeathKnightOnly(const Index& x, const Row& choice) {
 }
 }
 
+// Only the glowing Death Knight eyes take colours: the choice that shows the eye-glow wisps (group 17).
+// Other Death Knight eye choices (the Night Elf blindfold) keep one look.
+static bool ShowsEyeGlow(uint32_t chrModel, uint32_t choiceId) {
+    std::vector<uint16_t> geosets;
+    Geosets(chrModel, { choiceId }, geosets);
+    for (const uint16_t geoset : geosets)
+        if (geoset >= 1701 && geoset <= 1799) return true;
+    return false;
+}
+
 bool EyeTint(uint32_t choiceId, uint32_t& baseChoice, uint32_t& rgb) {
     if ((choiceId & 0xFF000000u) != kEyeTintTag) return false;
     const uint32_t tint = (choiceId & 0xF) - 1;
@@ -236,7 +246,8 @@ void Options(uint32_t chrModel, uint32_t classId, std::vector<Option>& options) 
                 if (!CreationAllowed(x, *choice, classId)) continue;
                 option.choices.push_back(choice->id);
                 // FlashWOW: the Death Knight eye choice's other colours follow it.
-                if (classId == 6 && option.name == "Eye Color" && DeathKnightOnly(x, *choice) && choice->id < (1u << 20))
+                if (classId == 6 && option.name == "Eye Color" && DeathKnightOnly(x, *choice) && choice->id < (1u << 20) &&
+                    ShowsEyeGlow(chrModel, choice->id))
                     for (uint32_t tint = 0; tint < kEyeTintCount; ++tint) option.choices.push_back(EyeTintId(choice->id, tint));
             }
         if (!option.choices.empty()) options.push_back(std::move(option));
