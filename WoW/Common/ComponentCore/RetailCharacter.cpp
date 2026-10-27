@@ -1413,6 +1413,11 @@ void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
     CM2Model* model = character->m_data.m_model;
     if (!model) return;
     model->SetGeometryVisible(1701, 1799, 0);
+    // The stock pass above shows its own eye glow (1703, from the 3.3.5 values); the Retail look's own
+    // group 17 piece comes back: the Death Knight eye-glow wisps (1701), which the line above hid too.
+    if (const auto look = RetailLook(character))
+        for (const uint16_t geoset : look->geosets)
+            if (geoset >= 1701 && geoset <= 1799) model->SetGeometryVisible(geoset, geoset, 1);
     ApplyCollections(model);
 
     // Feet. Retail bodies have a bare foot with toes (2001) and a closed shoe (2002) as separate meshes;
