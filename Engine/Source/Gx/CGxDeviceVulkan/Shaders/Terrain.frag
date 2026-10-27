@@ -161,6 +161,47 @@ vec4 HeightWeights(vec4 w)
     return pct / max(dot(pct, vec4(1.0)), 1e-5);
 }
 
+// SXC: bumps from the height textures (TerrainTextureParams' NormalStrength in v58 per layer: yards of
+// relief over a texture's full height; all zero: none, the light as stock).
+bool BumpsOn()
+{
+    return any(notEqual(regs.v[58], vec4(0.0)));
+}
+
+// A layer's height slope in world yards per yard (x, y), from its height texture's neighbours. Its
+// coordinates run u along world y and v along world x, at v18+k per yard (TerrainRegs.glsl).
+vec2 BumpSlope(sampler2D h, int k, float strength)
+{
+    if (strength == 0.0)
+    {
+        return vec2(0.0);
+    }
+
+    vec2 uv = Coord(k);
+    vec2 t = 1.0 / vec2(textureSize(h, 0));
+    float du = texture(h, uv + vec2(t.x, 0.0)).a - texture(h, uv - vec2(t.x, 0.0)).a;
+    float dv = texture(h, uv + vec2(0.0, t.y)).a - texture(h, uv - vec2(0.0, t.y)).a;
+    vec4 perYard = regs.v[18 + k];
+    return strength * vec2(dv / (2.0 * t.y) * perYard.x, du / (2.0 * t.x) * perYard.y);
+}
+
+// The world normal tilted by the layers' slopes, mixed by their weights, along the surface.
+vec3 BumpNormal(vec3 n, vec4 w)
+{
+    vec2 g = BumpSlope(sH0, 0, regs.v[58].x) * w.x;
+#if LAYERS >= 2
+    g += BumpSlope(sH1, 1, regs.v[58].y) * w.y;
+#endif
+#if LAYERS >= 3
+    g += BumpSlope(sH2, 2, regs.v[58].z) * w.z;
+#endif
+#if LAYERS >= 4
+    g += BumpSlope(sH3, 3, regs.v[58].w) * w.w;
+#endif
+    vec3 slope = vec3(g, 0.0);
+    return normalize(n - (slope - n * dot(n, slope)));
+}
+
 void main()
 {
     // SXC: our point lights (step 6a) in the stock diffuse light. color0 is the stock light (clamped)
@@ -170,25 +211,43 @@ void main()
     vec3 lamps = vec3(0.0);
     int lampCount = 0;
 
+    // The layers' weights (SXC: by their heights where a layer has any).
+    vec4 alpha = texture(sAlpha, Coord(LAYERS));
+    vec4 weights = CoverLayerWeights(alpha, kBigAlpha);
+    bool heights = HeightsOn();
+
+    if (heights)
+    {
+        weights = HeightWeights(weights);
+    }
+
+    // The normal back to world orientation (v0..v2: world x view, a rotation); SXC: tilted by the
+    // layers' bumps, and the sun's diffuse light redone per pixel for it (the stock light comes per
+    // vertex: color0 changes by the difference, so a flat spot keeps it exactly).
+    vec3 nv = normalize(coverNormal.xyz);
+    vec3 n = normalize(vec3(dot(regs.v[0].xyz, nv), dot(regs.v[1].xyz, nv), dot(regs.v[2].xyz, nv)));
+
+    if (BumpsOn())
+    {
+        n = BumpNormal(n, weights);
+        vec3 nb = n.x * regs.v[0].xyz + n.y * regs.v[1].xyz + n.z * regs.v[2].xyz;
+        float change = clamp(dot(regs.v[24].xyz, nb), 0.0, 1.0) - clamp(dot(regs.v[24].xyz, nv), 0.0, 1.0);
+        lit0.xyz = max(lit0.xyz + regs.v[26].xyz * change * coverTint.xyz, vec3(0.0));
+    }
+
     if (LightsOn())
     {
-        // The normal back to world orientation (v0..v2: world x view, a rotation).
-        vec3 nv = normalize(coverNormal.xyz);
-        vec3 n = normalize(vec3(dot(regs.v[0].xyz, nv), dot(regs.v[1].xyz, nv), dot(regs.v[2].xyz, nv)));
         lamps = LightsAt(coverWorld.xyz, n, lampCount);
-        vec3 stock = min(color0.xyz + color0.xyz, vec3(1.0));
-        lit0.xyz = color0.xyz * LightsCombine(stock, lamps) / max(stock, vec3(1e-4));
+        vec3 stock = min(lit0.xyz + lit0.xyz, vec3(1.0));
+        lit0.xyz = lit0.xyz * LightsCombine(stock, lamps) / max(stock, vec3(1e-4));
     }
 
     vec3 twice = lit0.xyz + lit0.xyz;
-    vec4 alpha = texture(sAlpha, Coord(LAYERS));
     vec4 c = Layer(texture(s0, Coord(0)), regs.p[1].x, twice);
-    vec4 weights = CoverLayerWeights(alpha, kBigAlpha);
 
     // SXC: the layers by their heights (HeightWeights), where a layer of the chunk has any.
-    if (HeightsOn())
+    if (heights)
     {
-        weights = HeightWeights(weights);
         c = c * weights.x;
 #if LAYERS >= 2
         c = Layer(texture(s1, Coord(1)), regs.p[1].y, twice) * weights.y + c;

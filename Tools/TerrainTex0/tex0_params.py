@@ -115,10 +115,11 @@ def collapse(rows):
 
 
 # TerrainTextureParams' columns (SXC/Terrain/TextureParams.cpp): ID, Scope, Texture, MTXF, MTXFMask,
-# HeightScale, HeightOffset, Comment.
-CDBC_FIELDS = 8
+# HeightScale, HeightOffset, Comment, NormalStrength (appended later: a file of 8 reads with 0 there).
+CDBC_FIELDS = 9
+CDBC_OLDER_FIELDS = (8,)
 CDBC_STRINGS = (1, 2, 7)
-CDBC_FLOATS = (5, 6)
+CDBC_FLOATS = (5, 6, 8)
 
 
 def read_cdbc(path):
@@ -128,7 +129,7 @@ def read_cdbc(path):
     with open(path, 'rb') as f:
         data = f.read()
     magic, count, fields, size, string_size = struct.unpack_from('<4s4I', data, 0)
-    if magic != b'WDBC' or fields != CDBC_FIELDS or size != 4 * CDBC_FIELDS:
+    if magic != b'WDBC' or fields not in (CDBC_FIELDS, *CDBC_OLDER_FIELDS) or size != 4 * fields:
         sys.exit('%s: not a TerrainTextureParams.cdbc of %d columns; left as it is' % (path, CDBC_FIELDS))
     strings = data[20 + count * size:20 + count * size + string_size]
     rows = []
@@ -143,6 +144,7 @@ def read_cdbc(path):
                 row.append(struct.unpack('<f', struct.pack('<I', v))[0])
             else:
                 row.append(v)
+        row += [0.0] * (CDBC_FIELDS - fields)  # the columns an older file lacks (floats, 0)
         rows.append(row)
     return rows
 
@@ -179,7 +181,7 @@ def merge_cdbc(path, rows, source):
             index[key][3:7] = [mtxf, mask, hs, ho]
             updated += 1
         else:
-            row = [next_id, scope, name, mtxf, mask, hs, ho, 'from ' + source]
+            row = [next_id, scope, name, mtxf, mask, hs, ho, 'from ' + source, 0.0]
             existing.append(row)
             index[key] = row
             next_id += 1

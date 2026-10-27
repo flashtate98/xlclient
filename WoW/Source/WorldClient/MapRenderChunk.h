@@ -64,6 +64,7 @@ class CMapRenderChunkLayer {
     float m_sxcUvScale = 1.0f;
     float m_sxcHeightScale = 0.0f;
     float m_sxcHeightOffset = 1.0f;
+    float m_sxcNormalStrength = 0.0f;
     uint32_t m_sxcParamsGeneration = ~0u;
     CTexture* m_sxcHeight = nullptr;
 

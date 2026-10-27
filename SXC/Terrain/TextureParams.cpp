@@ -41,6 +41,9 @@ namespace SXC::Terrain {
             s.Float("HeightScale").Group("Height").Default(0).Tooltip("MTXP: the _h texture's height is scaled to [0, this). 0 with offset 1 = off.");
             s.Float("HeightOffset").Group("Height").Default(1).Tooltip("MTXP: added to the scaled height. Blizzard's default 1.");
             s.Text("Comment").Tooltip("Free text for the editor; never read.");
+            // Appended after Comment: the columns are positional, an older file reads with 0 here.
+            s.Float("NormalStrength").Group("Height").Default(0).Tooltip("Ours: the _h texture's bumps in the light, as yards of relief over its "
+                                                                          "full height (try 0.02-0.1). 0 = off (the light as stock).");
             return s;
         }
 
@@ -76,7 +79,7 @@ namespace SXC::Terrain {
             std::string map;  // Map and Tile
             int32_t x = 0, y = 0;
             uint32_t mtxf = 0, mask = 0;
-            float heightScale = 0.0f, heightOffset = 1.0f;
+            float heightScale = 0.0f, heightOffset = 1.0f, normalStrength = 0.0f;
         };
 
         // "Name_12_34" -> a tile; "Name" -> a map; "" -> everywhere.
@@ -180,7 +183,7 @@ namespace SXC::Terrain {
             s_byTexture.clear();
             const Data::Schema& schema = s_table->GetSchema();
             const int scope = schema.IndexOf("Scope"), texture = schema.IndexOf("Texture"), mtxf = schema.IndexOf("MTXF"),
-                      mask = schema.IndexOf("MTXFMask"), heightScale = schema.IndexOf("HeightScale"), heightOffset = schema.IndexOf("HeightOffset");
+                      mask = schema.IndexOf("MTXFMask"), heightScale = schema.IndexOf("HeightScale"), heightOffset = schema.IndexOf("HeightOffset"), normalStrength = schema.IndexOf("NormalStrength");
 
             for (uint32_t i = 0; i < s_table->RowCount(); i++) {
                 const Data::Row row = s_table->At(i);
@@ -195,6 +198,7 @@ namespace SXC::Terrain {
                 e.mask = row.Uint(mask);
                 e.heightScale = row.Float(heightScale);
                 e.heightOffset = row.Float(heightOffset);
+                e.normalStrength = row.Float(normalStrength);
                 s_byTexture[TextureKey(name.c_str())].push_back(e);
             }
         }
@@ -251,6 +255,7 @@ namespace SXC::Terrain {
             out.mtxf = (mtxf & ~best->mask) | (best->mtxf & best->mask);
             out.heightScale = best->heightScale;
             out.heightOffset = best->heightOffset;
+            out.normalStrength = best->normalStrength;
             out.matched = true;
         }
 

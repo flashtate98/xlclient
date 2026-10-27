@@ -11,11 +11,14 @@
 //                     texture scale, the texture spread over 1 << n times the area.
 //   HeightScale /     MTXP's height blending (the _h texture), Blizzard's values: 0 / 1 = off.
 //   HeightOffset
+//   NormalStrength    ours: the _h texture's bumps in the light (yards of relief over its full
+//                     height), 0 = off.
 namespace SXC::Terrain {
     struct TextureParams {
         uint32_t mtxf = 0;          // the tile's MTXF value with the row's bits applied
         float heightScale = 0.0f;
         float heightOffset = 1.0f;
+        float normalStrength = 0.0f;
         bool matched = false;       // a row applied
     };
 

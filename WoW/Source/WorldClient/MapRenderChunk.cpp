@@ -391,6 +391,7 @@ static CMapRenderChunkLayer& SxcLayerParams(CMapRenderChunkLayer& layer) {
         layer.m_sxcUvScale = 1.0f;
         layer.m_sxcHeightScale = 0.0f;
         layer.m_sxcHeightOffset = 1.0f;
+        layer.m_sxcNormalStrength = 0.0f;
         CMapArea* area = layer.m_sxcArea;
 
         if (area && layer.m_textureId >= 0 && static_cast<uint32_t>(layer.m_textureId) < area->m_textures.Count()) {
@@ -400,6 +401,7 @@ static CMapRenderChunkLayer& SxcLayerParams(CMapRenderChunkLayer& layer) {
             layer.m_sxcUvScale = SXC::Terrain::UvScale(params.mtxf);
             layer.m_sxcHeightScale = params.heightScale;
             layer.m_sxcHeightOffset = params.heightOffset;
+            layer.m_sxcNormalStrength = params.normalStrength;
         }
     }
 
@@ -410,11 +412,13 @@ static float SxcLayerUvScale(CMapRenderChunkLayer& layer) {
     return SxcLayerParams(layer).m_sxcUvScale;
 }
 
-// SXC: the layers' height textures (stages 9..12) and their height scales and offsets (pixel p14, p15 as
-// offset - 1: all zero is the stock blend) for our terrain shader's height blending; or all off.
+// SXC: the layers' height textures (stages 9..12), their height scales and offsets (pixel p14, p15 as
+// offset - 1: all zero is the stock blend) and normal strengths (vertex v58, zero: the stock light) for
+// our terrain shader's height blending and bumps; or all off.
 static void SxcSetHeights(CMapRenderChunk* chunk, bool on) {
     float scale[4] = {};
     float offset[4] = {};
+    float normal[4] = {};
 
     for (int32_t i = 0; i < 4; i++) {
         CGxTex* gxTex = nullptr;
@@ -425,6 +429,7 @@ static void SxcSetHeights(CMapRenderChunk* chunk, bool on) {
             offset[i] = layer.m_sxcHeightOffset - 1.0f;
 
             if (layer.m_sxcHeight) {
+                normal[i] = layer.m_sxcNormalStrength;
                 gxTex = TextureGetGxTex(layer.m_sxcHeight, 0, nullptr);
 
                 if (gxTex) {
@@ -438,6 +443,7 @@ static void SxcSetHeights(CMapRenderChunk* chunk, bool on) {
 
     GxShaderConstantsSet(GxSh_Pixel, 14, scale, 1);
     GxShaderConstantsSet(GxSh_Pixel, 15, offset, 1);
+    GxShaderConstantsSet(GxSh_Vertex, 58, normal, 1);
 }
 
 // VERIFY: 6c5dc3eb manual
