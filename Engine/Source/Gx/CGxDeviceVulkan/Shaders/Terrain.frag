@@ -8,8 +8,9 @@
 // (CMap::GetTerrainPixelShader). Records with a cube layer stay the stock ones.
 //
 // Samplers: s0..s(LAYERS-1) the layers, s(LAYERS) the alpha map (rgb the layers' weights, a the baked
-// shadow), s5..s8 the shadow cascades. Pixel registers: p1 the layers' lighting (0 = unlit), p2 the fog
-// colour, p3..p10 the shadow taps' offsets. The math follows the stock records operation by operation
+// shadow), s5..s8 the shadow cascades, s9..s(8+LAYERS) the layers' height textures. Pixel registers: p1
+// the layers' lighting (0 = unlit), p2 the fog colour, p3..p10 the shadow taps' offsets, p14 / p15 the
+// layers' height scales and offsets. The math follows the stock records operation by operation
 // (5a: the stock look, unchanged); the covers (5b, TerrainCover.glsl) change the layers' colour and
 // gloss before the light, and add a wet shine, only while a mod turns them on; our point lights (6a,
 // Lights.glsl) join the diffuse light, only while a mod turns them on.
@@ -62,6 +63,17 @@ layout(set = 0, binding = 5) uniform sampler2D s5;
 layout(set = 0, binding = 6) uniform sampler2D s6;
 layout(set = 0, binding = 7) uniform sampler2D s7;
 layout(set = 0, binding = 8) uniform sampler2D s8;
+#endif
+// SXC: the layers' height textures (`_h`, its alpha the height; white where a layer has none).
+layout(set = 0, binding = 9) uniform sampler2D sH0;
+#if LAYERS >= 2
+layout(set = 0, binding = 10) uniform sampler2D sH1;
+#endif
+#if LAYERS >= 3
+layout(set = 0, binding = 11) uniform sampler2D sH2;
+#endif
+#if LAYERS >= 4
+layout(set = 0, binding = 12) uniform sampler2D sH3;
 #endif
 
 layout(std140, set = 1, binding = 0) uniform Regs {
@@ -120,6 +132,35 @@ float Taps(sampler2D map, vec2 coord, float depth, bool nine)
 }
 #endif
 
+// SXC: height blending (retail since MoP). p14 each layer's height scale, p15 its offset - 1
+// (TerrainTextureParams; retail's scale 0 and offset 1 everywhere, all zero here, turn it off and the
+// stock blend stays: a draw that doesn't set them blends as before).
+bool HeightsOn()
+{
+    return LAYERS >= 2 && (any(notEqual(regs.p[14], vec4(0.0))) || any(notEqual(regs.p[15], vec4(0.0))));
+}
+
+// The layers' weights after their heights, as retail blends them: each weight times its layer's height
+// there (scaled and offset), the ones well below the strongest faded out, normalised. Where two layers
+// meet, the higher texture (stones in sand) shows instead of a soft fade.
+vec4 HeightWeights(vec4 w)
+{
+    vec4 h = vec4(texture(sH0, Coord(0)).a, 0.0, 0.0, 0.0);
+#if LAYERS >= 2
+    h.y = texture(sH1, Coord(1)).a;
+#endif
+#if LAYERS >= 3
+    h.z = texture(sH2, Coord(2)).a;
+#endif
+#if LAYERS >= 4
+    h.w = texture(sH3, Coord(3)).a;
+#endif
+    vec4 pct = w * (h * regs.p[14] + regs.p[15] + 1.0);
+    float strongest = max(max(pct.x, pct.y), max(pct.z, pct.w));
+    pct *= 1.0 - clamp(strongest - pct, 0.0, 1.0);
+    return pct / max(dot(pct, vec4(1.0)), 1e-5);
+}
+
 void main()
 {
     // SXC: our point lights (step 6a) in the stock diffuse light. color0 is the stock light (clamped)
@@ -142,9 +183,25 @@ void main()
     vec3 twice = lit0.xyz + lit0.xyz;
     vec4 alpha = texture(sAlpha, Coord(LAYERS));
     vec4 c = Layer(texture(s0, Coord(0)), regs.p[1].x, twice);
+    vec4 weights = CoverLayerWeights(alpha, kBigAlpha);
 
+    // SXC: the layers by their heights (HeightWeights), where a layer of the chunk has any.
+    if (HeightsOn())
+    {
+        weights = HeightWeights(weights);
+        c = c * weights.x;
+#if LAYERS >= 2
+        c = Layer(texture(s1, Coord(1)), regs.p[1].y, twice) * weights.y + c;
+#endif
+#if LAYERS >= 3
+        c = Layer(texture(s2, Coord(2)), regs.p[1].z, twice) * weights.z + c;
+#endif
+#if LAYERS >= 4
+        c = Layer(texture(s3, Coord(3)), regs.p[1].w, twice) * weights.w + c;
+#endif
+    }
     // The layers: lerped in turn by the alpha map's channels, or weighted with layer 0 taking the rest.
-    if (kBigAlpha)
+    else if (kBigAlpha)
     {
         float rest = 1.0 - clamp(dot(alpha.xyz, vec3(1.0)), 0.0, 1.0);
         c = c * rest;
@@ -172,7 +229,7 @@ void main()
     }
 
     // SXC: the covers over the layers (painted, fallen snow, wetness); unchanged while they're off.
-    CoverResult cov = Covers(c, CoverLayerWeights(alpha, kBigAlpha), twice, !kUnlit);
+    CoverResult cov = Covers(c, weights, twice, !kUnlit);
     c = cov.c;
 
     // SXC: the covers' surface here into the surface grid, and this pixel's depth for the projected

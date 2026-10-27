@@ -375,29 +375,69 @@ void CMapRenderChunk::CreateLayer(CMapArea* area, SMLayer* layer, int32_t checkD
         this->m_renderFlags |= 0x4;
     }
 
-    renderLayer->m_sxcArea = area;  // SXC: for its texture scale (SxcLayerUvScale)
+    renderLayer->m_sxcArea = area;  // SXC: for its texture's parameters (SxcLayerParams)
     renderLayer->m_sxcParamsGeneration = ~0u;
+    renderLayer->m_sxcHeight = areaTexture->m_sxcHeight;
     this->m_layersCount++;
 }
 
-// SXC: a layer's UV scale from its texture's MTXF scale bits, TerrainTextureParams over the tile's own;
-// again whenever the table changes (an edit shows at once).
-static float SxcLayerUvScale(CMapRenderChunkLayer& layer) {
+// SXC: a layer's UV scale (its texture's MTXF scale bits) and height scale and offset, TerrainTextureParams
+// over the tile's own; again whenever the table changes (an edit shows at once).
+static CMapRenderChunkLayer& SxcLayerParams(CMapRenderChunkLayer& layer) {
     const uint32_t generation = SXC::Terrain::Generation();
 
     if (layer.m_sxcParamsGeneration != generation) {
         layer.m_sxcParamsGeneration = generation;
         layer.m_sxcUvScale = 1.0f;
+        layer.m_sxcHeightScale = 0.0f;
+        layer.m_sxcHeightOffset = 1.0f;
         CMapArea* area = layer.m_sxcArea;
 
         if (area && layer.m_textureId >= 0 && static_cast<uint32_t>(layer.m_textureId) < area->m_textures.Count()) {
             const uint32_t mtxf = area->m_textureFlags ? static_cast<uint32_t>(area->m_textureFlags[layer.m_textureId]) : 0u;
             const char* name = area->m_textures[layer.m_textureId].m_textureName;
-            layer.m_sxcUvScale = SXC::Terrain::UvScale(SXC::Terrain::Resolve(CMap::mapName, area->m_index.x, area->m_index.y, name, mtxf).mtxf);
+            const SXC::Terrain::TextureParams params = SXC::Terrain::Resolve(CMap::mapName, area->m_index.x, area->m_index.y, name, mtxf);
+            layer.m_sxcUvScale = SXC::Terrain::UvScale(params.mtxf);
+            layer.m_sxcHeightScale = params.heightScale;
+            layer.m_sxcHeightOffset = params.heightOffset;
         }
     }
 
-    return layer.m_sxcUvScale;
+    return layer;
+}
+
+static float SxcLayerUvScale(CMapRenderChunkLayer& layer) {
+    return SxcLayerParams(layer).m_sxcUvScale;
+}
+
+// SXC: the layers' height textures (stages 9..12) and their height scales and offsets (pixel p14, p15 as
+// offset - 1: all zero is the stock blend) for our terrain shader's height blending; or all off.
+static void SxcSetHeights(CMapRenderChunk* chunk, bool on) {
+    float scale[4] = {};
+    float offset[4] = {};
+
+    for (int32_t i = 0; i < 4; i++) {
+        CGxTex* gxTex = nullptr;
+
+        if (on && i < chunk->m_layersCount) {
+            CMapRenderChunkLayer& layer = SxcLayerParams(chunk->m_layers[i]);
+            scale[i] = layer.m_sxcHeightScale;
+            offset[i] = layer.m_sxcHeightOffset - 1.0f;
+
+            if (layer.m_sxcHeight) {
+                gxTex = TextureGetGxTex(layer.m_sxcHeight, 0, nullptr);
+
+                if (gxTex) {
+                    GxTexSetWrap(gxTex, GxTex_Wrap, GxTex_Wrap);
+                }
+            }
+        }
+
+        g_theGxDevicePtr->RsSet(static_cast<EGxRenderState>(GxRs_Texture9 + i), gxTex);
+    }
+
+    GxShaderConstantsSet(GxSh_Pixel, 14, scale, 1);
+    GxShaderConstantsSet(GxSh_Pixel, 15, offset, 1);
 }
 
 // VERIFY: 6c5dc3eb manual
@@ -2796,7 +2836,9 @@ void CMapRenderChunk::RenderSinglePassVertexPixelShader() {
 
     CMapRenderChunk::SetVertexShader(this, this->m_layersCount + 1, specular);
     SXC::Cover::BeforeChunkDraw(this);  // SXC: the layers' cover entries for our terrain shader
+    SxcSetHeights(this, true);          // SXC: and their heights
     g_theGxDevicePtr->Draw(&this->m_batch, 1);
+    SxcSetHeights(this, false);
 
     for (uint32_t j = 0; j < this->m_layersCount; j++) {
         if (this->m_layers[j].m_flags & 0x40) {

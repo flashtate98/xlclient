@@ -71,6 +71,11 @@ void CMapArea::Purge() {
         if (this->m_textures.m_data[i].m_texture) {
             HandleClose(reinterpret_cast<HOBJECT>(this->m_textures.m_data[i].m_texture));
         }
+
+        if (this->m_textures.m_data[i].m_sxcHeight) {  // SXC:
+            HandleClose(reinterpret_cast<HOBJECT>(this->m_textures.m_data[i].m_sxcHeight));
+            this->m_textures.m_data[i].m_sxcHeight = nullptr;
+        }
     }
 
     this->m_textures.m_count = 0;
@@ -216,6 +221,22 @@ void CMapArea::LoadTerrainTexture(CMapAreaTexture* areaTexture, int32_t textureI
 
         areaTexture->m_texture = CMap::LoadTexture(fileName);
     }
+
+    // SXC: the height texture (`_h`, retail since MoP; its alpha the height) beside the base, for our
+    // terrain shader's height blending (TerrainTextureParams' HeightScale / HeightOffset turn it on).
+    if (shaders && !areaTexture->m_sxcHeight) {
+        char heightName[256];
+        SStrCopy(heightName, baseName, sizeof(heightName));
+        char* ext = SStrChrR(heightName, '.');
+
+        if (ext && static_cast<size_t>(ext - heightName) + 7 <= sizeof(heightName)) {
+            SStrCopy(ext, "_h.blp", sizeof(heightName) - static_cast<size_t>(ext - heightName));
+
+            if (SFile::FileExists(heightName)) {
+                areaTexture->m_sxcHeight = CMap::LoadTexture(heightName);
+            }
+        }
+    }
 }
 
 // VERIFY: 3fc00f06 manual
@@ -321,6 +342,7 @@ void CMapArea::LoadTextures(char* fileNames, uint32_t fileNamesSize) {
         CMapAreaTexture* areaTexture = this->m_textures.New();
         areaTexture->m_textureName = &fileNames[offset];
         areaTexture->m_texture = nullptr;
+        areaTexture->m_sxcHeight = nullptr;  // SXC:
 
         if (!streaming) {
             this->LoadTerrainTexture(&this->m_textures.m_data[this->m_textures.Count() - 1], this->m_textures.Count() - 1);

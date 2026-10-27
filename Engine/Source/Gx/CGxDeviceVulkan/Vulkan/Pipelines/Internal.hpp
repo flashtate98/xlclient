@@ -77,7 +77,7 @@ namespace gxvk::vk::pipelines::detail
 
     /// Set-0 descriptor sets one frame may allocate, and the combined image samplers behind them.
     constexpr uint32_t kSetsPerSlot        = 4096;
-    constexpr uint32_t kDescriptorsPerSlot = 4 * kSetsPerSlot;
+    constexpr uint32_t kDescriptorsPerSlot = 6 * kSetsPerSlot;  // SXC: our terrain's sets hold up to 13 (heights)
 
     /// The per-slot cache over those sets: twice the sets, a power of two, for short probes.
     constexpr uint32_t kCacheSlots = 2 * kSetsPerSlot;

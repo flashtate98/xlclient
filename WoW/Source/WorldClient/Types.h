@@ -18,6 +18,7 @@ class CMapAreaTexture {
     public:
     /* 0000 */ char* m_textureName;
     /* 0004 */ CTexture* m_texture;
+    CTexture* m_sxcHeight;  // SXC: its height texture (`_h`), null without one (CMapArea::LoadTerrainTexture)
 };
 
 class CMapChunkDoodadDefLink {

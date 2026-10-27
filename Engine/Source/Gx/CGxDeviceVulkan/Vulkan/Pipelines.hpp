@@ -92,11 +92,15 @@ namespace gxvk::vk::pipelines
         constexpr uint32_t kFragmentBigAlpha = 1u << 4, kFragmentUnlit = 1u << 5, kFragmentNineTaps = 1u << 6;
         inline uint32_t Layers(uint32_t options) { return (options & 3u) + 1u; }
         inline uint32_t ShadowGroup(uint32_t fragment) { return (fragment >> 2) & 3u; }
-        /// The samplers a fragment module of these options declares: the layers, the alpha map, the cascades.
+        /// The first slot of the layers' height textures (`_h`, one per layer; white where a layer has none).
+        constexpr uint32_t kHeightSlot = 9;
+        /// The samplers a fragment module of these options declares: the layers, the alpha map, the
+        /// cascades, the layers' height textures.
         inline uint32_t SamplerMask(uint32_t fragment)
         {
             const uint32_t group = ShadowGroup(fragment);
-            return ((1u << (Layers(fragment) + 1u)) - 1u) | (group >= 1 ? 1u << 5 : 0u) | (group >= 2 ? 0xEu << 5 : 0u);
+            const uint32_t layers = Layers(fragment);
+            return ((1u << (layers + 1u)) - 1u) | (group >= 1 ? 1u << 5 : 0u) | (group >= 2 ? 0xEu << 5 : 0u) | (((1u << layers) - 1u) << kHeightSlot);
         }
     }
 
