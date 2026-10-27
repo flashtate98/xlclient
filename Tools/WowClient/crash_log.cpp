@@ -140,7 +140,10 @@ static struct CrashLogInit {
         DeleteFileA(s_logPath);
         s_logFile = CreateFileA(s_logPath, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
 
-        if (AllocConsole()) {
+        // SXC: the console window only on request ("-debugConsole" on the command line; "-console" is the
+        // game's own, its in-game console): it opened with every start. Everything still goes to
+        // WowClient_crash.log.
+        if (strstr(GetCommandLineA(), "-debugConsole") && AllocConsole()) {
             SetConsoleTitleA("WowClient");
             s_console = CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
         }

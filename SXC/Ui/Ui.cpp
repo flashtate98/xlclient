@@ -567,7 +567,15 @@ namespace SXC::Ui {
     }
 
     bool WndProc(void* hwnd, uint32_t message, uintptr_t wparam, intptr_t lparam) {
-        if (!s_hwnd) {
+        // A new window: the device makes one for a new format (CGxDeviceVulkan::DeviceSetFormat, some
+        // graphics settings), the old one gone. ImGui's Win32 side follows it (it kept reading the old
+        // window: no overlay after such a change).
+        if (s_hwnd != static_cast<HWND>(hwnd)) {
+            if (s_win32) {
+                ImGui_ImplWin32_Shutdown();
+                s_win32 = false;
+            }
+
             s_hwnd = static_cast<HWND>(hwnd);
         }
 

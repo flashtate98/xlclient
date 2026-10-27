@@ -441,6 +441,17 @@ void ConsoleDeviceInitialize(const char* title, bool unused_a2, bool unused_a3) 
                 format.m_depthFormat = static_cast<CGxFormat::Format>(format.m_depthFormat - 1);
             }
         } else {
+            // SXC: Vulkan is the default now; where it can't start (no driver, an old GPU), D3D9 from the
+            // requested format again, as the stock default was.
+            if (desktopTried && api == GxApi_Vulkan && GxApiSupported(GxApi_D3d9)) {
+                GxLog("ConsoleDeviceInitialize(): Vulkan unavailable, falling back to D3D9");
+                api = GxApi_D3d9;
+                format = s_requestedFormat;
+                desktopTried = false;
+                ValidateFormatMonitor(format);
+                continue;
+            }
+
             if (desktopTried) {
                 GxLog("ConsoleDeviceInitialize(): no output device available!");
 

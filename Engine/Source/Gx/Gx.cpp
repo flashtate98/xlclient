@@ -120,7 +120,9 @@ GxD3dIndexedDraw g_gxLastIndexedDraw = {};
 // VERIFY: 0b88acbc auto
 // OFFSET: 0x008C8DE0
 EGxApi GxDefaultApi() {
-    return GxApi_D3d9;
+    // SXC: Vulkan, the renderer our features are built on (stock: D3D9; ConsoleDeviceInitialize falls
+    // back to it where Vulkan can't start). A gxApi in Config.wtf or -d3d9 / -opengl still wins.
+    return GxApi_Vulkan;
 }
 
 // VERIFY: cef2b995 auto
