@@ -1906,6 +1906,14 @@ void TextureGxCacheClear() {
         for (int32_t y = 0; y < 6; y++) {
             for (CGxTexCache* entry = s_gxTexCache[x][y].Head(); !s_gxTexCache[x][y].IsEnd(entry); entry = entry->m_link.RawNext()) {
                 s_gxTexCacheSize -= entry->m_size;
+                // Not in the decompiled source: the cached textures belong to no CTexture, so clearing the
+                // lists without destroying them leaked every one at each world load and character switch.
+                // A device with a fixed texture table (Vulkan, 16384) then ran out: fonts, UI and the
+                // world drew untextured.
+                if (entry->m_gxTex) {
+                    GxTexDestroy(entry->m_gxTex);
+                    entry->m_gxTex = nullptr;
+                }
             }
 
             s_gxTexCache[x][y].Clear();
