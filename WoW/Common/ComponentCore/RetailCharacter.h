@@ -97,6 +97,8 @@ uint32_t RetailCharacterHelmetRace(const CCharacterComponent* character);
 // How many values the facial hair selector cycles through on a Retail body (the choices of the option it
 // drives), 0 for stock bodies. Used when the race has no CharacterFacialHairStyles rows.
 uint32_t RetailCharacterFacialCount(const CCharacterComponent* character);
+// The same for the skin selector (Skin Color, Fur Color, ...).
+uint32_t RetailCharacterSkinCount(const CCharacterComponent* character);
 
 // Drops the stored choices of a component that is going away.
 void RetailCustomizationForget(const CCharacterComponent* character);

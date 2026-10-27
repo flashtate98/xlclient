@@ -1006,9 +1006,9 @@ uint32_t RetailCharacterHelmetRace(const CCharacterComponent* character) {
     return stock ? stock : race;
 }
 
-// How many values the facial hair selector has on a Retail body: the choices of the option it drives
-// (Goblin female Earrings), 0 for stock bodies or when it drives none.
-uint32_t RetailCharacterFacialCount(const CCharacterComponent* character) {
+namespace {
+// How many choices the Retail option a 3.3.5 selector drives has, 0 for stock bodies or when it drives none.
+uint32_t DrivenCount(const CCharacterComponent* character, Stock stock) {
     uint32_t retailRace = 0;
     const uint32_t chrModel = RetailModelOf(character, retailRace);
     if (!chrModel) return 0;
@@ -1016,9 +1016,17 @@ uint32_t RetailCharacterFacialCount(const CCharacterComponent* character) {
     std::vector<uint32_t> choices;
     Resolve(character, chrModel, resolved, choices);
     for (const auto& option : resolved)
-        if (option.stock == static_cast<int32_t>(Stock::Facial)) return static_cast<uint32_t>(option.offered.size());
+        if (option.stock == static_cast<int32_t>(stock)) return static_cast<uint32_t>(option.offered.size());
     return 0;
 }
+}
+
+// How many values the facial hair selector has on a Retail body: the choices of the option it drives
+// (Goblin female Earrings), 0 for stock bodies or when it drives none.
+uint32_t RetailCharacterFacialCount(const CCharacterComponent* character) { return DrivenCount(character, Stock::Facial); }
+
+// How many values the skin selector has on a Retail body: the choices of Skin Color (Fur Color, ...).
+uint32_t RetailCharacterSkinCount(const CCharacterComponent* character) { return DrivenCount(character, Stock::Skin); }
 
 void RetailCharacterSetBodyOwner(const CCharacterComponent* character, RetailBodyOwner swap, void* owner) {
     if (swap) s_bodyOwners[character] = { swap, owner };

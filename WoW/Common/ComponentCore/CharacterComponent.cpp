@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cmath>
@@ -2252,6 +2253,12 @@ bool CCharacterComponent::SetNextSkin(COMPONENT_CONTEXT context) {
     if (numColors <= 0) {
         return false;
     }
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: a Retail body steps through its Skin Color choices only. The CharSections rows
+    // past them are old baked skin variants (tattoos, markings) that show as repeats of the same choices.
+    if (const int32_t retail = static_cast<int32_t>(RetailCharacterSkinCount(this)); retail > 0 && retail < numColors) numColors = retail;
+    int32_t tries = numColors;
+#endif
 
     int32_t skinID = this->m_data.m_preferences.m_skinID + 1;
 
@@ -2277,6 +2284,12 @@ bool CCharacterComponent::SetNextSkin(COMPONENT_CONTEXT context) {
         if (++skinID >= numColors) {
             skinID = 0;
         }
+#if defined(WOWDECOMP_RETAIL_MODELS)
+        // A starting value past the capped range is never met again: stop after one lap.
+        if (--tries <= 0) {
+            return false;
+        }
+#endif
 
         if (skinID == static_cast<int32_t>(this->m_data.m_preferences.m_skinID)) {
             return false;
@@ -2297,8 +2310,19 @@ bool CCharacterComponent::SetPrevSkin(COMPONENT_CONTEXT context) {
     if (numColors <= 0) {
         return false;
     }
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: a Retail body steps through its Skin Color choices only. The CharSections rows
+    // past them are old baked skin variants (tattoos, markings) that show as repeats of the same choices.
+    if (const int32_t retail = static_cast<int32_t>(RetailCharacterSkinCount(this)); retail > 0 && retail < numColors) numColors = retail;
+    int32_t tries = numColors;
+#endif
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // A value past the choices (an older character) steps back from the last one.
+    int32_t skinID = std::min(static_cast<int32_t>(this->m_data.m_preferences.m_skinID), numColors) - 1;
+#else
     int32_t skinID = this->m_data.m_preferences.m_skinID - 1;
+#endif
 
     if (skinID < 0) {
         skinID = numColors - 1;
@@ -2322,6 +2346,12 @@ bool CCharacterComponent::SetPrevSkin(COMPONENT_CONTEXT context) {
         if (--skinID < 0) {
             skinID = numColors - 1;
         }
+#if defined(WOWDECOMP_RETAIL_MODELS)
+        // A starting value past the capped range is never met again: stop after one lap.
+        if (--tries <= 0) {
+            return false;
+        }
+#endif
 
         if (skinID == static_cast<int32_t>(this->m_data.m_preferences.m_skinID)) {
             return false;
