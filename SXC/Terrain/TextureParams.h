@@ -13,12 +13,16 @@
 //   HeightOffset
 //   NormalStrength    ours: the _h texture's bumps in the light (yards of relief over its full
 //                     height), 0 = off.
+//   ParallaxDepth     ours: how deep the _h texture's black lies below its white (yards), 0 = off.
+//   ParallaxSmooth    ours: mip levels of blur on the height the parallax reads, 0 = sharp.
 namespace SXC::Terrain {
     struct TextureParams {
         uint32_t mtxf = 0;          // the tile's MTXF value with the row's bits applied
         float heightScale = 0.0f;
         float heightOffset = 1.0f;
         float normalStrength = 0.0f;
+        float parallaxDepth = 0.0f;
+        float parallaxSmooth = 0.0f;
         bool matched = false;       // a row applied
     };
 

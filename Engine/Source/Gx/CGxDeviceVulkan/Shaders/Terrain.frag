@@ -132,6 +132,92 @@ float Taps(sampler2D map, vec2 coord, float depth, bool nine)
 }
 #endif
 
+// SXC: the layers' coordinates as the layers and their height textures are read: Coord(k) moved by the
+// parallax (Parallax), read with the gradients of the unmoved ones (the moved ones jump where the
+// stepped ray does: mip levels flickered along the stones' edges otherwise). Set at main's start.
+vec2 gUV[4];
+vec2 gDx[4];
+vec2 gDy[4];
+
+vec4 Tex(sampler2D s, int k)
+{
+    return textureGrad(s, gUV[k], gDx[k], gDy[k]);
+}
+
+// SXC: parallax (TerrainTextureParams' ParallaxDepth in v59 per layer: yards from the height texture's
+// top, white, to its bottom, black; all zero: none). Near the camera the view ray is stepped through the
+// height map, so stones hide the gaps behind them; farther out one offset; beyond, none.
+const float kParallaxNear = 15.0;   // yd: stepped within
+const float kParallaxFar  = 35.0;   // yd: the offset faded out by
+
+bool ParallaxOn()
+{
+    return any(notEqual(regs.v[59], vec4(0.0)));
+}
+
+// Layer k's coordinates moved for a view direction (world, toward the eye) over a surface of normal n.
+// `smoothing` (ParallaxSmooth, v60): the height is read that many mip levels blurrier (noise in a height
+// map made for blending turned into bulbs on the stones).
+vec2 Parallax(sampler2D h, int k, float depth, float smoothing, vec3 view, vec3 n, float distance)
+{
+    vec2 uv = gUV[k];
+
+    if (depth == 0.0 || distance >= kParallaxFar)
+    {
+        return uv;
+    }
+
+    float blur = exp2(max(smoothing, 0.0));
+    vec2 gx = gDx[k] * blur, gy = gDy[k] * blur;
+
+    // Down into the surface the ray moves along it by -view's part along it / view's part across it;
+    // the layer's coordinates run u along world y and v along world x, at v18+k per yard.
+    vec3 t = normalize(vec3(1.0, 0.0, 0.0) - n * n.x);
+    vec3 b = normalize(vec3(0.0, 1.0, 0.0) - n * n.y);
+    float across = max(dot(view, n), 0.2);
+    vec2 along = -vec2(dot(view, t), dot(view, b)) / across;
+    vec4 perYard = regs.v[18 + k];
+    vec2 full = vec2(along.y * perYard.y, along.x * perYard.x) * depth;   // the move at the full depth
+
+    if (distance > kParallaxNear)
+    {
+        float fade = 1.0 - smoothstep(kParallaxNear, kParallaxFar, distance);
+        return uv + full * (1.0 - textureGrad(h, uv, gx, gy).a) * fade;
+    }
+
+    // Stepped: down until the ray is deeper than the surface there (1 - height).
+    int steps = int(mix(8.0, 24.0, 1.0 - across));
+    float step = 1.0 / float(steps);
+    float ray = 0.0;
+    float surface = 1.0 - textureGrad(h, uv, gx, gy).a;
+
+    for (int i = 0; i < 24 && ray < surface; i++)
+    {
+        ray += step;
+        surface = 1.0 - textureGrad(h, uv + full * ray, gx, gy).a;
+    }
+
+    // Then halving the last step around the crossing: a straight line between two steps left ripples on
+    // the stones' tops at larger depths (the steps showing).
+    float above = max(ray - step, 0.0), below = ray;
+
+    for (int i = 0; i < 5; i++)
+    {
+        float middle = (above + below) * 0.5;
+
+        if (middle < 1.0 - textureGrad(h, uv + full * middle, gx, gy).a)
+        {
+            above = middle;
+        }
+        else
+        {
+            below = middle;
+        }
+    }
+
+    return uv + full * ((above + below) * 0.5);
+}
+
 // SXC: height blending (retail since MoP). p14 each layer's height scale, p15 its offset - 1
 // (TerrainTextureParams; retail's scale 0 and offset 1 everywhere, all zero here, turn it off and the
 // stock blend stays: a draw that doesn't set them blends as before).
@@ -145,15 +231,15 @@ bool HeightsOn()
 // meet, the higher texture (stones in sand) shows instead of a soft fade.
 vec4 HeightWeights(vec4 w)
 {
-    vec4 h = vec4(texture(sH0, Coord(0)).a, 0.0, 0.0, 0.0);
+    vec4 h = vec4(Tex(sH0, 0).a, 0.0, 0.0, 0.0);
 #if LAYERS >= 2
-    h.y = texture(sH1, Coord(1)).a;
+    h.y = Tex(sH1, 1).a;
 #endif
 #if LAYERS >= 3
-    h.z = texture(sH2, Coord(2)).a;
+    h.z = Tex(sH2, 2).a;
 #endif
 #if LAYERS >= 4
-    h.w = texture(sH3, Coord(3)).a;
+    h.w = Tex(sH3, 3).a;
 #endif
     vec4 pct = w * (h * regs.p[14] + regs.p[15] + 1.0);
     float strongest = max(max(pct.x, pct.y), max(pct.z, pct.w));
@@ -177,10 +263,10 @@ vec2 BumpSlope(sampler2D h, int k, float strength)
         return vec2(0.0);
     }
 
-    vec2 uv = Coord(k);
+    vec2 uv = gUV[k], gx = gDx[k], gy = gDy[k];
     vec2 t = 1.0 / vec2(textureSize(h, 0));
-    float du = texture(h, uv + vec2(t.x, 0.0)).a - texture(h, uv - vec2(t.x, 0.0)).a;
-    float dv = texture(h, uv + vec2(0.0, t.y)).a - texture(h, uv - vec2(0.0, t.y)).a;
+    float du = textureGrad(h, uv + vec2(t.x, 0.0), gx, gy).a - textureGrad(h, uv - vec2(t.x, 0.0), gx, gy).a;
+    float dv = textureGrad(h, uv + vec2(0.0, t.y), gx, gy).a - textureGrad(h, uv - vec2(0.0, t.y), gx, gy).a;
     vec4 perYard = regs.v[18 + k];
     return strength * vec2(dv / (2.0 * t.y) * perYard.x, du / (2.0 * t.x) * perYard.y);
 }
@@ -211,8 +297,41 @@ void main()
     vec3 lamps = vec3(0.0);
     int lampCount = 0;
 
-    // The layers' weights (SXC: by their heights where a layer has any).
+    // SXC: the layers' coordinates and their gradients (Tex), before anything branches.
+    for (int k = 0; k < LAYERS; k++)
+    {
+        gUV[k] = Coord(k);
+        gDx[k] = dFdx(gUV[k]);
+        gDy[k] = dFdy(gUV[k]);
+    }
+
     vec4 alpha = texture(sAlpha, Coord(LAYERS));
+
+    // The normal back to world orientation (v0..v2: world x view, a rotation).
+    vec3 nv = normalize(coverNormal.xyz);
+    vec3 n = normalize(vec3(dot(regs.v[0].xyz, nv), dot(regs.v[1].xyz, nv), dot(regs.v[2].xyz, nv)));
+
+    // SXC: the parallax moves the coordinates of the layers that have a depth and show here.
+    if (ParallaxOn())
+    {
+        vec3 vv = -normalize(coverView.xyz);
+        vec3 view = vec3(dot(regs.v[0].xyz, vv), dot(regs.v[1].xyz, vv), dot(regs.v[2].xyz, vv));
+        float distance = length(coverView.xyz);
+        vec4 shown = CoverLayerWeights(alpha, kBigAlpha);
+
+        if (shown.x > 0.01) gUV[0] = Parallax(sH0, 0, regs.v[59].x, regs.v[60].x, view, n, distance);
+#if LAYERS >= 2
+        if (shown.y > 0.01) gUV[1] = Parallax(sH1, 1, regs.v[59].y, regs.v[60].y, view, n, distance);
+#endif
+#if LAYERS >= 3
+        if (shown.z > 0.01) gUV[2] = Parallax(sH2, 2, regs.v[59].z, regs.v[60].z, view, n, distance);
+#endif
+#if LAYERS >= 4
+        if (shown.w > 0.01) gUV[3] = Parallax(sH3, 3, regs.v[59].w, regs.v[60].w, view, n, distance);
+#endif
+    }
+
+    // The layers' weights (SXC: by their heights where a layer has any).
     vec4 weights = CoverLayerWeights(alpha, kBigAlpha);
     bool heights = HeightsOn();
 
@@ -221,12 +340,9 @@ void main()
         weights = HeightWeights(weights);
     }
 
-    // The normal back to world orientation (v0..v2: world x view, a rotation); SXC: tilted by the
-    // layers' bumps, and the sun's diffuse light redone per pixel for it (the stock light comes per
-    // vertex: color0 changes by the difference, so a flat spot keeps it exactly).
-    vec3 nv = normalize(coverNormal.xyz);
-    vec3 n = normalize(vec3(dot(regs.v[0].xyz, nv), dot(regs.v[1].xyz, nv), dot(regs.v[2].xyz, nv)));
-
+    // SXC: the normal tilted by the layers' bumps, and the sun's diffuse light redone per pixel for it
+    // (the stock light comes per vertex: color0 changes by the difference, so a flat spot keeps it
+    // exactly).
     if (BumpsOn())
     {
         n = BumpNormal(n, weights);
@@ -243,20 +359,20 @@ void main()
     }
 
     vec3 twice = lit0.xyz + lit0.xyz;
-    vec4 c = Layer(texture(s0, Coord(0)), regs.p[1].x, twice);
+    vec4 c = Layer(Tex(s0, 0), regs.p[1].x, twice);
 
     // SXC: the layers by their heights (HeightWeights), where a layer of the chunk has any.
     if (heights)
     {
         c = c * weights.x;
 #if LAYERS >= 2
-        c = Layer(texture(s1, Coord(1)), regs.p[1].y, twice) * weights.y + c;
+        c = Layer(Tex(s1, 1), regs.p[1].y, twice) * weights.y + c;
 #endif
 #if LAYERS >= 3
-        c = Layer(texture(s2, Coord(2)), regs.p[1].z, twice) * weights.z + c;
+        c = Layer(Tex(s2, 2), regs.p[1].z, twice) * weights.z + c;
 #endif
 #if LAYERS >= 4
-        c = Layer(texture(s3, Coord(3)), regs.p[1].w, twice) * weights.w + c;
+        c = Layer(Tex(s3, 3), regs.p[1].w, twice) * weights.w + c;
 #endif
     }
     // The layers: lerped in turn by the alpha map's channels, or weighted with layer 0 taking the rest.
@@ -265,25 +381,25 @@ void main()
         float rest = 1.0 - clamp(dot(alpha.xyz, vec3(1.0)), 0.0, 1.0);
         c = c * rest;
 #if LAYERS >= 2
-        c = Layer(texture(s1, Coord(1)), regs.p[1].y, twice) * alpha.x + c;
+        c = Layer(Tex(s1, 1), regs.p[1].y, twice) * alpha.x + c;
 #endif
 #if LAYERS >= 3
-        c = Layer(texture(s2, Coord(2)), regs.p[1].z, twice) * alpha.y + c;
+        c = Layer(Tex(s2, 2), regs.p[1].z, twice) * alpha.y + c;
 #endif
 #if LAYERS >= 4
-        c = Layer(texture(s3, Coord(3)), regs.p[1].w, twice) * alpha.z + c;
+        c = Layer(Tex(s3, 3), regs.p[1].w, twice) * alpha.z + c;
 #endif
     }
     else
     {
 #if LAYERS >= 2
-        c = mix(c, Layer(texture(s1, Coord(1)), regs.p[1].y, twice), alpha.x);
+        c = mix(c, Layer(Tex(s1, 1), regs.p[1].y, twice), alpha.x);
 #endif
 #if LAYERS >= 3
-        c = mix(c, Layer(texture(s2, Coord(2)), regs.p[1].z, twice), alpha.y);
+        c = mix(c, Layer(Tex(s2, 2), regs.p[1].z, twice), alpha.y);
 #endif
 #if LAYERS >= 4
-        c = mix(c, Layer(texture(s3, Coord(3)), regs.p[1].w, twice), alpha.z);
+        c = mix(c, Layer(Tex(s3, 3), regs.p[1].w, twice), alpha.z);
 #endif
     }
 

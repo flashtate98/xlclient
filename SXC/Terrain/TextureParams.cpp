@@ -43,7 +43,13 @@ namespace SXC::Terrain {
             s.Text("Comment").Tooltip("Free text for the editor; never read.");
             // Appended after Comment: the columns are positional, an older file reads with 0 here.
             s.Float("NormalStrength").Group("Height").Default(0).Tooltip("Ours: the _h texture's bumps in the light, as yards of relief over its "
-                                                                          "full height (try 0.02-0.1). 0 = off (the light as stock).");
+                                                                          "full height (try 0.02-0.05). 0 = off (the light as stock).");
+            s.Float("ParallaxDepth").Group("Height").Default(0).Tooltip("Ours: how deep the _h texture's black lies below its white, in yards "
+                                                                         "(try 0.03-0.08): stepped through near the camera, an offset farther "
+                                                                         "out, none beyond 35 yd. 0 = off.");
+            s.Float("ParallaxSmooth").Group("Height").Default(0).Tooltip("Ours: the parallax reads the _h texture this many mip levels blurrier "
+                                                                          "(1-3), for height maps whose noise turns into bulbs on the stones. "
+                                                                          "0 = as sharp as drawn.");
             return s;
         }
 
@@ -79,7 +85,7 @@ namespace SXC::Terrain {
             std::string map;  // Map and Tile
             int32_t x = 0, y = 0;
             uint32_t mtxf = 0, mask = 0;
-            float heightScale = 0.0f, heightOffset = 1.0f, normalStrength = 0.0f;
+            float heightScale = 0.0f, heightOffset = 1.0f, normalStrength = 0.0f, parallaxDepth = 0.0f, parallaxSmooth = 0.0f;
         };
 
         // "Name_12_34" -> a tile; "Name" -> a map; "" -> everywhere.
@@ -183,7 +189,8 @@ namespace SXC::Terrain {
             s_byTexture.clear();
             const Data::Schema& schema = s_table->GetSchema();
             const int scope = schema.IndexOf("Scope"), texture = schema.IndexOf("Texture"), mtxf = schema.IndexOf("MTXF"),
-                      mask = schema.IndexOf("MTXFMask"), heightScale = schema.IndexOf("HeightScale"), heightOffset = schema.IndexOf("HeightOffset"), normalStrength = schema.IndexOf("NormalStrength");
+                      mask = schema.IndexOf("MTXFMask"), heightScale = schema.IndexOf("HeightScale"), heightOffset = schema.IndexOf("HeightOffset"), normalStrength = schema.IndexOf("NormalStrength"),
+                      parallaxDepth = schema.IndexOf("ParallaxDepth"), parallaxSmooth = schema.IndexOf("ParallaxSmooth");
 
             for (uint32_t i = 0; i < s_table->RowCount(); i++) {
                 const Data::Row row = s_table->At(i);
@@ -199,6 +206,8 @@ namespace SXC::Terrain {
                 e.heightScale = row.Float(heightScale);
                 e.heightOffset = row.Float(heightOffset);
                 e.normalStrength = row.Float(normalStrength);
+                e.parallaxDepth = row.Float(parallaxDepth);
+                e.parallaxSmooth = row.Float(parallaxSmooth);
                 s_byTexture[TextureKey(name.c_str())].push_back(e);
             }
         }
@@ -256,6 +265,8 @@ namespace SXC::Terrain {
             out.heightScale = best->heightScale;
             out.heightOffset = best->heightOffset;
             out.normalStrength = best->normalStrength;
+            out.parallaxDepth = best->parallaxDepth;
+            out.parallaxSmooth = best->parallaxSmooth;
             out.matched = true;
         }
 

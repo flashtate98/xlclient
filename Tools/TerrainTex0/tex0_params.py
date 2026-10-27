@@ -115,11 +115,12 @@ def collapse(rows):
 
 
 # TerrainTextureParams' columns (SXC/Terrain/TextureParams.cpp): ID, Scope, Texture, MTXF, MTXFMask,
-# HeightScale, HeightOffset, Comment, NormalStrength (appended later: a file of 8 reads with 0 there).
-CDBC_FIELDS = 9
-CDBC_OLDER_FIELDS = (8,)
+# HeightScale, HeightOffset, Comment, NormalStrength, ParallaxDepth, ParallaxSmooth (the last three
+# appended later: an older file reads with 0 there).
+CDBC_FIELDS = 11
+CDBC_OLDER_FIELDS = (8, 9, 10)
 CDBC_STRINGS = (1, 2, 7)
-CDBC_FLOATS = (5, 6, 8)
+CDBC_FLOATS = (5, 6, 8, 9, 10)
 
 
 def read_cdbc(path):
@@ -181,7 +182,7 @@ def merge_cdbc(path, rows, source):
             index[key][3:7] = [mtxf, mask, hs, ho]
             updated += 1
         else:
-            row = [next_id, scope, name, mtxf, mask, hs, ho, 'from ' + source, 0.0]
+            row = [next_id, scope, name, mtxf, mask, hs, ho, 'from ' + source, 0.0, 0.0, 0.0]
             existing.append(row)
             index[key] = row
             next_id += 1
