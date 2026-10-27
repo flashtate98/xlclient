@@ -116,6 +116,13 @@ Index& Ready() {
 // requirement (NPC-only and Transmog choices are left out) whose class mask includes the class.
 // Achievement, quest and item unlocks are not checked. Without the requirement table only the Transmog
 // placeholders are skipped (Esteria's CreationPolicy.h).
+// Whether a choice belongs to an Eye Color option.
+static bool IsEyeColor(const Index& x, uint32_t choiceId) {
+    const Row* choice = x.choice->Find(choiceId);
+    const Row* option = choice ? x.option->Find(x.choice->Value(*choice, "ChrCustomizationOptionID")) : nullptr;
+    return option && x.option->Text(*option, "Name_lang") == "Eye Color";
+}
+
 bool CreationAllowed(const Index& x, const Row& choice, uint32_t classId) {
     const uint32_t id = x.choice->Value(choice, "ChrCustomizationReqID");
     if (id == 10 || x.choice->Text(choice, "Name_lang") == "Transmog") return false;
@@ -128,7 +135,13 @@ bool CreationAllowed(const Index& x, const Row& choice, uint32_t classId) {
     // FlashWOW has no Demon Hunter class (12): its choices (horns, blindfolds, fel eyes, the extra
     // skins and tattoos) are open to every class, on top of the class's own.
     constexpr uint32_t kDemonHunter = 1u << (12 - 1);
-    return ((classes >> (classId - 1)) & 1) || (classes & kDemonHunter);
+    if ((classes >> (classId - 1)) & 1) return true;
+    // Death Knights (class 6) see only their glowing eyes: the ordinary eye colours are every class but
+    // the Death Knight (mask 0x7FDF, which names the Demon Hunter too), so the opening above must not
+    // hand them back.
+    constexpr uint32_t kDeathKnight = 6;
+    if (classId == kDeathKnight && IsEyeColor(x, choice.id)) return false;
+    return (classes & kDemonHunter) != 0;
 }
 }
 
@@ -138,13 +151,6 @@ static bool DemonHunterOnly(const Index& x, uint32_t choiceId) {
     const uint32_t id = choice ? x.choice->Value(*choice, "ChrCustomizationReqID") : 0;
     const Row* requirement = id && x.requirement ? x.requirement->Find(id) : nullptr;
     return requirement && x.requirement->Value(*requirement, "ClassMask") == (1u << (12 - 1));
-}
-
-// Whether a choice belongs to an Eye Color option.
-static bool IsEyeColor(const Index& x, uint32_t choiceId) {
-    const Row* choice = x.choice->Find(choiceId);
-    const Row* option = choice ? x.option->Find(x.choice->Value(*choice, "ChrCustomizationOptionID")) : nullptr;
-    return option && x.option->Text(*option, "Name_lang") == "Eye Color";
 }
 
 bool DemonHunterOnly(uint32_t choiceId) {
