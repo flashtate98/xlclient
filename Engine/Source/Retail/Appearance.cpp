@@ -186,9 +186,9 @@ namespace {
 // Frost (Blizzard's blue) is the table choice itself; the others follow it in this order.
 constexpr uint32_t kEyeTints[] = {
     0x4CFF3A,   // Unholy: necrotic green
-    0xFF1C24,   // Blood: bright arterial red
-    0xA94BFF,   // Shadow: purple
-    0xFF7A1F,   // Ember: orange
+    0xEB0008,   // Blood: bright arterial red
+    0x7400A1,   // Shadow: purple
+    0xFF7A00,   // Ember: orange
     0xFFD21F,   // Gold: yellow
     0xE6F2FF,   // Spectral: pale white
 };
