@@ -114,6 +114,7 @@ struct Look {
     std::shared_ptr<const Retail::Image> body;                      // the composed skin sheet (type 1)
     std::string bodyKey;                                             // its layers (shared by looks)
     std::map<uint32_t, std::shared_ptr<OwnedTexture>> textures;     // every other type (hair, eyes, ...)
+    uint32_t eyeTint = 0;                                            // FlashWOW Death Knight eye colour (0xRRGGBB), 0 for Frost
 };
 
 bool FetchBlp(uint32_t fileDataId, std::vector<uint8_t>& bytes, void*) {
@@ -121,6 +122,36 @@ bool FetchBlp(uint32_t fileDataId, std::vector<uint8_t>& bytes, void*) {
     if (Retail::Source().ReadFileDataId(fileDataId, bytes, error)) return true;
     Blizzard::Log::Printf(1, kLog, "Texture %u: %s\n", static_cast<unsigned>(fileDataId), error.c_str());
     return false;
+}
+
+// FlashWOW Death Knight eye colours. Recolours a glow texture: each texel keeps its grey part (the white
+// core, the grey flames) and its coloured part takes the target colour, so Blizzard's blue becomes it.
+void TintImage(Retail::Image& image, uint32_t rgb) {
+    const int target[3] = { int((rgb >> 16) & 0xFF), int((rgb >> 8) & 0xFF), int(rgb & 0xFF) };
+    for (size_t p = 0; p + 3 < image.rgba.size(); p += 4) {
+        uint8_t* c = &image.rgba[p];
+        const int high = std::max({ int(c[0]), int(c[1]), int(c[2]) });
+        const int low = std::min({ int(c[0]), int(c[1]), int(c[2]) });
+        for (int k = 0; k < 3; ++k) c[k] = static_cast<uint8_t>(target[k] * (high - low) / 255 + low);
+    }
+}
+
+// Composes with the Death Knight eye choice's own textures tinted.
+struct TintFetch {
+    uint32_t rgb = 0;
+    std::set<uint32_t> fileDataIds;
+};
+
+bool FetchTinted(uint32_t fileDataId, std::vector<uint8_t>& bytes, void* context) {
+    if (!FetchBlp(fileDataId, bytes, nullptr)) return false;
+    const auto* tint = static_cast<const TintFetch*>(context);
+    if (!tint || !tint->rgb || !tint->fileDataIds.count(fileDataId)) return true;
+    Retail::Image image;
+    std::string error;
+    if (!Retail::DecodeBlp(bytes, image, error)) return true;
+    TintImage(image, tint->rgb);
+    Retail::BuildBlp(image, bytes);
+    return true;
 }
 
 using Clock = std::chrono::steady_clock;
@@ -217,21 +248,35 @@ std::deque<std::string> s_itemImageOrder;
 
 // A composed look per Retail race, sex and choices. The most recent ones are kept; each holds a full
 // skin sheet, so the cache is bounded.
-std::shared_ptr<Look> LookFor(uint32_t retailRace, uint32_t sex, uint32_t chrModel, const std::vector<uint32_t>& choices) {
+std::shared_ptr<Look> LookFor(uint32_t retailRace, uint32_t sex, uint32_t chrModel, const std::vector<uint32_t>& picked) {
     auto& looks = s_looks;
     auto& order = s_lookOrder;
     std::lock_guard<std::mutex> lock(s_lookMutex);
 
     std::string key = std::to_string(retailRace) + "-" + std::to_string(sex);
-    for (const uint32_t id : choices) key += "-" + std::to_string(id);
+    for (const uint32_t id : picked) key += "-" + std::to_string(id);
     const auto found = looks.find(key);
     if (found != looks.end()) return found->second;
+
+    // A Death Knight eye colour draws as the Death Knight eye choice with its textures tinted.
+    std::vector<uint32_t> choices;
+    Retail::Appearance::BaseChoices(picked, choices);
+    TintFetch tint;
+    for (const uint32_t id : picked) {
+        uint32_t base = 0, rgb = 0;
+        if (!Retail::Appearance::EyeTint(id, base, rgb)) continue;
+        tint.rgb = rgb;
+        std::vector<Retail::Appearance::TextureLayer> own;
+        Retail::Appearance::TextureLayers(chrModel, { base }, own);
+        for (const auto& layer : own) tint.fileDataIds.insert(layer.fileDataId);
+    }
 
     LogBuildType();
     const auto lookStart = Clock::now();
     auto look = std::make_shared<Look>();
     look->chrModel = chrModel;
     look->key = key;
+    look->eyeTint = tint.rgb;
     std::vector<uint16_t> defaults;
     std::vector<Retail::Appearance::TextureLayer> layers;
     std::vector<Retail::ComposedTexture> composed;
@@ -255,7 +300,8 @@ std::shared_ptr<Look> LookFor(uint32_t retailRace, uint32_t sex, uint32_t chrMod
     for (const auto& type : byType) {
         std::string typeKey = std::to_string(chrModel) + "/" + std::to_string(type.first);
         for (const auto& layer : type.second)
-            typeKey += ":" + std::to_string(layer.fileDataId) + "." + std::to_string(layer.blendMode) + "." + std::to_string(layer.sectionMask);
+            typeKey += ":" + std::to_string(layer.fileDataId) + "." + std::to_string(layer.blendMode) + "." + std::to_string(layer.sectionMask) +
+                (tint.fileDataIds.count(layer.fileDataId) ? "~" + std::to_string(tint.rgb) : "");
         if (type.first == 1) {
             const auto cached = s_composedBodies.find(typeKey);
             look->bodyKey = typeKey;
@@ -266,7 +312,7 @@ std::shared_ptr<Look> LookFor(uint32_t retailRace, uint32_t sex, uint32_t chrMod
         }
         auto start = Clock::now();
         composed.clear();
-        Retail::ComposeTextures(chrModel, type.second, FetchBlp, nullptr, composed, warnings, &compose);
+        Retail::ComposeTextures(chrModel, type.second, FetchTinted, &tint, composed, warnings, &compose);
         composeTotal += Since(start);
         for (auto& texture : composed) {
             if (texture.textureType == 1) {
@@ -486,6 +532,78 @@ bool IsCollection(const CM2Model* child, const CM2Model* parent) {
 
 void ApplyCollection(CM2Model* child);
 void OnCollectionLoadedThunk(CM2Model* child, void*) { ApplyCollection(child); }
+
+// FlashWOW Death Knight eye colours on the eye-glow wisps (group 17). Their textures are fixed in the
+// model file, not replaceable, so each tinted copy goes straight into the model's texture slots; Frost
+// puts back an untinted copy where a tinted one was. Copies by file and colour; a few are kept.
+constexpr const char* kTintPrefix = "Retail\\EyeTint\\";
+std::map<std::string, std::shared_ptr<OwnedTexture>> s_tintedTextures;
+std::deque<std::string> s_tintedTextureOrder;
+
+CTexture* TintedModelTexture(uint32_t fileDataId, uint32_t rgb) {
+    const std::string name = std::string(kTintPrefix) + std::to_string(fileDataId) + "\\" + std::to_string(rgb) + ".blp";
+    const auto cached = s_tintedTextures.find(name);
+    if (cached != s_tintedTextures.end()) return cached->second->texture;
+    std::vector<uint8_t> bytes;
+    if (!FetchBlp(fileDataId, bytes, nullptr)) return nullptr;
+    Retail::Image image;
+    std::string error;
+    if (!Retail::DecodeBlp(bytes, image, error)) {
+        Blizzard::Log::Printf(1, kLog, "Eye colour: texture %u: %s\n", static_cast<unsigned>(fileDataId), error.c_str());
+        return nullptr;
+    }
+    if (rgb) TintImage(image, rgb);
+    std::vector<uint8_t> blp;
+    Retail::BuildBlp(image, blp);
+    CGxTexFlags flags(GxTex_LinearMipLinear, 1, 1);   // as the model loads its own (the flames scroll)
+    CTexture* texture = TextureCreateFromBlpData(name.c_str(), flags, blp.data());
+    if (!texture) return nullptr;
+    s_tintedTextures[name] = std::make_shared<OwnedTexture>(texture);
+    s_tintedTextureOrder.push_back(name);
+    Trim(s_tintedTextures, s_tintedTextureOrder, 32);
+    return texture;
+}
+
+uint32_t RetailFileDataId(const char* file) {
+    const size_t prefix = std::strlen(Retail::SourcePrefix());
+    if (!file || std::strncmp(file, Retail::SourcePrefix(), prefix) != 0) return 0;
+    uint32_t id = 0;
+    const char* end = file + std::strlen(file);
+    const auto result = std::from_chars(file + prefix, end, id);
+    return result.ec == std::errc() ? id : 0;
+}
+
+void ApplyEyeTint(CM2Model* model, const Look& look) {
+    if (!model || !(model->m_fFlags & 1) || !model->m_shared || !model->m_textures) return;
+    M2Data* data = model->m_shared->m_data;
+    M2SkinProfile* skin = model->m_shared->m_skinData;
+    if (!data || !skin) return;
+    const size_t prefix = std::strlen(kTintPrefix);
+    for (uint32_t b = 0; b < skin->m_batches.m_count; ++b) {
+        const M2Batch& batch = skin->m_batches[b];
+        if (batch.m_skinSectionIndex >= skin->m_skinSections.m_count) continue;
+        // Retail models keep the index start's upper word in the high half of the ID.
+        const uint32_t geoset = skin->m_skinSections[batch.m_skinSectionIndex].m_skinSectionId & 0xFFFF;
+        if (geoset < 1701 || geoset > 1799) continue;
+        for (uint32_t k = 0; k < batch.m_textureCount; ++k) {
+            const uint32_t combo = batch.m_textureComboIndex + k;
+            if (combo >= data->m_textureCombos.m_count) break;
+            const uint16_t index = data->m_textureCombos[combo];
+            if (index >= data->m_textures.m_count || data->m_textures[index].m_type != 0) continue;
+            const M2Texture& file = data->m_textures[index];
+            const uint32_t fileDataId = RetailFileDataId(file.m_filename.m_count > 1 ? file.m_filename.Data() : nullptr);
+            if (!fileDataId) continue;
+            CTexture* current = model->m_textures[index];
+            const bool ours = current && std::strncmp(current->m_filename, kTintPrefix, prefix) == 0;
+            if (!look.eyeTint && !ours) continue;   // Frost on the model's own texture
+            CTexture* wanted = TintedModelTexture(fileDataId, look.eyeTint);
+            if (!wanted || wanted == current) continue;
+            if (current) HandleClose(reinterpret_cast<HOBJECT>(current));
+            model->m_textures[index] = reinterpret_cast<CTexture*>(HandleDuplicate(reinterpret_cast<HOBJECT>(wanted)));
+            if (!TextureGetGxTex(model->m_textures[index], 0, nullptr)) model->m_fFlags &= ~2u;
+        }
+    }
+}
 
 // Binds a loaded collection to its body and shows its geosets and the body's textures.
 void ApplyCollection(CM2Model* child) {
@@ -932,6 +1050,7 @@ bool RetailCharacterGeometry(CCharacterComponent* character) {
 
     // Hair, eyes and the other single-layer types replace the 3.3.5 CharSections textures.
     for (const auto& texture : look.textures) model->ReplaceTexture(texture.first, texture.second->texture);
+    ApplyEyeTint(model, look);
     ApplyBoneShape(model, look, BodyIs(model, WantedBody(character, look)));
     SyncCollections(character, look);
     ApplyCollections(model);
@@ -942,6 +1061,7 @@ bool RetailCharacterTextures(CCharacterComponent* character) {
     const auto look = RetailLook(character);
     if (!look) return false;
     for (const auto& texture : look->textures) character->m_data.m_model->ReplaceTexture(texture.first, texture.second->texture);
+    ApplyEyeTint(character->m_data.m_model, *look);
     for (auto& collection : s_collections)
         if (collection.second.parent == character->m_data.m_model) collection.second.textures = look->textures;
     ApplyCollections(character->m_data.m_model);
@@ -1087,6 +1207,8 @@ void RetailCharacterShutdown() {
     s_composedBodyOrder.clear();
     s_composedTextures.clear();
     s_composedTextureOrder.clear();
+    s_tintedTextures.clear();
+    s_tintedTextureOrder.clear();
     s_itemImages.clear();
     s_itemImageOrder.clear();
     s_collections.clear();
@@ -1101,6 +1223,7 @@ void RetailCharacterShutdown() {
 void RetailCharacterBody(CCharacterComponent* character) {
     RetailCharacterFitHelmet(character);
     const auto found = RetailLook(character);
+    if (found) ApplyEyeTint(character->m_data.m_model, *found);
     if (!found || !found->body || !found->body->width) return;
     const Look& look = *found;
 
@@ -1415,9 +1538,11 @@ void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
     model->SetGeometryVisible(1701, 1799, 0);
     // The stock pass above shows its own eye glow (1703, from the 3.3.5 values); the Retail look's own
     // group 17 piece comes back: the Death Knight eye-glow wisps (1701), which the line above hid too.
-    if (const auto look = RetailLook(character))
+    if (const auto look = RetailLook(character)) {
         for (const uint16_t geoset : look->geosets)
             if (geoset >= 1701 && geoset <= 1799) model->SetGeometryVisible(geoset, geoset, 1);
+        ApplyEyeTint(model, *look);
+    }
     ApplyCollections(model);
 
     // Feet. Retail bodies have a bare foot with toes (2001) and a closed shoe (2002) as separate meshes;

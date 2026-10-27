@@ -182,6 +182,44 @@ uint32_t ChrModelFor(uint32_t retailRace, uint32_t sex) {
     return found == x.modelByRaceSex.end() ? 0 : found->second;
 }
 
+namespace {
+// Frost (Blizzard's blue) is the table choice itself; the others follow it in this order.
+constexpr uint32_t kEyeTints[] = {
+    0x4CFF3A,   // Unholy: necrotic green
+    0xFF1C24,   // Blood: bright arterial red
+    0xA94BFF,   // Shadow: purple
+    0xFF7A1F,   // Ember: orange
+    0xFFD21F,   // Gold: yellow
+    0xE6F2FF,   // Spectral: pale white
+};
+constexpr uint32_t kEyeTintTag = 0x7E000000u;
+constexpr uint32_t kEyeTintCount = sizeof(kEyeTints) / sizeof(kEyeTints[0]);
+
+uint32_t EyeTintId(uint32_t baseChoice, uint32_t tint) { return kEyeTintTag | (baseChoice << 4) | (tint + 1); }
+
+// A choice offered to Death Knights (class 6) alone.
+bool DeathKnightOnly(const Index& x, const Row& choice) {
+    const uint32_t id = x.choice->Value(choice, "ChrCustomizationReqID");
+    const Row* requirement = id && x.requirement ? x.requirement->Find(id) : nullptr;
+    return requirement && x.requirement->Value(*requirement, "ClassMask") == (1u << (6 - 1));
+}
+}
+
+bool EyeTint(uint32_t choiceId, uint32_t& baseChoice, uint32_t& rgb) {
+    if ((choiceId & 0xFF000000u) != kEyeTintTag) return false;
+    const uint32_t tint = (choiceId & 0xF) - 1;
+    if (tint >= kEyeTintCount) return false;
+    baseChoice = (choiceId & 0x00FFFFF0u) >> 4;
+    rgb = kEyeTints[tint];
+    return true;
+}
+
+void BaseChoices(const std::vector<uint32_t>& choices, std::vector<uint32_t>& base) {
+    base = choices;
+    uint32_t rgb = 0;
+    for (uint32_t& id : base) EyeTint(id, id, rgb);
+}
+
 void Options(uint32_t chrModel, uint32_t classId, std::vector<Option>& options) {
     options.clear();
     Index& x = Ready();
@@ -194,15 +232,25 @@ void Options(uint32_t chrModel, uint32_t classId, std::vector<Option>& options) 
         option.name = x.option->Text(*row, "Name_lang");
         const auto list = x.choicesByOption.find(row->id);
         if (list != x.choicesByOption.end())
-            for (const Row* choice : list->second)
-                if (CreationAllowed(x, *choice, classId)) option.choices.push_back(choice->id);
+            for (const Row* choice : list->second) {
+                if (!CreationAllowed(x, *choice, classId)) continue;
+                option.choices.push_back(choice->id);
+                // FlashWOW: the Death Knight eye choice's other colours follow it.
+                if (classId == 6 && option.name == "Eye Color" && DeathKnightOnly(x, *choice) && choice->id < (1u << 20))
+                    for (uint32_t tint = 0; tint < kEyeTintCount; ++tint) option.choices.push_back(EyeTintId(choice->id, tint));
+            }
         if (!option.choices.empty()) options.push_back(std::move(option));
     }
 }
 
-bool RequirementsMet(uint32_t choiceId, const std::vector<uint32_t>& selected) {
+bool RequirementsMet(uint32_t choiceId, const std::vector<uint32_t>& chosen) {
     Index& x = Ready();
     if (!x.ready) return true;
+    // A Death Knight eye colour stands for its table choice, on either side.
+    uint32_t rgb = 0;
+    EyeTint(choiceId, choiceId, rgb);
+    std::vector<uint32_t> selected;
+    BaseChoices(chosen, selected);
     const Row* choice = x.choice->Find(choiceId);
     const uint32_t requirement = choice ? x.choice->Value(*choice, "ChrCustomizationReqID") : 0;
     const auto needed = requirement ? x.choicesByRequirement.find(requirement) : x.choicesByRequirement.end();

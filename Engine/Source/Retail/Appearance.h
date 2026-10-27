@@ -37,6 +37,14 @@ namespace Retail::Appearance
     bool ClassImplied(uint32_t optionId);
     bool DemonHunterOnly(uint32_t choiceId);
 
+    // FlashWOW Death Knight eye colours: the Death Knight eye choice in other colours. They are not in the
+    // tables; each is the Death Knight choice's ID packed with a colour index, offered right after it to
+    // Death Knights, and drawn as that choice with its glow textures tinted. EyeTint gives the table
+    // choice and the colour (0xRRGGBB) for one of them, false for any other ID; BaseChoices maps a list to
+    // its table choices.
+    bool EyeTint(uint32_t choiceId, uint32_t& baseChoice, uint32_t& rgb);
+    void BaseChoices(const std::vector<uint32_t>& choices, std::vector<uint32_t>& base);
+
     // One choice per option of the model: the first that a new character of the class may take.
     void DefaultChoices(uint32_t chrModel, uint32_t classId, std::vector<uint32_t>& choices);
 
