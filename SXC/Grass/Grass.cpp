@@ -18,6 +18,7 @@
 #include "Engine/Source/Model2/M2Shared.h"
 #include "Engine/Source/Services/Texture.h"
 #include "Engine/Source/Tempest/C44Matrix.h"
+#include "SXC/Cover/Cover.h"
 #include "SXC/Log.h"
 #include "SXC/Settings/Settings.h"
 #include "SXC/World/World.h"
@@ -297,6 +298,12 @@ namespace {
     constexpr float kChunkSize = 8.0f * kCellSize;
     constexpr uint32_t kMaxCopies = 15;   // the device's copy entries (Vulkan/Grass kMaxCopies)
     constexpr uint32_t kDensityFirstRow = 148;
+
+    // The ground marks (Shaders/GrassMarks.glsl, c150..c161): where the map lies (SXC/Cover: the mod's
+    // set_marks) and what each channel does to plants (sxc.grass's set_marks).
+    constexpr uint32_t kMarksFirstRow = 150;
+    constexpr uint32_t kMarksRows = 12;
+    sxc_grass_marks s_marks = {};
     constexpr uint32_t kPlantFloats = 24;   // a plant's record (Vulkan/Grass kPlantBytes)
 
     sxc_grass_density_fn s_densityFn = nullptr;
@@ -369,9 +376,16 @@ namespace {
         t = std::min(std::max((-add.m_position.x - y * kCellSize) / kCellSize, 0.0f), 0.9999f);
     }
 
-    // A plant's density values and spot into its record (floats 20..23).
-    void PlaceDensity(const sxc_grass_density& v, float s, float t, uint32_t tri, float* out) {
-        const uint16_t halves[4] = { Half(v.multiplier - 1.0f), Half(v.radius), Half(v.spread), 0 };
+    // Whether the ground marks leave a plant model alone (GroundEffectDoodadWind's "no marks": stones).
+    bool Unmarked(uint32_t id) {
+        const auto o = s_overrides.find(id);
+        return o != s_overrides.end() && (o->second.flags & SXC_GRASS_NO_MARKS) != 0;
+    }
+
+    // A plant's density values, whether the marks pass it by (1: GrassMarks.glsl) and its spot into its
+    // record (floats 20..23).
+    void PlaceDensity(const sxc_grass_density& v, bool unmarked, float s, float t, uint32_t tri, float* out) {
+        const uint16_t halves[4] = { Half(v.multiplier - 1.0f), Half(v.radius), Half(v.spread), Half(unmarked ? 1.0f : 0.0f) };
         std::memcpy(out, halves, sizeof(halves));
         out[2] = 2.0f * static_cast<float>(tri & 3) + s;
         out[3] = t;
@@ -721,7 +735,7 @@ namespace {
             Entry(add.m_doodadId, spill.record + 16);
             sxc_grass_density d = density;
             d.multiplier = 1.0f + (density.multiplier - 1.0f) * f;
-            PlaceDensity(d, ts, tt, tri, spill.record + 20);
+            PlaceDensity(d, Unmarked(add.m_doodadId), ts, tt, tri, spill.record + 20);
             spill.copies = d.multiplier - 1.0f;
             spill.radius = d.multiplier > 1.0f ? d.radius : 0.0f;
             spilled.push_back(spill);
@@ -785,7 +799,7 @@ namespace {
                 const sxc_grass_density density = DensityOf(densities, area, map, add.m_doodadId, EffectAt(inst->m_chunk, cell));
                 float s, t;
                 SpotOf(add, s, t);
-                PlaceDensity(density, s, t, add.m_triIndex & 3, item.record + 20);
+                PlaceDensity(density, Unmarked(add.m_doodadId), s, t, add.m_triIndex & 3, item.record + 20);
                 item.copies = density.multiplier - 1.0f;
                 item.radius = density.multiplier > 1.0f ? density.radius : 0.0f;
 
@@ -1024,6 +1038,30 @@ namespace SXC::Grass {
             { s_limits.max_spread, 0.0f, 0.0f, 0.0f },
         };
         g_theGxDevicePtr->ShaderConstantsSet(GxSh_Vertex, kDensityFirstRow, &density[0][0], 2);
+
+        // The ground marks' rows: the map (1 / cell, size, first i, j; size 0: none), on, then per channel
+        // and blight the tint (rgb, strength) and size, wind.
+        float marks[kMarksRows][4] = {};
+        float cell = 1.0f;
+        uint32_t size = 0;
+        int32_t firstI = 0, firstJ = 0;
+
+        if (s_marks.on && SXC::Cover::Marks(cell, size, firstI, firstJ)) {
+            const float m[4] = { 1.0f / std::max(cell, 0.01f), static_cast<float>(size), static_cast<float>(firstI), static_cast<float>(firstJ) };
+            std::memcpy(marks[0], m, sizeof(m));
+            marks[1][0] = 1.0f;
+            const sxc_grass_mark_look* looks[5] = { &s_marks.channel[0], &s_marks.channel[1], &s_marks.channel[2], &s_marks.channel[3], &s_marks.blight };
+
+            for (int k = 0; k < 5; k++) {
+                const sxc_grass_mark_look& l = *looks[k];
+                const float a[4] = { l.tint[0], l.tint[1], l.tint[2], std::min(std::max(l.tint_strength, 0.0f), 1.0f) };
+                const float b[4] = { std::max(l.size, 0.0f), std::max(l.wind, 0.0f), 0.0f, 0.0f };
+                std::memcpy(marks[2 + 2 * k], a, sizeof(a));
+                std::memcpy(marks[3 + 2 * k], b, sizeof(b));
+            }
+        }
+
+        g_theGxDevicePtr->ShaderConstantsSet(GxSh_Vertex, kMarksFirstRow, &marks[0][0], kMarksRows);
 
         for (TextureRuns& t : s_frame) {
             if (t.runs.empty()) {
@@ -1299,10 +1337,14 @@ namespace {
         return WXL_TRUE;
     }
 
+    void WXL_CALL ApiSetMarks(const sxc_grass_marks* marks) {
+        s_marks = marks && marks->struct_size >= sizeof(sxc_grass_marks) ? *marks : sxc_grass_marks{};
+    }
+
     const sxc_grass_api s_api = { sizeof(sxc_grass_api), ApiAvailable,          ApiSetMotion,          ApiSetDoodads,
                                   ApiDoodadInfo,         ApiStatus,             ApiSetDensityProvider, ApiSetDensityLimits,
                                   ApiSetEdges,           ApiSetPlacement,       ApiPlacement,          ApiSetSlopes,
-                                  ApiSlopes,             ApiInspect };
+                                  ApiSlopes,             ApiInspect,            ApiSetMarks };
 }
 
 namespace SXC::Grass {

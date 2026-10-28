@@ -56,9 +56,32 @@ typedef struct sxc_grass_doodad
     float    tip_v;           ///< its end; < 0: automatic
 } sxc_grass_doodad;
 
-#define SXC_GRASS_NO_WIND 0x1u
-#define SXC_GRASS_NO_PUSH 0x2u
-#define SXC_GRASS_FLIP    0x10u
+#define SXC_GRASS_NO_WIND  0x1u
+#define SXC_GRASS_NO_PUSH  0x2u
+#define SXC_GRASS_FLIP     0x10u
+#define SXC_GRASS_NO_MARKS 0x20u ///< the ground marks leave it alone (stones don't burn or freeze; 0x4, 0x8 are the table's reserved bits)
+
+/// What a ground mark (sxc.cover's set_marks, SXC_MARK_*) does to the plants standing in it, per channel.
+/// A channel's value v (0..1; the life channel's magnitude) works in two halves: up to 0.5 the plant takes
+/// on the tint, from 0.5 to 1 it shrinks toward `size` (burnt grass blackens, then burns away; growing back
+/// in reverse). The wind follows `wind` over the whole range.
+typedef struct sxc_grass_mark_look
+{
+    float tint[3];        ///< rgb 0..1, as the plant's own colour is
+    float tint_strength;  ///< 0 none .. 1 the tint at full
+    float size;           ///< the plant's size at full (0 gone, 1 as it was)
+    float wind;           ///< x the wind at full (0 frozen stiff, 1 as it was)
+    float reserved[2];
+} sxc_grass_mark_look;
+
+/// The marks' looks; copied (null or on = false: the plants ignore the marks).
+typedef struct sxc_grass_marks
+{
+    uint32_t            struct_size;
+    wxl_bool            on;
+    sxc_grass_mark_look channel[4];   ///< SXC_MARK_BURN, _FROST, _LIFE (positive: blooming), _SOOT
+    sxc_grass_mark_look blight;       ///< the life channel below 0
+} sxc_grass_marks;
 
 /// The density of one plant model in one place (step 7d): the provider's answer.
 typedef struct sxc_grass_density
@@ -156,6 +179,11 @@ typedef struct sxc_grass_api
     /// Checks the placed plants (stock placement, as the client made them) within `radius` yd of the
     /// player against the terrain. False: not in the world.
     wxl_bool(WXL_CALL* inspect)(float radius, struct sxc_grass_inspect* out);
+
+    // --- appended 2026-10-27 (check struct_size before using) -------------------------------------
+
+    /// What the ground marks (sxc.cover's set_marks) do to plants; copied, call again when it changes.
+    void(WXL_CALL* set_marks)(const sxc_grass_marks* marks);
 } sxc_grass_api;
 
 /// What inspect found.

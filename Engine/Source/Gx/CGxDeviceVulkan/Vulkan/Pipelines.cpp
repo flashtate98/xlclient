@@ -195,7 +195,9 @@ namespace gxvk::vk::pipelines
         uint32_t layoutIndex = 0;
         // SXC: our terrain shader and the decals on the covers read the covers' set 2 (and the lights'
         // set 3); the translated pixel modules flagged `lights` (models, WMOs) the lights' set 3.
-        const bool cover = draw.fragment == FragmentProgram::Terrain || draw.fragment == FragmentProgram::Decal;
+        // The instanced grass reads the ground marks there (its vertex stage).
+        const bool cover = draw.fragment == FragmentProgram::Terrain || draw.fragment == FragmentProgram::Decal
+                           || (draw.vertex == VertexProgram::Translated && draw.vertexRecord && draw.vertexRecord->grass);
         const bool lit = draw.fragment == FragmentProgram::Translated && draw.fragmentRecord && draw.fragmentRecord->lights;
         if (!LayoutFor(samplerMask, cover ? kExtraCover : (lit ? kExtraLights : kExtraNone), layoutIndex))
         {

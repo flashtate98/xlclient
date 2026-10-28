@@ -263,7 +263,6 @@ void CGxDeviceVulkan::ICreateDrawPath() {
         gxvk::vk::lights::SetShadowReport(&SXC::Lights::ShadowsDrawn);
         SXC::Lights::SetDevice(gxvk::vk::cover::Ready() && gxvk::vk::lights::Ready(), &gxvk::vk::lights::Status);
         SXC::Lights::SetShadowDevice(gxvk::vk::shadows::Ready() ? gxvk::vk::shadows::Slots() : 0, gxvk::vk::shadows::kMaxVertices);
-
         // SXC: the instanced grass.
         static const SXC::Grass::Device s_grass = { gxvk::vk::grass::Mesh, gxvk::vk::grass::Allocate, gxvk::vk::grass::Write, gxvk::vk::grass::Release,
                                                     &CGxDeviceVulkan::SxcGrassDraw, gxvk::vk::grass::PlantsInUse };
@@ -293,12 +292,18 @@ void CGxDeviceVulkan::ICreateDrawPath() {
 bool CGxDeviceVulkan::SxcGrassDraw(CGxTex* texture, const SXC::Grass::Run* runs, uint32_t count) {
     CGxDeviceVulkan* device = static_cast<CGxDeviceVulkan*>(g_theGxDevicePtr);
 
-    if (!device || !device->m_context || device->m_intF5C || !device->m_drawPath || !texture || !runs || !count || !gxvk::vk::grass::Ready()) {
+    // The variant reads the ground marks from the covers' set: without it, the stock way.
+    if (!device || !device->m_context || device->m_intF5C || !device->m_drawPath || !texture || !runs || !count || !gxvk::vk::grass::Ready() ||
+        !gxvk::vk::cover::Ready()) {
         return false;
     }
 
     device->RsSet(GxRs_Texture0, texture);
     device->IRsSync(0);
+
+    // The covers' set (the ground marks) for this frame, made before the draw takes the pass (its
+    // uploads go into the pre-pass).
+    gxvk::vk::cover::FrameSet(gxvk::vk::frame::Slot(), gxvk::vk::frame::Serial());
 
     if (!gxvk::vk::frame::Pass()) {
         return false;
@@ -448,7 +453,19 @@ bool CGxDeviceVulkan::SxcCoverFrame(gxvk::vk::cover::Frame& out) {
     CGxDeviceVulkan* device = static_cast<CGxDeviceVulkan*>(g_theGxDevicePtr);
     const SXC::Cover::Frame& in = SXC::Cover::Current();
 
-    if (!device || !device->m_drawPath || !in.on) {
+    if (!device || !device->m_drawPath) {
+        return false;
+    }
+
+    // The ground marks (the grass reads them), with the covers off too.
+    out.marksSize = in.marksSize;
+    out.marksCell = in.marksCell;
+    out.marksFirstI = in.marksFirstI;
+    out.marksFirstJ = in.marksFirstJ;
+    out.marksCells = in.marksCells;
+    out.marksVersion = in.marksVersion;
+
+    if (!in.on) {
         return false;
     }
 

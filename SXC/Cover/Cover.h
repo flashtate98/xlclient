@@ -43,6 +43,13 @@ namespace SXC::Cover {
         const float* farCells = nullptr;
         uint32_t farVersion = 0;
 
+        // The ground marks (sxc_cover_api::set_marks; SXC_MARK_*): with the covers off too.
+        uint32_t marksSize = 0;
+        float marksCell = 1.0f;
+        int32_t marksFirstI = 0, marksFirstJ = 0;
+        const float* marksCells = nullptr;
+        uint32_t marksVersion = 0;
+
         // Trails (SXC/Cover/Trails.h): the fine and the coarse layer, with what changed since last frame
         // (texel rectangles; or all of it).
         struct TrailLayer {
@@ -81,6 +88,9 @@ namespace SXC::Cover {
 
     // This frame's data (the texture slots assigned now). Main thread.
     const Frame& Current();
+
+    // The ground marks' map as the mod last sent it (the grass's constants); false: none.
+    bool Marks(float& cell, uint32_t& size, int32_t& firstI, int32_t& firstJ);
 
     // The device's read-back of the surface grid (some frames old): per cell the surface's z, the cell's
     // tag, the bare ground's z, 1 written (gxvk::vk::cover::Frame). Read in place: the device's buffer,

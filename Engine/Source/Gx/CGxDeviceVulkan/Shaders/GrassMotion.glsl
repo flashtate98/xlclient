@@ -16,6 +16,9 @@
 
 layout(location = 5) in vec4 sxcPlantMotion;
 
+// The ground marks' wind factor for this plant (GrassMarks.glsl sets it before the bend; frozen: stiff).
+float sxcMarkWind = 1.0;
+
 const int kSxcGrassHeader = 64;
 const int kSxcGrassGrid = 68;
 const int kSxcGrassActors = 132;
@@ -55,7 +58,7 @@ vec3 SxcGrassBend(vec3 p, float texV)
     float a = h0.x * h1.y + p.x * 0.61 + p.y * 0.37;
     a = fract(a * 0.15915494 + 0.5) * 6.2831853 - 3.1415927;
     float sway = (w.z + 0.3) * h1.x * sin(a) + h0.w;
-    vec2 offset = w.xy * sway * sxcPlantMotion.z;
+    vec2 offset = w.xy * sway * sxcPlantMotion.z * sxcMarkWind;
 
     // Parting: each character near the player pushes blades away within its radius, near its height.
     vec4 h3 = regs.v[kSxcGrassHeader + 3];
@@ -80,7 +83,7 @@ vec3 SxcGrassBend(vec3 p, float texV)
             push += d * (fall / len);
         }
 
-        offset += push * h1.z * sxcPlantMotion.w;
+        offset += push * h1.z * sxcPlantMotion.w * sxcMarkWind;   // frozen plants give way less
     }
 
     p.xy += offset * bend;

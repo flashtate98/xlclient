@@ -63,6 +63,7 @@ namespace {
         float mostFallen = 0.0f; // yd: the deepest fallen snow in it
     };
     Map s_near, s_far;
+    Map s_marks;   // the ground marks (burnt, frozen; SXC_MARK_*), whether or not the covers are on
 
     // The surface grid as last read back (step 5e): RGBA32F per cell, the device's layout, read in its
     // buffer. 96 yd across, in cells of 0.125 yd (fine: footprints' dips stay apart) or 0.25 yd.
@@ -365,6 +366,7 @@ namespace {
 
     void WXL_CALL SetNear(const sxc_cover_map* map) { SetMap(s_near, map); }
     void WXL_CALL SetFar(const sxc_cover_map* map) { SetMap(s_far, map); }
+    void WXL_CALL SetMarks(const sxc_cover_map* map) { SetMap(s_marks, map); }
 
     void WXL_CALL SetLook(const sxc_cover_look* look) {
         // A mod built before the appended fields passes the size it knows; those stay 0.
@@ -454,7 +456,7 @@ namespace {
         return (TextureIsLoaded(t.texture) ? (t.specular ? 3 : 2) : 1) + (t.slot ? 4 : 0);
     }
 
-    const sxc_cover_api s_api = { sizeof(sxc_cover_api), Available, SetResolver, Invalidate, SetEntries, SetTextures, SetNear, SetFar, SetLook, Status, TextureState };
+    const sxc_cover_api s_api = { sizeof(sxc_cover_api), Available, SetResolver, Invalidate, SetEntries, SetTextures, SetNear, SetFar, SetLook, Status, TextureState, SetMarks };
 }
 
 namespace SXC::Cover {
@@ -469,12 +471,29 @@ namespace SXC::Cover {
         s_deviceStatus = status;
         s_near.version++; // a new device holds no maps yet
         s_far.version++;
+        s_marks.version++;
         s_entryVersion++;
+    }
+
+    bool Marks(float& cell, uint32_t& size, int32_t& firstI, int32_t& firstJ) {
+        cell = s_marks.cell;
+        size = s_available ? s_marks.size : 0u;
+        firstI = s_marks.firstI;
+        firstJ = s_marks.firstJ;
+        return size > 0;
     }
 
     const Frame& Current() {
         Frame& f = s_frame;
         f.on = s_available && s_haveLook && s_look.enabled;
+
+        // The ground marks: the grass reads them with the covers off too.
+        f.marksSize = s_available ? s_marks.size : 0u;
+        f.marksCell = s_marks.cell;
+        f.marksFirstI = s_marks.firstI;
+        f.marksFirstJ = s_marks.firstJ;
+        f.marksCells = s_marks.size ? s_marks.cells.data() : nullptr;
+        f.marksVersion = s_marks.version;
 
         if (!f.on) {
             return f;

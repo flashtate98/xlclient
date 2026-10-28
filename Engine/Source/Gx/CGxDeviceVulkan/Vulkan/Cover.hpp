@@ -24,6 +24,7 @@ namespace gxvk::vk::cover
     constexpr uint32_t kMaxMap      = 256;
     constexpr uint32_t kMaxTrail    = 1024;   ///< trail layers: texels per side at most
     constexpr uint32_t kMaxSurface  = 1024;   ///< the surface grid's cells per side at most (step 5e)
+    constexpr uint32_t kMarksBinding = 23;    ///< set 2: the ground marks (after the 16 fallback texture slots, in both modes)
 
     struct Frame
     {
@@ -52,6 +53,14 @@ namespace gxvk::vk::cover
         int32_t      farFirstI = 0, farFirstJ = 0;
         const float* farCells = nullptr;
         uint32_t     farVersion = 0;
+
+        // SXC: the ground marks (burnt, frozen; SXC_MARK_*), toroidal like the maps; filled with the
+        // covers off too (the grass's vertex stage reads them, set 2 binding kMarksBinding).
+        uint32_t     marksSize = 0;
+        float        marksCell = 1.0f;
+        int32_t      marksFirstI = 0, marksFirstJ = 0;
+        const float* marksCells = nullptr;
+        uint32_t     marksVersion = 0;
 
         // Trails (step 5d): the fine and the coarse layer (RGBA32F, toroidal like the maps), and the
         // texel rectangles that changed (x, y, w, h each) unless all of it did.

@@ -40,12 +40,12 @@ namespace
     constexpr uint32_t kSurfaceBinding = 5;
     constexpr uint32_t kDepthBinding = 6;
     constexpr uint32_t kFirstTex   = 7;
-    constexpr uint32_t kMapSamplers = 4;                         ///< bindings 1..4
+    constexpr uint32_t kMapSamplers = 5;                         ///< bindings 1..4, and the marks (kMarksBinding)
     constexpr uint32_t kMaxSurface = gxvk::vk::cover::kMaxSurface;
     constexpr VkImageUsageFlags kSurfaceUsage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     constexpr uint32_t kEntryRows  = 5;                          ///< vec4 per entry (sxc_cover_entry, 80 bytes)
-    constexpr uint32_t kMaxBindings = kFirstTex + kFallbackSlots;
-    constexpr uint32_t kTerrainSamplers = 9;                     ///< set 0 of the terrain modules: 4 layers, the alpha map, 4 cascades
+    constexpr uint32_t kMaxBindings = kFirstTex + kFallbackSlots + 1;   ///< + the marks (kMarksBinding)
+    constexpr uint32_t kTerrainSamplers = 13;                    ///< set 0 of the terrain modules: 4 layers, the alpha map, 4 cascades, 4 height maps
     constexpr VkFormat kMapFormat  = VK_FORMAT_R32G32B32A32_SFLOAT;
     constexpr float    kNoWater    = -100000.0f;
 
@@ -112,6 +112,9 @@ namespace
         uint32_t nearVersion = 0, farVersion = 0;
         bool     nearPresent = false, farPresent = false;
         Image    trailMaps[2];                ///< fine, coarse
+        Image    marks;                       ///< the ground marks (the grass's vertex stage reads them)
+        uint32_t marksVersion = 0;
+        bool     marksPresent = false;
         bool     trailPresent[2] = {};
         Image    surface;                     ///< the surface grid (storage, GENERAL once cleared; 1 x 1 until sized)
         /// The terrain's depth per pixel of the target (R32_UINT storage, GENERAL; 1 x 1 until sized):
@@ -122,7 +125,7 @@ namespace
         VkExtent2D     depthExtent = { 0, 0 };
         VkImageLayout  depthLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         void   (*surfaceSink)(const float*, uint32_t, float) = nullptr; ///< the last one given (told "none" before buffers go)
-        VkPipelineStageFlags readers = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT; ///< the stages that read the maps
+        VkPipelineStageFlags readers = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT; ///< the stages that read the maps (vertex: the grass, the marks)
 
         char status[200] = "no terrain drawn yet";
     };
@@ -444,7 +447,7 @@ namespace gxvk::vk::cover
         // The raised chunks (step 5c): where the device tessellates (the caps probe enabled it).
         s.tessellation = (context::Caps().enabled & gxvk::vk::kCapTessellation) != 0 && lim.maxTessellationGenerationLevel >= 8;
         s.maxTessLevel = s.tessellation ? static_cast<float>(lim.maxTessellationGenerationLevel < 32 ? lim.maxTessellationGenerationLevel : 32) : 1.0f;
-        s.readers = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+        s.readers = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
                     (s.tessellation ? VK_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT | VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT : 0u);
 
         const uint32_t bindingCount = s.bindless ? kFirstTex + 1 : kFirstTex + kFallbackSlots;
@@ -462,9 +465,14 @@ namespace gxvk::vk::cover
             if (s.tessellation && i < kSurfaceBinding)
                 bindings[i].stageFlags |= VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
         }
+        // The ground marks: the grass reads them per plant (vertex), the terrain later (pixel).
+        bindings[bindingCount].binding         = gxvk::vk::cover::kMarksBinding;
+        bindings[bindingCount].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[bindingCount].descriptorCount = 1;
+        bindings[bindingCount].stageFlags      = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         VkDescriptorSetLayoutCreateInfo setLayout = {};
         setLayout.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        setLayout.bindingCount = bindingCount;
+        setLayout.bindingCount = bindingCount + 1;
         setLayout.pBindings    = bindings;
         if (!Check(d.CreateDescriptorSetLayout(s.device, &setLayout, nullptr, &s.setLayout), "vkCreateDescriptorSetLayout")) return false;
 
@@ -510,7 +518,7 @@ namespace gxvk::vk::cover
 
         // 1 x 1 placeholders until the maps come (no snow, all kept, dry, no water) and for missing textures.
         if (!CreateImage(1, kMapFormat, s.nearMap) || !CreateImage(1, kMapFormat, s.farMap) || !CreateImage(1, VK_FORMAT_R8G8B8A8_UNORM, s.white)
-            || !CreateImage(1, kMapFormat, s.trailMaps[0]) || !CreateImage(1, kMapFormat, s.trailMaps[1])
+            || !CreateImage(1, kMapFormat, s.trailMaps[0]) || !CreateImage(1, kMapFormat, s.trailMaps[1]) || !CreateImage(1, kMapFormat, s.marks)
             || !CreateImage(1, kMapFormat, s.surface, kSurfaceUsage) || !CreateDepth(VkExtent2D{ 1, 1 }))
             return false;
 
@@ -569,6 +577,18 @@ namespace gxvk::vk::cover
                 uploaded = UploadTrail(pre, s.trailMaps[k], *trailLayers[k], s.trailPresent[k]) && uploaded;
             Clear(pre, s.trailMaps[k], kUntouched);
         }
+        // The ground marks (none: all zero), with the covers off too.
+        static const float kNoMarks[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+        Clear(pre, s.marks, kNoMarks);
+        if (!f.marksCells || f.marksSize == 0 || f.marksSize > kMaxMap)
+            s.marksPresent = false;
+        else if (!s.marksPresent || f.marksVersion != s.marksVersion || s.marks.size != f.marksSize)
+        {
+            s.marksPresent = Upload(pre, s.marks, f.marksCells, f.marksSize);
+            s.marksVersion = f.marksVersion;
+            uploaded = uploaded && s.marksPresent;
+        }
+        Clear(pre, s.marks, kNoMarks);
         Clear(pre, s.nearMap, kEmpty); // remade for a new size and not filled: cleared
         Clear(pre, s.farMap, kEmpty);
 
@@ -753,6 +773,7 @@ namespace gxvk::vk::cover
             { s.mapSampler, s.trailMaps[0].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
             { s.mapSampler, s.trailMaps[1].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
         };
+        const VkDescriptorImageInfo marks = { s.mapSampler, s.marks.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         const VkDescriptorImageInfo surface = { VK_NULL_HANDLE, s.surface.view, VK_IMAGE_LAYOUT_GENERAL };
         const VkDescriptorImageInfo depth = { VK_NULL_HANDLE, s.depthView, VK_IMAGE_LAYOUT_GENERAL };
         static VkDescriptorImageInfo texImages[kBindlessSlots];
@@ -786,6 +807,7 @@ namespace gxvk::vk::cover
         add(4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1).pImageInfo = &maps[3];
         add(kSurfaceBinding, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1).pImageInfo = &surface;
         add(kDepthBinding, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1).pImageInfo = &depth;
+        add(gxvk::vk::cover::kMarksBinding, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1).pImageInfo = &marks;
         if (texturesChanged)
         {
             if (s.bindless)
@@ -818,6 +840,7 @@ namespace gxvk::vk::cover
         DestroyImage(s.white);
         DestroyImage(s.trailMaps[0]);
         DestroyImage(s.trailMaps[1]);
+        DestroyImage(s.marks);
         DestroyImage(s.surface);
         DestroyDepth();
         if (s.surfaceSink) s.surfaceSink(nullptr, 0, 0.0f);  // its buffers go

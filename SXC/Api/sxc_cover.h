@@ -188,7 +188,24 @@ typedef struct sxc_cover_api
     /// A cover texture's load state: 0 not loaded (not used yet, or no such texture), 1 loading, 2 loaded
     /// (with its gloss variant "_s" when 3); + 4 while it has a slot (it shows).
     int32_t(WXL_CALL* texture_state)(uint32_t texture);
+
+    // --- appended 2026-10-27 (check struct_size before using) -------------------------------------
+
+    /// The ground marks around the player: what happened to the ground and lasts a while (burnt, frozen;
+    /// SXC_MARK_*), one channel each, 0..1 (the life channel -1..1: blight below 0, bloom above; below 0
+    /// on the others: growing back, fresh, -1 from nothing), a map
+    /// like the others (toroidal; cells outside it hold no marks). Copied; call again when it changes.
+    /// The grass reads it (sxc.grass's marks look says what each channel does to plants), later the
+    /// terrain. Null clears it.
+    void(WXL_CALL* set_marks)(const sxc_cover_map* marks);
 } sxc_cover_api;
+
+/// The ground marks' channels (sxc_cover_api::set_marks; the cells' 4 floats in this order).
+#define SXC_MARK_BURN  0   ///< burnt by heat: 0 untouched .. 1 burnt to the ground
+#define SXC_MARK_FROST 1   ///< frozen by cold
+#define SXC_MARK_LIFE  2   ///< -1 blighted .. 0 .. 1 blooming (noted, not set by anything yet)
+#define SXC_MARK_SOOT  3   ///< soot left by a burn once its heat is gone (fades in seconds; regrowing plants come back fresh)
+#define SXC_MARK_CHANNELS 4
 
 #ifdef __cplusplus
 }
