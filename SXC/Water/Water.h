@@ -26,6 +26,7 @@ namespace SXC::Water {
         float chop = 1.2f;       // horizontal displacement (sharper crests)
         float foam = 1.0f;       // the foam's strength where crests fold
         bool rebuild = false;    // make the spectrum again even if the wind hasn't changed
+        float move = 1.0f;       // x the surface's displacement near the camera (0 flat)
         // The sky's bodies this frame (SXC::Sky::BodiesSeen), reflected on the water: per body the direction
         // toward it, its angular radius (rad), its colour.
         uint32_t bodies = 0;

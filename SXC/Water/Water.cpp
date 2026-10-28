@@ -67,6 +67,7 @@ namespace {
         float spread = 0.3f;
         float foam = 1.0f;
         float foamThreshold = 0.95f;  // the Jacobian below which crests foam
+        float move = 1.0f;            // the surface's displacement (0 flat; the height above sets how far)
         bool windOverride = false;    // the panel's wind instead of the mod's
         float windSpeed = 6.0f;       // yd / s
         float windAngle = 0.0f;       // degrees, 0 = +x
@@ -289,6 +290,7 @@ namespace SXC::Water {
         waves.chop = s_look.chop;
         waves.spread = s_look.spread;
         waves.foam = s_look.foam;
+        waves.move = s_look.move;
 
         if (s_look.windOverride) {
             const float angle = s_look.windAngle * 0.017453292f;
@@ -368,6 +370,33 @@ namespace SXC::Water {
 
         g_theGxDevicePtr->RsSet(GxRs_Texture0, tint);
         Liquid::SetShaderConstants();
+
+        // Ours past the liquid's (Water.vert, step 3b): c46..c49 the mesh's world transform (camera-
+        // relative when the liquid code works that way), c50..c53 the view, c54 what the world transform
+        // leaves out of the world position (the camera's, when camera-relative): the vertex stage moves
+        // the surface in the world and then views it.
+        {
+            C44Matrix world = identity ? C44Matrix() : instance->m_transform;
+            C3Vector offset(0.0f, 0.0f, 0.0f);
+
+            if (Liquid::UseCameraRelativeCoords()) {
+                world.d0 -= cameraPos.x;
+                world.d1 -= cameraPos.y;
+                world.d2 -= cameraPos.z;
+                offset = cameraPos;
+            }
+
+            C44Matrix view;
+            GxXformView(view);
+            float vertexRows[9 * 4];
+            std::memcpy(&vertexRows[0], &world, sizeof(world));
+            std::memcpy(&vertexRows[16], &view, sizeof(view));
+            vertexRows[32] = offset.x;
+            vertexRows[33] = offset.y;
+            vertexRows[34] = offset.z;
+            vertexRows[35] = 0.0f;
+            g_theGxDevicePtr->ShaderConstantsSet(GxSh_Vertex, 46, vertexRows, 9);
+        }
 
         float rows[kPixelRows * 4] = {};
         rows[0] = RippleTime();
@@ -449,6 +478,7 @@ namespace SXC::Water {
 
         if (ImGui::CollapsingHeader("Waves", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::SliderFloat("Height", &s_look.amplitude, 0.0f, 2.0f);
+            ImGui::SliderFloat("Surface movement", &s_look.move, 0.0f, 2.0f);
             ImGui::SliderFloat("Choppiness", &s_look.chop, 0.0f, 3.0f);
             ImGui::SliderFloat("Spread", &s_look.spread, 0.0f, 1.0f);
             ImGui::SliderFloat("Foam", &s_look.foam, 0.0f, 3.0f);

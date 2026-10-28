@@ -636,6 +636,7 @@ bool CGxDeviceVulkan::SxcWaterCapture(const SXC::Water::Waves& waves) {
     in.waves.chop = waves.chop;
     in.waves.foam = waves.foam;
     in.waves.rebuild = waves.rebuild;
+    in.waves.move = waves.move;
     in.waves.bodies = waves.bodies < 4 ? waves.bodies : 4;
     std::memcpy(in.waves.body, waves.body, sizeof in.waves.body);
     return gxvk::vk::water::Capture(in);

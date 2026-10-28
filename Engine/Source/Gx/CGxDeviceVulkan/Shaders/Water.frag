@@ -40,16 +40,7 @@ layout(set = 0, binding = 0) uniform sampler2D s0;
 // where the draws lie on the target (viewport x, y, width, height; the target's width, height, 1 / both).
 layout(set = 2, binding = 0) uniform sampler2D sceneColour;
 layout(set = 2, binding = 1) uniform sampler2D sceneW;
-layout(std140, set = 2, binding = 2) uniform WaterScene {
-    vec4 viewport;
-    vec4 extent;
-    vec4 waveSizes;   // the cascades' world sizes (yd); w 1 when the waves run
-    vec4 waveLook;    // how far cascades 1 and 2 reach (yd), the foam's strength, 0
-    vec4 depthProj;   // the capture's projection terms (P22, P32, P23, P33) and
-    vec4 depthRange;  // depth range (min, max): the debug view's self-test; w how many sky bodies follow
-    vec4 bodyDir[4];  // the sky's bodies as drawn this frame: direction toward each, angular radius (rad)
-    vec4 bodyColour[4];
-} scene;
+#include "WaterScene.glsl"
 // The waves (step 3, WaterWaves.glsl): per cascade the height's slopes, the Jacobian (below 1 the crest
 // folds), the height.
 layout(set = 2, binding = 3) uniform sampler2DArray waveSlopes;

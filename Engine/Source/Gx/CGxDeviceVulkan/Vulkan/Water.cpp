@@ -269,18 +269,21 @@ namespace
         if (!Check(d.CreateDescriptorSetLayout(s.device, &captureInfo, nullptr, &s.captureLayout), "vkCreateDescriptorSetLayout (capture)")) return false;
 
         // Set 2 of the draws: 0 the scene's colour, 1 its depth (w), 2 where the draws lie on it and the
-        // waves' parameters, 3 the waves' slopes (a layer per cascade).
-        VkDescriptorSetLayoutBinding draw[4] = {};
-        for (uint32_t i = 0; i < 4; ++i)
+        // waves' parameters, 3 the waves' slopes (a layer per cascade), 4 their displacement (the vertex
+        // stage moves the surface with it, step 3b).
+        VkDescriptorSetLayoutBinding draw[5] = {};
+        for (uint32_t i = 0; i < 5; ++i)
         {
             draw[i].binding         = i;
             draw[i].descriptorType  = i == 2 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             draw[i].descriptorCount = 1;
-            draw[i].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+            draw[i].stageFlags      = i == 2 ? VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
+                                    : i == 4 ? VK_SHADER_STAGE_VERTEX_BIT
+                                             : VK_SHADER_STAGE_FRAGMENT_BIT;
         }
         VkDescriptorSetLayoutCreateInfo drawInfo = {};
         drawInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        drawInfo.bindingCount = 4;
+        drawInfo.bindingCount = 5;
         drawInfo.pBindings    = draw;
         if (!Check(d.CreateDescriptorSetLayout(s.device, &drawInfo, nullptr, &s.drawLayout), "vkCreateDescriptorSetLayout (set 2)")) return false;
 
@@ -306,7 +309,7 @@ namespace
 
         VkDescriptorPoolSize sizes[3] = {};
         sizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[0].descriptorCount = 5 * kSlots;
+        sizes[0].descriptorCount = 6 * kSlots;
         sizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         sizes[1].descriptorCount = 2 * kSlots;
         sizes[2].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -379,15 +382,16 @@ namespace
 
     void WriteDrawSet(Slot& slot)
     {
-        VkDescriptorImageInfo images[4] = {
+        VkDescriptorImageInfo images[5] = {
             { s.linearClamp, s.colour.view, VK_IMAGE_LAYOUT_GENERAL },
             { s.nearestClamp, s.depth.view, VK_IMAGE_LAYOUT_GENERAL },
             {},
             { s.linearRepeat, s.waveImages[6].view, VK_IMAGE_LAYOUT_GENERAL },
+            { s.linearRepeat, s.waveImages[5].view, VK_IMAGE_LAYOUT_GENERAL },
         };
         VkDescriptorBufferInfo params = { slot.params.handle, 0, sizeof(Params) };
-        VkWriteDescriptorSet writes[4] = {};
-        for (uint32_t i = 0; i < 4; ++i)
+        VkWriteDescriptorSet writes[5] = {};
+        for (uint32_t i = 0; i < 5; ++i)
         {
             writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[i].dstSet          = slot.drawSet;
@@ -397,7 +401,7 @@ namespace
             if (i == 2) writes[i].pBufferInfo = &params;
             else writes[i].pImageInfo = &images[i];
         }
-        s.dapi->UpdateDescriptorSets(s.device, 4, writes, 0, nullptr);
+        s.dapi->UpdateDescriptorSets(s.device, 5, writes, 0, nullptr);
         slot.written = true;
     }
 
@@ -519,7 +523,8 @@ namespace
             d.CmdClearColorImage(cmd, img.image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
             img.layout = VK_IMAGE_LAYOUT_GENERAL;
         }
-        GlobalBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        GlobalBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                       VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
         s.wavesFresh = false;
     }
@@ -550,7 +555,8 @@ namespace
         p.misc[2]   = w.time;
 
         // The last frame's water has read the slopes before this frame writes anything.
-        GlobalBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+        GlobalBarrier(cmd, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
         d.CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s.wavePipeLayout, 0, 1, &s.waveSet, 0, nullptr);
         d.CmdPushConstants(cmd, s.wavePipeLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof p, &p);
@@ -575,7 +581,8 @@ namespace
         step(2, 1, kWaveN);
         step(3, 1, kWaveN);
         step(4, kWaveN / 8, kWaveN / 8);
-        GlobalBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+        GlobalBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                      VK_ACCESS_SHADER_READ_BIT);
         s.wavesRan = true;
     }
 }
@@ -652,6 +659,7 @@ namespace gxvk::vk::water
         p.waveLook[0]  = 220.0f;   // cascade 1 fades out by this distance (yd), cascade 2 by the next
         p.waveLook[1]  = 45.0f;
         p.waveLook[2]  = in.waves.foam;
+        p.waveLook[3]  = in.waves.move;
         p.depthProj[0] = in.proj[2 * 4 + 2];
         p.depthProj[1] = in.proj[3 * 4 + 2];
         p.depthProj[2] = in.proj[2 * 4 + 3];
