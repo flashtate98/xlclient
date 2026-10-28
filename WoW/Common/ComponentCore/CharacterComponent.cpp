@@ -3940,7 +3940,9 @@ void CCharacterComponent::AddHelm(int32_t itemVisual) {
 #if defined(WOWDECOMP_RETAIL_MODELS)
     // Not in the original: a new race takes the hides of the stock race whose helmets it wears (its ChrRaces
     // client prefix), as the Retail hides do. Stock bodies keep their own bit.
-    uint32_t raceMask = 1 << RetailCharacterHelmetRace(this);
+    // A race past the 32-bit masks hides nothing (shifting by it was undefined).
+    const uint32_t helmetRace = RetailCharacterHelmetRace(this);
+    uint32_t raceMask = helmetRace < 32 ? uint32_t{1} << helmetRace : 0;
 #else
     uint32_t raceMask = 1 << this->m_data.m_preferences.m_raceID;
 #endif

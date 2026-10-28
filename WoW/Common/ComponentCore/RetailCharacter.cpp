@@ -1003,7 +1003,21 @@ uint32_t RetailCharacterHelmetRace(const CCharacterComponent* character) {
     const uint32_t race = character->m_data.m_preferences.m_raceID;
     uint32_t retailRace = 0;
     const uint32_t stock = RetailModelOf(character, retailRace) ? StockRaceFor(race) : 0;
-    return stock ? stock : race;
+    if (stock) return stock;
+    // FlashWOW moved its NPC races above 32 to free 23, 24 and 27-32 for new player races. The helmet hides
+    // are 32-bit race masks, so the moved races keep the bit of their old number (which the new player races,
+    // hiding by a stock race, do not read). Any other race past the masks hides nothing.
+    switch (race) {
+        case 46: return 23;     // Vrykul
+        case 47: return 24;     // Fel Orc
+        case 48: return 27;     // Skeleton
+        case 49: return 28;     // Tuskarr
+        case 50: return 29;     // Forest Troll
+        case 51: return 30;     // Taunka
+        case 52: return 31;     // Northrend Skeleton
+        case 53: return 32;     // Ice Troll
+        default: return race;
+    }
 }
 
 namespace {
