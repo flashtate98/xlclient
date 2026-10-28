@@ -5,7 +5,9 @@
 // constants, then ours.
 #include "SXC/Water/Water.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include "Engine/Source/Gx/CGxDevice/CGxDevice.h"
 #include "Engine/Source/Gx/CGxDevice/CGxShader.h"
@@ -13,6 +15,7 @@
 #include "Engine/Source/Model2/M2Light.h"
 #include "Engine/Source/Storm/H/storm.h"
 #include "SXC/Fog/Fog.h"
+#include "SXC/Grass/Grass.h"
 #include "SXC/Log.h"
 #include "SXC/Settings/Settings.h"
 #include "WoW/Source/LiquidSystem/Liquid.h"
@@ -102,6 +105,39 @@ namespace {
         return static_cast<float>(seconds - 600.0 * static_cast<double>(static_cast<uint64_t>(seconds / 600.0)));
     }
 
+    SXC::Settings::Bool& WavesOn() {
+        static SXC::Settings::Bool s_setting("Liquid", "Waves", true, "Waves (FFT)",
+                                             "Our water's waves: an FFT sea driven by the wind around the player (off: small ripples).");
+        return s_setting;
+    }
+
+    // The wind the waves take: the mod's at the player (the grass's wind grid), smoothed over a few
+    // seconds so gusts don't make the spectrum again every frame; a light breeze without the mod.
+    void WindForWaves(SXC::Water::Waves& w, float dt) {
+        static float s_x = 0.3f, s_y = 0.0f;
+        float x = 0.3f, y = 0.0f, gust = 0.0f;
+
+        if (SXC::Grass::WindAtPlayer(x, y, gust)) {
+            const float length = std::sqrt(x * x + y * y);
+
+            if (length < 0.05f) {
+                // Calm: keep the last direction with a breath of wind.
+                const float last = std::sqrt(s_x * s_x + s_y * s_y);
+                x = last > 1e-4f ? s_x / last * 0.05f : 0.05f;
+                y = last > 1e-4f ? s_y / last * 0.05f : 0.0f;
+            }
+        }
+
+        const float blend = 1.0f - std::exp(-dt / 4.0f);
+        s_x += (x - s_x) * blend;
+        s_y += (y - s_y) * blend;
+        const float strength = std::sqrt(s_x * s_x + s_y * s_y);
+        w.windX = strength > 1e-4f ? s_x / strength : 1.0f;
+        w.windY = strength > 1e-4f ? s_y / strength : 0.0f;
+        // Strength 0..1 (more in storms) to a wind speed: a breeze to a strong wind.
+        w.speed = 2.5f + 11.0f * std::min(strength, 1.5f);
+    }
+
     void SkyRow(float* row, const CImVector& c) {
         row[0] = c.r / 255.0f;
         row[1] = c.g / 255.0f;
@@ -139,8 +175,18 @@ namespace SXC::Water {
 
         CGxTex* tint = TintTexture(instance->m_settings);
 
-        // The scene behind the water, before the frame's first water draw (the later ones reuse it).
-        if (!tint || !Shaders() || !s_capture()) {
+        // The scene behind the water and the waves, before the frame's first water draw (the later ones
+        // reuse them; the device answers once per frame).
+        static float s_lastTime = -1.0f;
+        SXC::Water::Waves waves;
+        waves.on = WavesOn().Get();
+        waves.time = RippleTime();
+        float dt = s_lastTime < 0.0f ? 0.0f : waves.time - s_lastTime;
+        dt = dt < 0.0f ? 0.0f : (dt > 0.5f ? 0.5f : dt);
+        s_lastTime = waves.time;
+        WindForWaves(waves, dt);
+
+        if (!tint || !Shaders() || !s_capture(waves)) {
             return false;
         }
 

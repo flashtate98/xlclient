@@ -1351,4 +1351,25 @@ namespace SXC::Grass {
     const sxc_grass_api* Api() {
         return &s_api;
     }
+
+    // The four cells around the grid's middle (the grid is centred on the player), averaged.
+    bool WindAtPlayer(float& x, float& y, float& gust) {
+        x = y = gust = 0.0f;
+
+        if (!s_motionOn) {
+            return false;
+        }
+
+        constexpr uint32_t kHalf = SXC_GRASS_GRID / 2;
+        const uint32_t cells[4] = { (kHalf - 1) * SXC_GRASS_GRID + kHalf - 1, (kHalf - 1) * SXC_GRASS_GRID + kHalf,
+                                    kHalf * SXC_GRASS_GRID + kHalf - 1, kHalf * SXC_GRASS_GRID + kHalf };
+
+        for (uint32_t c : cells) {
+            x += s_motionRows[4 + c][0] * 0.25f;
+            y += s_motionRows[4 + c][1] * 0.25f;
+            gust += s_motionRows[4 + c][2] * 0.25f;
+        }
+
+        return true;
+    }
 }

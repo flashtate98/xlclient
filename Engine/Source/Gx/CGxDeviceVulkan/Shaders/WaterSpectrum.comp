@@ -1,0 +1,108 @@
+// SXC: our water's wave spectrum (WaterWaves.glsl). INIT=1: the starting amplitudes from the wind (made
+// again when the wind changes; the random draws per texel stay, so the sea changes, it doesn't jump).
+// INIT=0: the spectrum at the time, with the horizontal displacement ("chop") beside the height.
+// After Crest's FFTSpectrum.compute (MIT, see WaterWaves.glsl): its Pierson-Moskowitz form, its cos^2
+// spreading with turbulence, its hashes.
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+#include "WaterWaves.glsl"
+
+#if INIT
+
+uint WangHash(uint seed)
+{
+    seed = (seed ^ 61u) ^ (seed >> 16);
+    seed *= 9u;
+    seed = seed ^ (seed >> 4);
+    seed *= 0x27d4eb2du;
+    seed = seed ^ (seed >> 15);
+    return seed;
+}
+
+uint Rand(inout uint state)
+{
+    state ^= (state << 13);
+    state ^= (state >> 17);
+    state ^= (state << 5);
+    return state;
+}
+
+float RandFloat(inout uint state)
+{
+    return float(Rand(state)) / 4294967296.0;
+}
+
+float RandGauss(inout uint state)
+{
+    float u1 = max(RandFloat(state), 1e-6);
+    float u2 = RandFloat(state);
+    return sqrt(-2.0 * log(u1)) * cos(kTau * u2);
+}
+
+// Pierson-Moskowitz for a fully developed sea at the wind's speed (Crest's alpha-beta form).
+float Spectrum(float w)
+{
+    float g = pw.bounds.z;
+    float wm = 0.87 * g / max(pw.wind.z, 0.1);
+    return (8.1e-3 * g * g / pow(w, 5.0)) * exp(-1.291 * pow(wm / w, 4.0));
+}
+
+// How much of the sea runs at an angle to the wind (Crest's cos^2, widened by the spread).
+float Spreading(float cosTheta)
+{
+    return cosTheta > 0.0 ? mix(0.63661977 * cosTheta * cosTheta, 0.33661977, pw.wind.w) : 0.33661977 * pw.wind.w;
+}
+
+void main()
+{
+    ivec3 id = ivec3(gl_GlobalInvocationID);
+    int c = id.z;
+    float size = pw.sizes[c];
+    vec2 k = WaveVector(id.xy, size);
+    float kMag = length(k);
+    float lo = c == 0 ? 0.0 : pw.bounds[c - 1];
+    float hi = c == 2 ? 1e9 : pw.bounds[c];
+
+    if (kMag < 1e-6 || kMag < lo || kMag >= hi)
+    {
+        imageStore(waveH0, id, vec4(0.0));
+        return;
+    }
+
+    uint state = WangHash(uint(c * kWaveN * kWaveN + id.y * kWaveN + id.x) + 1u);
+    float w = Dispersion(kMag);
+    float dwdk = pw.bounds.z / (2.0 * w);
+    float dK = kTau / size;
+    float base = Spectrum(w) * (dK * dK) * dwdk / kMag;
+    float cosTheta = dot(k, pw.wind.xy) / kMag;
+    float ampPos = RandGauss(state) * sqrt(2.0 * base * Spreading(cosTheta));
+    float ampNeg = RandGauss(state) * sqrt(2.0 * base * Spreading(-cosTheta));
+    float phasePos = RandFloat(state) * kTau;
+    float phaseNeg = RandFloat(state) * kTau;
+    vec4 h0 = vec4(ampPos * vec2(cos(phasePos), -sin(phasePos)), ampNeg * vec2(cos(phaseNeg), -sin(phaseNeg)));
+    imageStore(waveH0, id, h0 * pw.misc.x);
+}
+
+#else
+
+void main()
+{
+    ivec3 id = ivec3(gl_GlobalInvocationID);
+    vec2 k = WaveVector(id.xy, pw.sizes[id.z]);
+    float kMag = length(k);
+    float wt = Dispersion(kMag) * pw.misc.z;
+    vec2 fwd = vec2(cos(wt), -sin(wt));
+    vec2 bkwd = vec2(cos(wt), sin(wt));
+    vec4 h0 = imageLoad(waveH0, id);
+    vec2 h = Cmul(h0.xy, fwd) + Cmul(h0.zw, bkwd);
+    // -i k / |k| h: the horizontal displacement that sharpens the crests (Tessendorf's choppy waves).
+    vec2 dx = pw.misc.y * vec2(-h.y * k.x, h.x * k.x) / (kMag + 1e-5);
+    vec2 dy = pw.misc.y * vec2(-h.y * k.y, h.x * k.y) / (kMag + 1e-5);
+    imageStore(waveSpecA, id, vec4(h, dx));
+    imageStore(waveSpecB, id, vec4(dy, 0.0, 0.0));
+}
+
+#endif

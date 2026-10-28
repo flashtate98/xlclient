@@ -11,9 +11,23 @@ namespace Liquid {
 }
 
 namespace SXC::Water {
-    // The device's copy of the scene behind the water, once per frame (later calls the same frame answer
-    // as the first); false: the stock water draws this frame.
-    using CaptureFn = bool (*)();
+    // The waves this frame (the device's FFT sea, step 3): the wind at the player and the look.
+    struct Waves {
+        bool on = false;
+        float time = 0.0f;       // seconds, wrapping every `period`
+        float period = 600.0f;
+        float windX = 1.0f;      // the wind's direction (unit)
+        float windY = 0.0f;
+        float speed = 6.0f;      // yd / s
+        float spread = 0.3f;     // 0 all with the wind .. 1 every way
+        float amplitude = 0.35f; // x the spectrum's heights
+        float chop = 1.2f;       // horizontal displacement (sharper crests)
+        float foam = 1.0f;       // the foam's strength where crests fold
+    };
+
+    // The device's copy of the scene behind the water and its waves, once per frame (later calls the same
+    // frame answer as the first); false: the stock water draws this frame.
+    using CaptureFn = bool (*)(const Waves& waves);
     using StatusFn = const char* (*)();
 
     // The Vulkan device: available once its water programs and the lights' set are up, false when it goes.

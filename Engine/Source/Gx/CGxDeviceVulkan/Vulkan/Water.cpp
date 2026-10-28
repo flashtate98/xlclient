@@ -10,6 +10,7 @@
 
 #include "Engine/Source/Gx/CGxDeviceVulkan/Shaders/WaterSpirv.inc"
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -30,11 +31,30 @@ namespace
     constexpr VkFormat kDepthFormat  = VK_FORMAT_R32_SFLOAT;
 
     /// Water.frag's WaterScene block (std140): the viewport on the target (x, y, width, height), the
-    /// target's size (width, height, 1 / width, 1 / height).
+    /// target's size (width, height, 1 / width, 1 / height), the wave cascades' sizes (yd; w 1 when the
+    /// waves are on), the waves' look (how far cascades 1 and 2 reach, the foam's strength, 0).
     struct Params
     {
         float viewport[4];
         float extent[4];
+        float waveSizes[4];
+        float waveLook[4];
+    };
+
+    // The waves (Shaders/WaterWaves.glsl): N x N per cascade, three cascades.
+    constexpr uint32_t kWaveN = 256;
+    constexpr uint32_t kCascades = 3;
+    constexpr uint32_t kWaveImages = 7;   // h0, spectrum A and B, rows A and B, displacement, slopes
+    constexpr float    kWaveBounds[2] = { 6.2831853f / 8.0f, 6.2831853f / 1.5f };  // cascades 0 / 1 at 8 yd, 1 / 2 at 1.5 yd
+    constexpr float    kGravity = 10.73f;  // yd / s^2
+
+    /// WaterWaves.glsl's WavePush.
+    struct WavePush
+    {
+        float sizes[4];
+        float bounds[4];
+        float wind[4];
+        float misc[4];
     };
 
     /// WaterCapture.comp's push constants.
@@ -88,6 +108,21 @@ namespace
         uint64_t lastCapture = 0;    ///< the serial of the last attempt
         bool     lastOk      = false;
 
+        // The waves: made at the first frame that wants them; `wavesTried` once.
+        bool                  wavesTried  = false;
+        bool                  wavesReady  = false;
+        VkShaderModule        waveModules[5] = {};      ///< spectrum init, spectrum, rows, columns, derive
+        VkPipeline            wavePipes[5]   = {};
+        VkDescriptorSetLayout waveLayout  = VK_NULL_HANDLE;
+        VkPipelineLayout      wavePipeLayout = VK_NULL_HANDLE;
+        VkDescriptorPool      wavePool    = VK_NULL_HANDLE;
+        VkDescriptorSet       waveSet     = VK_NULL_HANDLE;   ///< never rewritten: the images stay
+        VkSampler             linearRepeat = VK_NULL_HANDLE;
+        Image                 waveImages[kWaveImages];
+        bool                  wavesFresh  = true;             ///< the images still undefined
+        bool                  wavesRan    = false;            ///< the slopes hold waves
+        float                 spectrumKey[5] = { -1.0f, 0.0f, 0.0f, 0.0f, 0.0f };   ///< the wind the h0 was made for
+
         char status[160] = "not drawn yet";
     };
     State s;
@@ -128,7 +163,7 @@ namespace
         img = Image();
     }
 
-    bool CreateImage(VkFormat format, VkExtent2D extent, Image& out)
+    bool CreateImage(VkFormat format, VkExtent2D extent, Image& out, uint32_t layers = 1)
     {
         VkImageCreateInfo info = {};
         info.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -136,10 +171,10 @@ namespace
         info.format        = format;
         info.extent        = VkExtent3D{ extent.width, extent.height, 1 };
         info.mipLevels     = 1;
-        info.arrayLayers   = 1;
+        info.arrayLayers   = layers;
         info.samples       = VK_SAMPLE_COUNT_1_BIT;
         info.tiling        = VK_IMAGE_TILING_OPTIMAL;
-        info.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        info.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         info.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
         info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         if (!Check(s.dapi->CreateImage(s.device, &info, nullptr, &out.image), "vkCreateImage")) return false;
@@ -156,11 +191,11 @@ namespace
         VkImageViewCreateInfo view = {};
         view.sType                       = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         view.image                       = out.image;
-        view.viewType                    = VK_IMAGE_VIEW_TYPE_2D;
+        view.viewType                    = layers > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
         view.format                      = format;
         view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         view.subresourceRange.levelCount = 1;
-        view.subresourceRange.layerCount = 1;
+        view.subresourceRange.layerCount = layers;
         if (!Check(s.dapi->BindImageMemory(s.device, out.image, out.block.memory, out.block.offset), "vkBindImageMemory")
             || !Check(s.dapi->CreateImageView(s.device, &view, nullptr, &out.view), "vkCreateImageView"))
         {
@@ -184,8 +219,18 @@ namespace
         b.image                       = image;
         b.subresourceRange.aspectMask = aspects;
         b.subresourceRange.levelCount = 1;
-        b.subresourceRange.layerCount = 1;
+        b.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
         s.dapi->CmdPipelineBarrier(cmd, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &b);
+    }
+
+    /// Everything the compute stage wrote before, visible to what comes after (a whole-memory barrier).
+    void GlobalBarrier(VkCommandBuffer cmd, VkPipelineStageFlags srcStage, VkAccessFlags srcAccess, VkPipelineStageFlags dstStage, VkAccessFlags dstAccess)
+    {
+        VkMemoryBarrier b = {};
+        b.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        b.srcAccessMask = srcAccess;
+        b.dstAccessMask = dstAccess;
+        s.dapi->CmdPipelineBarrier(cmd, srcStage, dstStage, 0, 1, &b, 0, nullptr, 0, nullptr);
     }
 
     bool Init()
@@ -219,18 +264,19 @@ namespace
         captureInfo.pBindings    = capture;
         if (!Check(d.CreateDescriptorSetLayout(s.device, &captureInfo, nullptr, &s.captureLayout), "vkCreateDescriptorSetLayout (capture)")) return false;
 
-        // Set 2 of the draws: 0 the scene's colour, 1 its depth (w), 2 where the draws lie on it.
-        VkDescriptorSetLayoutBinding draw[3] = {};
-        for (uint32_t i = 0; i < 3; ++i)
+        // Set 2 of the draws: 0 the scene's colour, 1 its depth (w), 2 where the draws lie on it and the
+        // waves' parameters, 3 the waves' slopes (a layer per cascade).
+        VkDescriptorSetLayoutBinding draw[4] = {};
+        for (uint32_t i = 0; i < 4; ++i)
         {
             draw[i].binding         = i;
-            draw[i].descriptorType  = i < 2 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            draw[i].descriptorType  = i == 2 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             draw[i].descriptorCount = 1;
             draw[i].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
         }
         VkDescriptorSetLayoutCreateInfo drawInfo = {};
         drawInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        drawInfo.bindingCount = 3;
+        drawInfo.bindingCount = 4;
         drawInfo.pBindings    = draw;
         if (!Check(d.CreateDescriptorSetLayout(s.device, &drawInfo, nullptr, &s.drawLayout), "vkCreateDescriptorSetLayout (set 2)")) return false;
 
@@ -256,7 +302,7 @@ namespace
 
         VkDescriptorPoolSize sizes[3] = {};
         sizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[0].descriptorCount = 4 * kSlots;
+        sizes[0].descriptorCount = 5 * kSlots;
         sizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         sizes[1].descriptorCount = 2 * kSlots;
         sizes[2].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -288,6 +334,23 @@ namespace
 
         s.linearClamp  = MakeSampler(VK_FILTER_LINEAR);
         s.nearestClamp = MakeSampler(VK_FILTER_NEAREST);
+        VkSamplerCreateInfo repeat = {};
+        repeat.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        repeat.magFilter    = VK_FILTER_LINEAR;
+        repeat.minFilter    = VK_FILTER_LINEAR;
+        repeat.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        repeat.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        repeat.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        repeat.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        Check(d.CreateSampler(s.device, &repeat, nullptr, &s.linearRepeat), "vkCreateSampler (waves)");
+
+        // The waves' slopes are bound whether the waves run or not (zeroed then: a calm surface), so
+        // the images are made here; the compute side comes with the first frame that wants waves.
+        const VkExtent2D waveExtent = { kWaveN, kWaveN };
+        const VkFormat waveFormats[kWaveImages] = { VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_R32G32B32A32_SFLOAT,
+                                                    VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                    VK_FORMAT_R16G16B16A16_SFLOAT };
+        for (uint32_t i = 0; i < kWaveImages && !s.failed; ++i) CreateImage(waveFormats[i], waveExtent, s.waveImages[i], kCascades);
         if (s.failed) return false;
 
         s.ready = true;
@@ -312,24 +375,204 @@ namespace
 
     void WriteDrawSet(Slot& slot)
     {
-        VkDescriptorImageInfo images[2] = {
+        VkDescriptorImageInfo images[4] = {
             { s.linearClamp, s.colour.view, VK_IMAGE_LAYOUT_GENERAL },
             { s.nearestClamp, s.depth.view, VK_IMAGE_LAYOUT_GENERAL },
+            {},
+            { s.linearRepeat, s.waveImages[6].view, VK_IMAGE_LAYOUT_GENERAL },
         };
         VkDescriptorBufferInfo params = { slot.params.handle, 0, sizeof(Params) };
-        VkWriteDescriptorSet writes[3] = {};
-        for (uint32_t i = 0; i < 3; ++i)
+        VkWriteDescriptorSet writes[4] = {};
+        for (uint32_t i = 0; i < 4; ++i)
         {
             writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[i].dstSet          = slot.drawSet;
             writes[i].dstBinding      = i;
             writes[i].descriptorCount = 1;
-            writes[i].descriptorType  = i < 2 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            if (i < 2) writes[i].pImageInfo = &images[i];
-            else writes[i].pBufferInfo = &params;
+            writes[i].descriptorType  = i == 2 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            if (i == 2) writes[i].pBufferInfo = &params;
+            else writes[i].pImageInfo = &images[i];
         }
-        s.dapi->UpdateDescriptorSets(s.device, 3, writes, 0, nullptr);
+        s.dapi->UpdateDescriptorSets(s.device, 4, writes, 0, nullptr);
         slot.written = true;
+    }
+
+    /// The waves' compute side, once: the device must run 256 threads a group with the FFT's shared memory.
+    bool InitWaves()
+    {
+        if (s.wavesReady) return true;
+        if (s.wavesTried) return false;
+        s.wavesTried = true;
+
+        const context::Handles* h = context::Get();
+        VkPhysicalDeviceProperties props = {};
+        h->iapi->GetPhysicalDeviceProperties(h->physical, &props);
+        const VkPhysicalDeviceLimits& lim = props.limits;
+        if (lim.maxComputeWorkGroupInvocations < kWaveN || lim.maxComputeWorkGroupSize[0] < kWaveN || lim.maxComputeSharedMemorySize < 3 * 2 * kWaveN * 8)
+        {
+            Write(gxvk::log::Warn, "vulkan: water: the device can't run the FFT's %u-thread groups; the water keeps its ripples", kWaveN);
+            return false;
+        }
+
+        const loader::Device& d = *s.dapi;
+        const struct { const uint32_t* words; size_t bytes; const char* what; } modules[5] = {
+            { kWaterSpectrumInitComp, sizeof kWaterSpectrumInitComp, "WaterSpectrum.comp (init)" },
+            { kWaterSpectrumComp, sizeof kWaterSpectrumComp, "WaterSpectrum.comp" },
+            { kWaterFftRowsComp, sizeof kWaterFftRowsComp, "WaterFft.comp (rows)" },
+            { kWaterFftColumnsComp, sizeof kWaterFftColumnsComp, "WaterFft.comp (columns)" },
+            { kWaterDeriveComp, sizeof kWaterDeriveComp, "WaterDerive.comp" },
+        };
+        for (uint32_t i = 0; i < 5; ++i)
+        {
+            VkShaderModuleCreateInfo module = {};
+            module.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            module.codeSize = modules[i].bytes;
+            module.pCode    = modules[i].words;
+            if (!Check(d.CreateShaderModule(s.device, &module, nullptr, &s.waveModules[i]), modules[i].what)) return false;
+        }
+
+        VkDescriptorSetLayoutBinding bindings[kWaveImages] = {};
+        for (uint32_t i = 0; i < kWaveImages; ++i)
+        {
+            bindings[i].binding         = i;
+            bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            bindings[i].descriptorCount = 1;
+            bindings[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+        }
+        VkDescriptorSetLayoutCreateInfo setInfo = {};
+        setInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        setInfo.bindingCount = kWaveImages;
+        setInfo.pBindings    = bindings;
+        if (!Check(d.CreateDescriptorSetLayout(s.device, &setInfo, nullptr, &s.waveLayout), "vkCreateDescriptorSetLayout (waves)")) return false;
+
+        VkPushConstantRange push = {};
+        push.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        push.size       = sizeof(WavePush);
+        VkPipelineLayoutCreateInfo layout = {};
+        layout.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        layout.setLayoutCount         = 1;
+        layout.pSetLayouts            = &s.waveLayout;
+        layout.pushConstantRangeCount = 1;
+        layout.pPushConstantRanges    = &push;
+        if (!Check(d.CreatePipelineLayout(s.device, &layout, nullptr, &s.wavePipeLayout), "vkCreatePipelineLayout (waves)")) return false;
+
+        for (uint32_t i = 0; i < 5; ++i)
+        {
+            VkComputePipelineCreateInfo compute = {};
+            compute.sType        = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+            compute.stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            compute.stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+            compute.stage.module = s.waveModules[i];
+            compute.stage.pName  = "main";
+            compute.layout       = s.wavePipeLayout;
+            if (!Check(d.CreateComputePipelines(s.device, VK_NULL_HANDLE, 1, &compute, nullptr, &s.wavePipes[i]), modules[i].what)) return false;
+        }
+
+        VkDescriptorPoolSize size = { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kWaveImages };
+        VkDescriptorPoolCreateInfo pool = {};
+        pool.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        pool.maxSets       = 1;
+        pool.poolSizeCount = 1;
+        pool.pPoolSizes    = &size;
+        if (!Check(d.CreateDescriptorPool(s.device, &pool, nullptr, &s.wavePool), "vkCreateDescriptorPool (waves)")) return false;
+        VkDescriptorSetAllocateInfo alloc = {};
+        alloc.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        alloc.descriptorPool     = s.wavePool;
+        alloc.descriptorSetCount = 1;
+        alloc.pSetLayouts        = &s.waveLayout;
+        if (!Check(d.AllocateDescriptorSets(s.device, &alloc, &s.waveSet), "vkAllocateDescriptorSets (waves)")) return false;
+
+        VkDescriptorImageInfo infos[kWaveImages] = {};
+        VkWriteDescriptorSet writes[kWaveImages] = {};
+        for (uint32_t i = 0; i < kWaveImages; ++i)
+        {
+            infos[i] = { VK_NULL_HANDLE, s.waveImages[i].view, VK_IMAGE_LAYOUT_GENERAL };
+            writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet          = s.waveSet;
+            writes[i].dstBinding      = i;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            writes[i].pImageInfo      = &infos[i];
+        }
+        d.UpdateDescriptorSets(s.device, kWaveImages, writes, 0, nullptr);
+
+        s.wavesReady = true;
+        Write(Debug, "vulkan: water: waves ready (%u cascades of %ux%u)", kCascades, kWaveN, kWaveN);
+        return true;
+    }
+
+    /// The images out of UNDEFINED into GENERAL, zeroed (a calm surface until waves run), once.
+    void ReadyWaveImages(VkCommandBuffer cmd)
+    {
+        if (!s.wavesFresh) return;
+        const loader::Device& d = *s.dapi;
+        VkClearColorValue zero = {};
+        VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, kCascades };
+        for (Image& img : s.waveImages)
+        {
+            ImageBarrier(cmd, img.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+            d.CmdClearColorImage(cmd, img.image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
+            img.layout = VK_IMAGE_LAYOUT_GENERAL;
+        }
+        GlobalBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+        s.wavesFresh = false;
+    }
+
+    /// This frame's waves into the pre-pass (ahead of every draw of the frame): the spectrum again if the
+    /// wind changed, then the spectrum at the time, the FFT's two passes, the slopes.
+    void RecordWaves(const gxvk::vk::water::WaveInput& w)
+    {
+        VkCommandBuffer cmd = frame::PrePass();
+        if (!cmd) return;
+        ReadyWaveImages(cmd);
+        if (!w.on || !InitWaves()) return;
+
+        const loader::Device& d = *s.dapi;
+        WavePush p = {};
+        for (uint32_t c = 0; c < kCascades; ++c) p.sizes[c] = gxvk::vk::water::kWaveSizes[c];
+        p.sizes[3]  = static_cast<float>(kWaveN);
+        p.bounds[0] = kWaveBounds[0];
+        p.bounds[1] = kWaveBounds[1];
+        p.bounds[2] = kGravity;
+        p.bounds[3] = w.period;
+        p.wind[0]   = w.windX;
+        p.wind[1]   = w.windY;
+        p.wind[2]   = w.speed;
+        p.wind[3]   = w.spread;
+        p.misc[0]   = w.amplitude;
+        p.misc[1]   = w.chop;
+        p.misc[2]   = w.time;
+
+        // The last frame's water has read the slopes before this frame writes anything.
+        GlobalBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+        d.CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s.wavePipeLayout, 0, 1, &s.waveSet, 0, nullptr);
+        d.CmdPushConstants(cmd, s.wavePipeLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof p, &p);
+        const auto step = [&](uint32_t pipe, uint32_t x, uint32_t y) {
+            d.CmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s.wavePipes[pipe]);
+            d.CmdDispatch(cmd, x, y, kCascades);
+            GlobalBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                          VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+        };
+
+        // The spectrum again when the wind (or the look) moved enough to see.
+        const float key[5] = { w.speed, w.windX, w.windY, w.spread, w.amplitude };
+        bool changed = false;
+        for (uint32_t i = 0; i < 5; ++i) changed |= std::fabs(key[i] - s.spectrumKey[i]) > (i == 0 ? 0.2f : 0.02f);
+        if (changed)
+        {
+            step(0, kWaveN / 8, kWaveN / 8);
+            std::memcpy(s.spectrumKey, key, sizeof key);
+        }
+
+        step(1, kWaveN / 8, kWaveN / 8);
+        step(2, 1, kWaveN);
+        step(3, 1, kWaveN);
+        step(4, kWaveN / 8, kWaveN / 8);
+        GlobalBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+        s.wavesRan = true;
     }
 }
 
@@ -348,6 +591,9 @@ namespace gxvk::vk::water
             SetStatus("off: the copy could not be made");
             return false;
         }
+
+        // The waves first, into the pre-pass (they don't need the pass ended).
+        RecordWaves(in.waves);
 
         frame::EffectTarget t;
         if (!frame::BeginEffect(t))
@@ -397,6 +643,11 @@ namespace gxvk::vk::water
         p.extent[1]   = static_cast<float>(t.extent.height);
         p.extent[2]   = 1.0f / static_cast<float>(t.extent.width);
         p.extent[3]   = 1.0f / static_cast<float>(t.extent.height);
+        for (uint32_t c = 0; c < kCascades; ++c) p.waveSizes[c] = gxvk::vk::water::kWaveSizes[c];
+        p.waveSizes[3] = in.waves.on && s.wavesRan ? 1.0f : 0.0f;
+        p.waveLook[0]  = 220.0f;   // cascade 1 fades out by this distance (yd), cascade 2 by the next
+        p.waveLook[1]  = 45.0f;
+        p.waveLook[2]  = in.waves.foam;
         std::memcpy(slot.params.block.mapped, &p, sizeof p);
         memory::FlushHost(slot.params.block);
 
@@ -473,6 +724,15 @@ namespace gxvk::vk::water
         const loader::Device& d = *s.dapi;
         DestroyImage(s.colour);
         DestroyImage(s.depth);
+        for (Image& img : s.waveImages) DestroyImage(img);
+        for (VkPipeline& p : s.wavePipes)
+            if (p != VK_NULL_HANDLE) d.DestroyPipeline(s.device, p, nullptr);
+        for (VkShaderModule& m : s.waveModules)
+            if (m != VK_NULL_HANDLE) d.DestroyShaderModule(s.device, m, nullptr);
+        if (s.wavePipeLayout != VK_NULL_HANDLE) d.DestroyPipelineLayout(s.device, s.wavePipeLayout, nullptr);
+        if (s.wavePool != VK_NULL_HANDLE) d.DestroyDescriptorPool(s.device, s.wavePool, nullptr);
+        if (s.waveLayout != VK_NULL_HANDLE) d.DestroyDescriptorSetLayout(s.device, s.waveLayout, nullptr);
+        if (s.linearRepeat != VK_NULL_HANDLE) d.DestroySampler(s.device, s.linearRepeat, nullptr);
         for (Slot& slot : s.slots) memory::DestroyBuffer(slot.params);
         if (s.pipeline != VK_NULL_HANDLE) d.DestroyPipeline(s.device, s.pipeline, nullptr);
         if (s.pipeLayout != VK_NULL_HANDLE) d.DestroyPipelineLayout(s.device, s.pipeLayout, nullptr);

@@ -11,15 +11,35 @@
 
 namespace gxvk::vk::water
 {
+    /// The waves (step 3: Shaders/WaterWaves.glsl): an FFT sea in three cascades, recorded into the
+    /// frame's pre-pass with the copy. The spectrum is made again when the wind changes.
+    struct WaveInput
+    {
+        bool  on        = false;
+        float time      = 0.0f;   ///< seconds, wrapping every `period`
+        float period    = 600.0f;
+        float windX     = 1.0f;   ///< the wind's direction (unit)
+        float windY     = 0.0f;
+        float speed     = 6.0f;   ///< yd / s
+        float spread    = 0.3f;   ///< 0 all with the wind .. 1 every way
+        float amplitude = 0.35f;  ///< x the spectrum's heights
+        float chop      = 1.2f;   ///< horizontal displacement (sharper crests)
+        float foam      = 1.0f;   ///< the foam's strength where crests fold
+    };
+
     struct CaptureInput
     {
         VkViewport viewport = {};      ///< the draws' viewport on the target (pixels, depth range)
         float      proj[16] = {};      ///< the native projection, row-major (row vectors)
+        WaveInput  waves;
     };
 
     /// The copy, once per frame (later calls the same frame answer as the first). False: nothing to copy
     /// over yet, or the device can't; the water draws the stock way this frame.
     bool Capture(const CaptureInput& in);
+
+    /// The cascades' world sizes (yd), for the draws.
+    constexpr float kWaveSizes[3] = { 256.0f, 48.0f, 9.0f };
 
     /// Set 2 of the water pipelines (made on first need; null when it can't be).
     VkDescriptorSetLayout SetLayout();

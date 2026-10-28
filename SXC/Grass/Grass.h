@@ -63,6 +63,11 @@ namespace SXC::Grass {
     // One line for the panels.
     const char* Status();
 
+    // The wind the mod handed over this frame (sxc.grass set_motion) at the middle of its grid, around the
+    // player: x and y (their length the strength, 0..1 and above in storms), gusts 0..1. False when the
+    // mod sends none (our water's waves take a breeze then).
+    bool WindAtPlayer(float& x, float& y, float& gust);
+
     // [Grass] Instanced (the client's Info panel switches it).
     bool Enabled();
     void SetEnabled(bool on);

@@ -610,7 +610,7 @@ bool CGxDeviceVulkan::SxcFogRender(const SXC::Fog::Input& in) {
 // SXC: our water (SXC/Water): the scene behind it, copied at the frame's first water draw (Vulkan/Water),
 // with the draws' viewport (where they lie on the target, its depth range) and the native projection (the
 // depth back to the view's w).
-bool CGxDeviceVulkan::SxcWaterCapture() {
+bool CGxDeviceVulkan::SxcWaterCapture(const SXC::Water::Waves& waves) {
     CGxDeviceVulkan* device = static_cast<CGxDeviceVulkan*>(g_theGxDevicePtr);
 
     if (!device || !device->m_context || !device->m_drawPath) {
@@ -625,6 +625,16 @@ bool CGxDeviceVulkan::SxcWaterCapture() {
     }
 
     std::memcpy(in.proj, &device->m_projNative, sizeof in.proj);
+    in.waves.on = waves.on;
+    in.waves.time = waves.time;
+    in.waves.period = waves.period;
+    in.waves.windX = waves.windX;
+    in.waves.windY = waves.windY;
+    in.waves.speed = waves.speed;
+    in.waves.spread = waves.spread;
+    in.waves.amplitude = waves.amplitude;
+    in.waves.chop = waves.chop;
+    in.waves.foam = waves.foam;
     return gxvk::vk::water::Capture(in);
 }
 

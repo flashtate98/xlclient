@@ -74,6 +74,12 @@ OUTPUTS = [
         ("Water.vert", "kWaterVert"),
         ("Water.frag", "kWaterFrag"),
         ("WaterCapture.comp", "kWaterCaptureComp"),  # the scene behind the water (Vulkan/Water.cpp)
+        # The waves (step 3): the spectrum's start and state, the FFT's rows and columns, the slopes.
+        ("WaterSpectrum.comp", "kWaterSpectrumInitComp", ["INIT=1"]),
+        ("WaterSpectrum.comp", "kWaterSpectrumComp", ["INIT=0"]),
+        ("WaterFft.comp", "kWaterFftRowsComp", ["COLUMNS=0"]),
+        ("WaterFft.comp", "kWaterFftColumnsComp", ["COLUMNS=1"]),
+        ("WaterDerive.comp", "kWaterDeriveComp"),
     ]),
 ]
 

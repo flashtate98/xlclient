@@ -39,7 +39,37 @@ layout(set = 2, binding = 1) uniform sampler2D sceneW;
 layout(std140, set = 2, binding = 2) uniform WaterScene {
     vec4 viewport;
     vec4 extent;
+    vec4 waveSizes;   // the cascades' world sizes (yd); w 1 when the waves run
+    vec4 waveLook;    // how far cascades 1 and 2 reach (yd), the foam's strength, 0
 } scene;
+// The waves (step 3, WaterWaves.glsl): per cascade the height's slopes, the Jacobian (below 1 the crest
+// folds), the height.
+layout(set = 2, binding = 3) uniform sampler2DArray waveSlopes;
+
+// The waves at a world point: the slopes summed over the cascades (the finer ones fading with distance),
+// and how much the crests fold there (0 none .. 1 breaking).
+vec2 WaveSlope(vec2 xy, float distance, out float folding)
+{
+    vec2 slope = vec2(0.0);
+    float jacobian = 1.0;
+
+    for (int c = 0; c < 3; c++)
+    {
+        float fade = c == 0 ? 1.0 : clamp(1.0 - distance / scene.waveLook[c - 1], 0.0, 1.0);
+
+        if (fade <= 0.0)
+        {
+            continue;
+        }
+
+        vec4 w = texture(waveSlopes, vec3(xy / scene.waveSizes[c], float(c)));
+        slope += w.xy * fade;
+        jacobian += (w.z - 1.0) * fade;
+    }
+
+    folding = clamp((0.95 - jacobian) * 2.5, 0.0, 1.0);
+    return slope;
+}
 
 const float kTau = 6.2831853;
 
@@ -221,7 +251,9 @@ void main()
     vec3 V = toEye / max(distance, 1e-4);
     bool below = V.z < 0.0;
 
-    vec2 slope = RippleSlope(world.xy, regs.p[6].x, distance) * regs.p[6].z;
+    // The FFT waves when the device runs them, else the small ripples.
+    float folding = 0.0;
+    vec2 slope = scene.waveSizes.w > 0.5 ? WaveSlope(world.xy, distance, folding) : RippleSlope(world.xy, regs.p[6].x, distance) * regs.p[6].z;
     vec3 N = normalize(vec3(-slope, 1.0));
 
     if (below)
@@ -289,10 +321,16 @@ void main()
     float sun = below ? 0.0 : pow(max(dot(R, toSun), 0.0), 600.0) * smoothstep(-0.05, 0.1, toSun.z);
     vec3 highlight = regs.v[36].rgb * sun * 1.5 + (below ? vec3(0.0) : LampsReflected(world, N, V));
 
+    // Foam where the crests fold: white, lit by the sun and the ambient, over the rest.
+    float foam = below ? 0.0 : folding * scene.waveLook.z;
+    vec3 foamColour = clamp(regs.v[34].rgb + regs.v[35].rgb * max(toSun.z, 0.0), 0.0, 1.0) * 0.9 + lamps * 0.3;
+    vec3 surface = mix(mix(seen, reflected, fresnel) + highlight, foamColour, foam);
+
     // The fog on the water's own light; the scene seen through it carries its own fog already.
-    vec3 clear = behind * through * window * (1.0 - fresnel);
-    vec3 own = mix(seen, reflected, fresnel) + highlight - clear;
-    float coverage = 1.0 - max(through.r, max(through.g, through.b)) * window * (1.0 - fresnel);
+    float open = window * (1.0 - fresnel) * (1.0 - foam);
+    vec3 clear = behind * through * open;
+    vec3 own = surface - clear;
+    float coverage = 1.0 - max(through.r, max(through.g, through.b)) * open;
     float fog = FogFactor(vView.w);
     vec3 fogged = clear + own * fog + ApplyFog(vec3(0.0), 0.0) * (1.0 - fog) * coverage;
 
