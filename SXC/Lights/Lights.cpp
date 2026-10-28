@@ -326,6 +326,12 @@ namespace {
             return;
         }
 
+        // A model faded out to nothing: a despawned object the client keeps disabled for two minutes
+        // (CGObject_C::Disable, ClntObjMgr's ExpireOldObjects); its lights and emitters went with it.
+        if (model->m_alpha <= 0.001f) {
+            return;
+        }
+
         s_stats.models++;
         // Only a loaded model: one still loading can have its data's header but not its arrays (a crash
         // reading an emitter's position, 2026-10-24).
