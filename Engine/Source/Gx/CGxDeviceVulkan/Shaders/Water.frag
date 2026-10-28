@@ -193,7 +193,7 @@ int ssrOutcome = 0;
 bool ssrThick = false;
 int ssrSteps = 0;
 
-vec4 ScreenReflection(vec3 origin, vec3 dir)
+vec4 ScreenReflection(vec3 origin, vec3 dir, float upward)
 {
     // A ray towards the camera finds nothing the copy holds.
     float facing = smoothstep(-0.05, 0.15, dir.z);
@@ -257,6 +257,22 @@ vec4 ScreenReflection(vec3 origin, vec3 dir)
 
         prev = p;
         stride *= 1.15;
+    }
+
+    // Nothing in the way: the ray goes to the sky. Where its direction is on screen and the copy shows
+    // sky there (nothing drawn: the far plane), that is the sky it sees, clouds, moons and the sun included
+    // (the sun's glitter path at sundown). Elsewhere the sky's colours stand in (the caller).
+    // Only rays that really rise: the water isn't in the copy, so below the horizon it shows the sky dome
+    // (the set sun with it), which rays the waves tip downwards found ("the sun through the ocean", Seyri
+    // 2026-10-28).
+    vec3 far = ToScene(origin + dir * 4000.0);
+
+    if (upward > 0.02 && far.z > 0.0 && all(greaterThanEqual(far.xy, vec2(0.0))) && all(lessThanEqual(far.xy, vec2(1.0)))
+        && textureLod(sceneW, far.xy, 0.0).r > 5e5)
+    {
+        vec2 edge = min(far.xy, 1.0 - far.xy);
+        ssrOutcome = 4;
+        return vec4(textureLod(sceneColour, far.xy, 0.0).rgb, facing * smoothstep(0.0, 0.06, min(edge.x, edge.y)));
     }
 
     return vec4(0.0);
@@ -336,12 +352,16 @@ void main()
 
     if (!below && regs.p[10].w > 0.5)
     {
-        ssr = ScreenReflection(vView.xyz, normalize(WorldDirToView(R)));
+        ssr = ScreenReflection(vView.xyz, normalize(WorldDirToView(R)), R.z);
         reflected = mix(sky, ssr.rgb, ssr.a);
     }
 
     vec3 toSun = normalize(LightsViewDirToWorld(-regs.v[33].xyz));
-    float sun = below ? 0.0 : pow(max(dot(R, toSun), 0.0), regs.p[11].y) * smoothstep(-0.05, 0.1, toSun.z);
+    // The sun's own glint only while it stands clearly above the horizon: the light's direction doesn't set
+    // with the visible sun (it went on glinting "through the bottom of the ocean" at sundown, Seyri
+    // 2026-10-28); low suns, the moons and the clouds come from the sky on screen (ScreenReflection), which
+    // the glint gives way to.
+    float sun = below ? 0.0 : pow(max(dot(R, toSun), 0.0), regs.p[11].y) * smoothstep(0.1, 0.3, toSun.z) * (1.0 - ssr.a);
     vec3 highlight = regs.v[36].rgb * sun * regs.p[11].x + (below ? vec3(0.0) : LampsReflected(world, N, V));
 
     // Foam where the crests fold: white, lit by the sun and the ambient, over the rest.
@@ -395,7 +415,8 @@ void main()
     {
         // Green a hit (darker the more steps), red left the screen, magenta towards the camera, yellow out
         // of steps; cyan mixed in where it passed behind something too deep to count.
-        vec3 c = ssrOutcome == 3 ? vec3(0.0, 1.0 - float(ssrSteps) / 50.0, 0.0)
+        vec3 c = ssrOutcome == 4 ? vec3(0.2, 0.4, 1.0)   // blue: the sky on screen
+               : ssrOutcome == 3 ? vec3(0.0, 1.0 - float(ssrSteps) / 50.0, 0.0)
                : ssrOutcome == 1 ? vec3(1.0, 0.0, 0.0)
                : ssrOutcome == 0 ? vec3(1.0, 0.0, 1.0)
                                  : vec3(1.0, 1.0, 0.0);

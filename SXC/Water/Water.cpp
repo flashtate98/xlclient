@@ -412,7 +412,7 @@ namespace SXC::Water {
 
         static const char* const kViews[] = { "Off", "Reflection hits (red: sky)", "Water crossed (white 20 yd)", "Normal",
                                               "Folding / foam", "Reflection alone", "Scene behind", "Screen mapping check (black: right)",
-                                              "Reflection search outcome", "Depth conversion self-test (black: right)" };
+                                              "Reflection search outcome (blue: sky on screen)", "Depth conversion self-test (black: right)" };
         ImGui::Combo("Debug view", &s_look.debugView, kViews, IM_ARRAYSIZE(kViews));
 
         if (ImGui::CollapsingHeader("Water", ImGuiTreeNodeFlags_DefaultOpen)) {
