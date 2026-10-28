@@ -5,12 +5,12 @@
 // constants, then ours.
 #include "SXC/Water/Water.h"
 
+#include <chrono>
 #include <cstdint>
 #include "Engine/Source/Gx/CGxDevice/CGxDevice.h"
 #include "Engine/Source/Gx/CGxDevice/CGxShader.h"
 #include "Engine/Source/Gx/Gx.h"
 #include "Engine/Source/Model2/M2Light.h"
-#include "Engine/Source/Os/TimeManager.h"
 #include "Engine/Source/Storm/H/storm.h"
 #include "SXC/Fog/Fog.h"
 #include "SXC/Log.h"
@@ -88,6 +88,16 @@ namespace {
         }
 
         return true;
+    }
+
+    // The ripples' clock in seconds, wrapping every 600 s (Water.frag's frequencies are whole turns per
+    // 600 s). A high-resolution clock: the client's millisecond snapshot can step by the system tick
+    // (~16 ms), which the ripples showed as ticking (Seyri, 2026-10-28).
+    float RippleTime() {
+        using Clock = std::chrono::steady_clock;
+        static const Clock::time_point s_start = Clock::now();
+        const double seconds = std::chrono::duration<double>(Clock::now() - s_start).count();
+        return static_cast<float>(seconds - 600.0 * static_cast<double>(static_cast<uint64_t>(seconds / 600.0)));
     }
 
     void SkyRow(float* row, const CImVector& c) {
@@ -176,7 +186,7 @@ namespace SXC::Water {
         Liquid::SetShaderConstants();
 
         float rows[kPixelRows * 4] = {};
-        rows[0] = static_cast<float>(OsGetAsyncTimeMs() % 600000u) / 1000.0f;
+        rows[0] = RippleTime();
         rows[2] = kRippleStrength;
         const DayNight::DNInfo* info = DayNight::GetInfo();
 
