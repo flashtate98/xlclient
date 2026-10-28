@@ -189,7 +189,7 @@ namespace gxvk::vk::pipelines::detail
     struct LayoutEntry
     {
         uint32_t              mask   = 0;
-        uint32_t              extra  = 0;       ///< SXC: kExtraCover (set 2 Vulkan/Cover's, set 3 Vulkan/Lights'), kExtraLights (set 2 empty, set 3 the lights')
+        uint32_t              extra  = 0;       ///< SXC: kExtraCover (set 2 Vulkan/Cover's, set 3 Vulkan/Lights'), kExtraLights (set 2 empty, set 3 the lights'), kExtraWater (set 2 Vulkan/Water's, set 3 the lights')
 
         VkDescriptorSetLayout set0   = VK_NULL_HANDLE;
         VkPipelineLayout      layout = VK_NULL_HANDLE;
@@ -299,7 +299,7 @@ namespace gxvk::vk::pipelines::detail
 
     // Layouts.cpp
     bool CreateRegsLayout();
-    constexpr uint32_t kExtraNone = 0, kExtraCover = 1, kExtraLights = 2;  // SXC: LayoutEntry::extra
+    constexpr uint32_t kExtraNone = 0, kExtraCover = 1, kExtraLights = 2, kExtraWater = 3;  // SXC: LayoutEntry::extra
     bool LayoutFor(uint32_t samplerMask, uint32_t extra, uint32_t& index);
     void DestroyLayouts();
 

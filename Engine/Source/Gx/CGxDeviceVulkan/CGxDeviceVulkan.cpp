@@ -22,6 +22,7 @@
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Shaders.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Texture.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Timings.hpp"  // SXC: the frame profiler's GPU times
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Water.hpp"  // SXC: our water
 #include "Engine/Source/Gx/CGxPool.h"
 #include "Engine/Source/Gx/Gx.h"
 #include "Engine/Source/Os/Error.h"
@@ -264,7 +265,8 @@ void CGxDeviceVulkan::ICreateDrawPath() {
         gxvk::vk::lights::SetShadowReport(&SXC::Lights::ShadowsDrawn);
         SXC::Lights::SetDevice(gxvk::vk::cover::Ready() && gxvk::vk::lights::Ready(), &gxvk::vk::lights::Status);
         SXC::Lights::SetShadowDevice(gxvk::vk::shadows::Ready() ? gxvk::vk::shadows::Slots() : 0, gxvk::vk::shadows::kMaxVertices);
-        SXC::Water::SetDevice(gxvk::vk::lights::Ready());                              // SXC: our water reads the lights' set
+        SXC::Water::SetDevice(gxvk::vk::lights::Ready(), &CGxDeviceVulkan::SxcWaterCapture,  // SXC: our water reads the lights' set
+                              &gxvk::vk::water::Status);
         // SXC: the instanced grass.
         static const SXC::Grass::Device s_grass = { gxvk::vk::grass::Mesh, gxvk::vk::grass::Allocate, gxvk::vk::grass::Write, gxvk::vk::grass::Release,
                                                     &CGxDeviceVulkan::SxcGrassDraw, gxvk::vk::grass::PlantsInUse };
@@ -605,6 +607,27 @@ bool CGxDeviceVulkan::SxcFogRender(const SXC::Fog::Input& in) {
     return gxvk::vk::fog::Record(f);
 }
 
+// SXC: our water (SXC/Water): the scene behind it, copied at the frame's first water draw (Vulkan/Water),
+// with the draws' viewport (where they lie on the target, its depth range) and the native projection (the
+// depth back to the view's w).
+bool CGxDeviceVulkan::SxcWaterCapture() {
+    CGxDeviceVulkan* device = static_cast<CGxDeviceVulkan*>(g_theGxDevicePtr);
+
+    if (!device || !device->m_context || !device->m_drawPath) {
+        return false;
+    }
+
+    gxvk::vk::water::CaptureInput in;
+    VkRect2D scissor = {};
+
+    if (!device->IPlaceD3d(in.viewport, scissor)) {
+        return false;
+    }
+
+    std::memcpy(in.proj, &device->m_projNative, sizeof in.proj);
+    return gxvk::vk::water::Capture(in);
+}
+
 // A bring-up that answered Retry at DeviceSetFormat: tried again from ScenePresent while the window
 // is visible, and the caps refined from the device once it exists.
 void CGxDeviceVulkan::IBringUpIfPending() {
@@ -648,13 +671,14 @@ void CGxDeviceVulkan::IDestroyVulkan() {
     SXC::Fog::SetRenderer(nullptr, nullptr);  // SXC: volumetric fog
     SXC::Cover::SetDevice(false, 0, nullptr); // SXC: surface covers
     SXC::Grass::SetDevice(nullptr);           // SXC: the instanced grass (its buffers go below)
-    SXC::Water::SetDevice(false);             // SXC: our water (the stock materials draw until the path is back)
+    SXC::Water::SetDevice(false, nullptr, nullptr); // SXC: our water (the stock materials draw until the path is back)
     SXC::Profiler::SetGpu(nullptr);           // SXC: the frame profiler's GPU times (the pools go below)
     frame::ReleaseSwapchain();
     this->IReleasePools();
     this->IReleaseTextures();
     gxvk::vk::fog::Shutdown();  // SXC: the device is idle (ReleaseSwapchain waited)
     gxvk::vk::grass::Shutdown();
+    gxvk::vk::water::Shutdown();  // SXC:
     frame::Destroy();
     pipelines::Shutdown();
     present::Shutdown();

@@ -5,6 +5,7 @@
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Pipelines/Internal.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"  // SXC:
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Lights.hpp" // SXC:
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Water.hpp"  // SXC:
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/DeviceCaps.hpp"
 
 namespace gxvk::vk::pipelines::detail
@@ -58,7 +59,10 @@ namespace gxvk::vk::pipelines::detail
             empty.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
             if (s.dapi->CreateDescriptorSetLayout(s.device, &empty, nullptr, &s.emptyLayout) != VK_SUCCESS) s.emptyLayout = VK_NULL_HANDLE;
         }
-        const VkDescriptorSetLayout set2 = cover ? gxvk::vk::cover::SetLayout() : (extra == kExtraLights ? s.emptyLayout : VK_NULL_HANDLE);
+        const VkDescriptorSetLayout set2 = cover ? gxvk::vk::cover::SetLayout()
+                                         : extra == kExtraLights ? s.emptyLayout
+                                         : extra == kExtraWater  ? gxvk::vk::water::SetLayout()  // our water: the scene behind it
+                                                                 : VK_NULL_HANDLE;
         const VkDescriptorSetLayout lightsLayout = extra != kExtraNone ? gxvk::vk::lights::SetLayout() : VK_NULL_HANDLE;
         if (extra != kExtraNone && (set2 == VK_NULL_HANDLE || lightsLayout == VK_NULL_HANDLE)) return false;
         for (uint32_t i = 0; i < s.layoutCount; ++i)
@@ -132,7 +136,7 @@ namespace gxvk::vk::pipelines::detail
         s.layouts[s.layoutCount++] = e;
         s.stats.layouts = s.layoutCount;
         Write(Debug, "vulkan: pipelines: layout #%u for sampler slots 0x%04X (%u binding%s)%s", s.layoutCount, samplerMask, count, count == 1 ? "" : "s",
-              cover ? " with the covers' and the lights' sets" : (extra == kExtraLights ? " with the lights' set" : ""));
+              cover ? " with the covers' and the lights' sets" : (extra == kExtraLights ? " with the lights' set" : (extra == kExtraWater ? " with the water's and the lights' sets" : "")));
         return true;
     }
 

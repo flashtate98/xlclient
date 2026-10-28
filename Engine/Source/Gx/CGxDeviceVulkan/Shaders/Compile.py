@@ -73,6 +73,7 @@ OUTPUTS = [
     ("WaterSpirv.inc", [
         ("Water.vert", "kWaterVert"),
         ("Water.frag", "kWaterFrag"),
+        ("WaterCapture.comp", "kWaterCaptureComp"),  # the scene behind the water (Vulkan/Water.cpp)
     ]),
 ]
 

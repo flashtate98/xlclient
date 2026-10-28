@@ -2,6 +2,7 @@
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Pipelines/Internal.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"  // SXC:
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Lights.hpp" // SXC:
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Water.hpp"  // SXC:
 
 #include <cstring>
 #include <new>
@@ -198,9 +199,10 @@ namespace gxvk::vk::pipelines
         // The instanced grass reads the ground marks there (its vertex stage).
         const bool cover = draw.fragment == FragmentProgram::Terrain || draw.fragment == FragmentProgram::Decal
                            || (draw.vertex == VertexProgram::Translated && draw.vertexRecord && draw.vertexRecord->grass);
-        const bool lit = (draw.fragment == FragmentProgram::Translated && draw.fragmentRecord && draw.fragmentRecord->lights)
-                         || draw.fragment == FragmentProgram::Water;  // SXC: our water (SXC/Water)
-        if (!LayoutFor(samplerMask, cover ? kExtraCover : (lit ? kExtraLights : kExtraNone), layoutIndex))
+        const bool lit = draw.fragment == FragmentProgram::Translated && draw.fragmentRecord && draw.fragmentRecord->lights;
+        // Our water (SXC/Water): the scene behind it in set 2, the lights' set 3.
+        const bool water = draw.fragment == FragmentProgram::Water;
+        if (!LayoutFor(samplerMask, cover ? kExtraCover : (water ? kExtraWater : (lit ? kExtraLights : kExtraNone)), layoutIndex))
         {
             ++s.stats.skipped;
             return false;
@@ -273,14 +275,16 @@ namespace gxvk::vk::pipelines
         }
 
         // SXC: set 2, the covers' (written and uploaded at the frame's first terrain draw).
-        const VkDescriptorSet set2 = cover ? gxvk::vk::cover::FrameSet(slot, serial) : VK_NULL_HANDLE;
+        const VkDescriptorSet set2 = cover ? gxvk::vk::cover::FrameSet(slot, serial)
+                                     : water ? gxvk::vk::water::FrameSet(slot, serial)
+                                             : VK_NULL_HANDLE;
         // SXC: set 3, the lights' (filled at the frame's first use), for the draw's surface class: the
         // terrain outdoor; a lit module as the device found it (a WMO group indoor or outdoor, models
         // any, another scene than the world's none).
         const VkDescriptorSet set3 = cover ? gxvk::vk::lights::FrameSet(slot, serial, gxvk::vk::lights::kSurfaceOutdoor)
-                                     : lit ? gxvk::vk::lights::FrameSet(slot, serial, draw.lightsSurface)
+                                     : (lit || water) ? gxvk::vk::lights::FrameSet(slot, serial, draw.lightsSurface)
                                            : VK_NULL_HANDLE;
-        if ((cover && set2 == VK_NULL_HANDLE) || ((cover || lit) && set3 == VK_NULL_HANDLE))
+        if (((cover || water) && set2 == VK_NULL_HANDLE) || ((cover || lit || water) && set3 == VK_NULL_HANDLE))
         {
             ++s.stats.skipped;
             return false;
@@ -324,12 +328,12 @@ namespace gxvk::vk::pipelines
             b.offset1 = offset1;
             b.have1   = true;
         }
-        if (cover && b.set2 != set2)  // SXC:
+        if ((cover || water) && b.set2 != set2)  // SXC:
         {
             d.CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout.layout, 2, 1, &set2, 0, nullptr);
             b.set2 = set2;
         }
-        if ((cover || lit) && b.set3 != set3)  // SXC:
+        if ((cover || lit || water) && b.set3 != set3)  // SXC:
         {
             d.CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout.layout, 3, 1, &set3, 0, nullptr);
             b.set3 = set3;

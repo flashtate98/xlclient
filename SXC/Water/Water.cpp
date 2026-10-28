@@ -21,6 +21,8 @@
 
 namespace {
     bool s_available = false;
+    SXC::Water::CaptureFn s_capture = nullptr;
+    SXC::Water::StatusFn s_status = nullptr;
     CGxShader* s_vertexShader = nullptr;
     CGxShader* s_pixelShader = nullptr;
     bool s_shadersFailed = false;
@@ -109,9 +111,15 @@ namespace {
 }
 
 namespace SXC::Water {
-    void SetDevice(bool available) {
-        s_available = available;
+    void SetDevice(bool available, CaptureFn capture, StatusFn status) {
+        s_available = available && capture;
+        s_capture = capture;
+        s_status = status;
         s_shadersFailed = false;
+    }
+
+    const char* Status() {
+        return s_status ? s_status() : "";
     }
 
     bool Active() {
@@ -131,7 +139,8 @@ namespace SXC::Water {
 
         CGxTex* tint = TintTexture(instance->m_settings);
 
-        if (!tint || !Shaders()) {
+        // The scene behind the water, before the frame's first water draw (the later ones reuse it).
+        if (!tint || !Shaders() || !s_capture()) {
             return false;
         }
 

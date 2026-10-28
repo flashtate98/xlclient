@@ -11,8 +11,16 @@ namespace Liquid {
 }
 
 namespace SXC::Water {
-    // The Vulkan device: true once its water programs and the lights' set are up, false when it goes.
-    void SetDevice(bool available);
+    // The device's copy of the scene behind the water, once per frame (later calls the same frame answer
+    // as the first); false: the stock water draws this frame.
+    using CaptureFn = bool (*)();
+    using StatusFn = const char* (*)();
+
+    // The Vulkan device: available once its water programs and the lights' set are up, false when it goes.
+    void SetDevice(bool available, CaptureFn capture, StatusFn status);
+
+    // The device's last word on the scene's copy, for the overlay (empty without a device).
+    const char* Status();
 
     // The setting and the device.
     bool Active();
