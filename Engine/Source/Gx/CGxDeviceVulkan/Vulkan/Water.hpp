@@ -25,6 +25,7 @@ namespace gxvk::vk::water
         float amplitude = 0.35f;  ///< x the spectrum's heights
         float chop      = 1.2f;   ///< horizontal displacement (sharper crests)
         float foam      = 1.0f;   ///< the foam's strength where crests fold
+        bool  rebuild   = false;  ///< make the spectrum again even if the wind hasn't changed
     };
 
     struct CaptureInput

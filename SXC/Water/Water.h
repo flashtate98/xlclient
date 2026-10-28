@@ -23,6 +23,7 @@ namespace SXC::Water {
         float amplitude = 0.35f; // x the spectrum's heights
         float chop = 1.2f;       // horizontal displacement (sharper crests)
         float foam = 1.0f;       // the foam's strength where crests fold
+        bool rebuild = false;    // make the spectrum again even if the wind hasn't changed
     };
 
     // The device's copy of the scene behind the water and its waves, once per frame (later calls the same
@@ -42,4 +43,7 @@ namespace SXC::Water {
     // Liquid::CRenderer::Flush, for each instance: draws it as ours when it is a stock water material
     // and we're active. False: the instance's own material draws it.
     bool Draw(Liquid::CInstance* instance, const C3Vector& cameraPos);
+
+    // The overlay's Water panel: the switches, the look's live values, the debug views.
+    void DrawPanel(void* user);
 }

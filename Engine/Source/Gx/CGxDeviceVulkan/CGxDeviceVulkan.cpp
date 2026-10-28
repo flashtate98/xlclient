@@ -635,6 +635,7 @@ bool CGxDeviceVulkan::SxcWaterCapture(const SXC::Water::Waves& waves) {
     in.waves.amplitude = waves.amplitude;
     in.waves.chop = waves.chop;
     in.waves.foam = waves.foam;
+    in.waves.rebuild = waves.rebuild;
     return gxvk::vk::water::Capture(in);
 }
 

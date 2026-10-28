@@ -16,7 +16,11 @@
 //
 // From below: the world above inside Snell's window, the water mirrored outside it.
 //
-// The registers SXC/Water adds: p6 = (time in s, wrapping every 600 s; 0; ripple strength; 0), p7, p8.
+// The registers SXC/Water adds (its Look, the Water panel's values): p6 = (time in s, wrapping every 600 s;
+// the debug view; ripple strength; 0), p7 the sky's zenith, p8 its horizon, p9 = (clarity: absorption per yd
+// at the stock alpha 0 and 1; scatter brightness; refraction), p10 = (reflectivity looking straight down;
+// reflection strength; Snell's window (cos); screen-space reflections on), p11 = (glint strength; glint
+// sharpness; foam threshold (Jacobian); 0).
 #version 450
 #extension GL_GOOGLE_include_directive : require
 
@@ -41,6 +45,8 @@ layout(std140, set = 2, binding = 2) uniform WaterScene {
     vec4 extent;
     vec4 waveSizes;   // the cascades' world sizes (yd); w 1 when the waves run
     vec4 waveLook;    // how far cascades 1 and 2 reach (yd), the foam's strength, 0
+    vec4 depthProj;   // the capture's projection terms (P22, P32, P23, P33) and
+    vec4 depthRange;  // depth range (min, max): the debug view's self-test
 } scene;
 // The waves (step 3, WaterWaves.glsl): per cascade the height's slopes, the Jacobian (below 1 the crest
 // folds), the height.
@@ -67,7 +73,7 @@ vec2 WaveSlope(vec2 xy, float distance, out float folding)
         jacobian += (w.z - 1.0) * fade;
     }
 
-    folding = clamp((0.95 - jacobian) * 2.5, 0.0, 1.0);
+    folding = clamp((regs.p[11].z - jacobian) * 2.5, 0.0, 1.0);
     return slope;
 }
 
@@ -181,15 +187,25 @@ vec3 ToScene(vec3 view)
 
 // Screen-space reflection: the reflected ray marched through the scene's depth from the surface point; the
 // colour where it passes behind something, and how sure that is (0 none: the sky takes over).
+// How the last search ended (the debug view "Reflection search outcome"): 0 towards the camera, 1 left the
+// screen, 2 out of steps, 3 a hit; `thick` whether it passed behind something too deep to count as a hit.
+int ssrOutcome = 0;
+bool ssrThick = false;
+int ssrSteps = 0;
+
 vec4 ScreenReflection(vec3 origin, vec3 dir)
 {
     // A ray towards the camera finds nothing the copy holds.
     float facing = smoothstep(-0.05, 0.15, dir.z);
+    ssrOutcome = 0;
+    ssrThick = false;
 
     if (facing <= 0.0)
     {
         return vec4(0.0);
     }
+
+    ssrOutcome = 2;
 
     float stride = 0.4;
     float travelled = 0.0;
@@ -203,13 +219,18 @@ vec4 ScreenReflection(vec3 origin, vec3 dir)
 
         if (any(lessThan(at.xy, vec2(0.0))) || any(greaterThan(at.xy, vec2(1.0))) || at.z <= 0.0)
         {
+            ssrOutcome = 1;
             break;
         }
 
         float behind = at.z - textureLod(sceneW, at.xy, 0.0).r;
 
+        ssrThick = ssrThick || behind >= max(1.5, stride * 2.0);
+
         if (behind > 0.0 && behind < max(1.5, stride * 2.0))
         {
+            ssrOutcome = 3;
+            ssrSteps = i;
             // Halve back onto the surface it passed.
             vec3 lo = prev, hi = p;
 
@@ -278,7 +299,7 @@ void main()
     // everything a little lower, moving with the camera (Seyri, 2026-10-28).
     vec2 here = gl_FragCoord.xy * scene.extent.zw;
     vec3 tilt = WorldDirToView(N) - WorldDirToView(below ? vec3(0.0, 0.0, -1.0) : vec3(0.0, 0.0, 1.0));
-    vec2 bent = here + vec2(tilt.x, -tilt.y) * (0.6 / max(vView.w, 1.0));
+    vec2 bent = here + vec2(tilt.x, -tilt.y) * (regs.p[9].w / max(vView.w, 1.0));
     float sceneBent = textureLod(sceneW, bent, 0.0).r;
 
     if (sceneBent < vView.w)
@@ -293,33 +314,35 @@ void main()
     // the surface (below). Murkier where the stock alpha is higher; red absorbed first.
     float crossed = below ? distance : max(sceneBent - vView.w, 0.0) * (distance / max(vView.w, 1e-3));
     // (First tuning: 0.025..0.35 per yd was milky on WoW's steep shores, Seyri 2026-10-28.)
-    float murk = mix(0.01, 0.12, clamp(tint.a, 0.0, 1.0));
+    float murk = mix(regs.p[9].x, regs.p[9].y, clamp(tint.a, 0.0, 1.0));
     vec3 absorb = murk * (1.25 - clamp(body, 0.0, 1.0));
     vec3 through = exp(-absorb * crossed);
     // The light the water itself sends back: darker than the stock tint (as a surface colour it is light).
-    vec3 scatter = body * 0.65;
+    vec3 scatter = body * regs.p[9].z;
 
     // From below, past the critical angle, the surface mirrors the water. Real water's (cos 0.66) leaves a
     // third-person camera seeing up only when it looks steeply up; this one is wider, for the game.
-    const float kWindowCos = 0.3;
+    float kWindowCos = regs.p[10].z;
     float window = below ? smoothstep(kWindowCos - 0.06, kWindowCos + 0.06, abs(dot(N, V))) : 1.0;
     vec3 seen = mix(scatter, behind * through + scatter * (1.0 - through), window);
 
     float cosV = clamp(dot(N, V), 0.0, 1.0);
-    float fresnel = below ? 1.0 - window : 0.02 + 0.98 * pow(1.0 - cosV, 5.0);
+    float fresnel = below ? 1.0 - window : min((regs.p[10].x + (1.0 - regs.p[10].x) * pow(1.0 - cosV, 5.0)) * regs.p[10].y, 1.0);
     vec3 R = reflect(-V, N);
     vec3 sky = mix(regs.p[8].rgb, regs.p[7].rgb, sqrt(clamp(R.z, 0.0, 1.0)));
     vec3 reflected = scatter;
 
-    if (!below)
+    vec4 ssr = vec4(0.0);
+
+    if (!below && regs.p[10].w > 0.5)
     {
-        vec4 ssr = ScreenReflection(vView.xyz, normalize(WorldDirToView(R)));
+        ssr = ScreenReflection(vView.xyz, normalize(WorldDirToView(R)));
         reflected = mix(sky, ssr.rgb, ssr.a);
     }
 
     vec3 toSun = normalize(LightsViewDirToWorld(-regs.v[33].xyz));
-    float sun = below ? 0.0 : pow(max(dot(R, toSun), 0.0), 600.0) * smoothstep(-0.05, 0.1, toSun.z);
-    vec3 highlight = regs.v[36].rgb * sun * 1.5 + (below ? vec3(0.0) : LampsReflected(world, N, V));
+    float sun = below ? 0.0 : pow(max(dot(R, toSun), 0.0), regs.p[11].y) * smoothstep(-0.05, 0.1, toSun.z);
+    vec3 highlight = regs.v[36].rgb * sun * regs.p[11].x + (below ? vec3(0.0) : LampsReflected(world, N, V));
 
     // Foam where the crests fold: white, lit by the sun and the ambient, over the rest.
     float foam = below ? 0.0 : folding * scene.waveLook.z;
@@ -331,8 +354,71 @@ void main()
     vec3 clear = behind * through * open;
     vec3 own = surface - clear;
     float coverage = 1.0 - max(through.r, max(through.g, through.b)) * open;
-    float fog = FogFactor(vView.w);
-    vec3 fogged = clear + own * fog + ApplyFog(vec3(0.0), 0.0) * (1.0 - fog) * coverage;
+    // The liquid's own fog, as the stock vsLiquidWater computes it: c4 = (scale, offset, power) of the view
+    // depth (1 no fog .. 0 all fog), the colour in pixel c4 (Liquid::SetShaderConstants). Not the device's
+    // linear fog (GxRs_FogStart / End): the liquid pass leaves those as they stood, its end a few yards out,
+    // which painted everything past it in the fog colour (the "lavender layer", Seyri 2026-10-28).
+    float fog = regs.v[4].z > 0.0 ? min(pow(max(vView.z * regs.v[4].x + regs.v[4].y, 0.0), regs.v[4].z), 1.0) : 1.0;
+    fog = pc.fog.w > 0.5 ? fog : 1.0;
+    vec3 fogged = clear + own * fog + regs.p[4].rgb * (1.0 - fog) * coverage;
+
+    // The Water panel's debug views (p6.y): 1 the screen-space reflection (its colour where it found
+    // something, red where the sky stands in), 2 the water crossed (white: 20 yd and more), 3 the normal,
+    // 4 the crests' folding and the foam, 5 the reflection alone (Fresnel as grey), 6 the scene behind.
+    int debugView = int(regs.p[6].y + 0.5);
+
+    if (debugView == 1)
+    {
+        fogged = mix(vec3(0.4, 0.0, 0.0), ssr.rgb, ssr.a);
+    }
+    else if (debugView == 2)
+    {
+        fogged = vec3(clamp(crossed / 20.0, 0.0, 1.0));
+    }
+    else if (debugView == 3)
+    {
+        fogged = N * 0.5 + 0.5;
+    }
+    else if (debugView == 4)
+    {
+        fogged = vec3(folding, foam, 0.0);
+    }
+    else if (debugView == 5)
+    {
+        fogged = reflected * 0.85 + vec3(fresnel) * 0.15;
+    }
+    else if (debugView == 6)
+    {
+        fogged = behind;
+    }
+    else if (debugView == 8)
+    {
+        // Green a hit (darker the more steps), red left the screen, magenta towards the camera, yellow out
+        // of steps; cyan mixed in where it passed behind something too deep to count.
+        vec3 c = ssrOutcome == 3 ? vec3(0.0, 1.0 - float(ssrSteps) / 50.0, 0.0)
+               : ssrOutcome == 1 ? vec3(1.0, 0.0, 0.0)
+               : ssrOutcome == 0 ? vec3(1.0, 0.0, 1.0)
+                                 : vec3(1.0, 1.0, 0.0);
+        fogged = ssrThick && ssrOutcome != 3 ? mix(c, vec3(0.0, 1.0, 1.0), 0.6) : c;
+    }
+    else if (debugView == 9)
+    {
+        // The depth conversion's self-test: this pixel's own depth turned back into w the capture's way,
+        // against its true w (black: right; red: off, full at 10 %).
+        float ndc = (gl_FragCoord.z - scene.depthRange.x) / max(scene.depthRange.y - scene.depthRange.x, 1e-6);
+        float z = (scene.depthProj.y - ndc * scene.depthProj.w) / (ndc * scene.depthProj.z - scene.depthProj.x);
+        float w = z * scene.depthProj.z + scene.depthProj.w;
+        fogged = vec3(clamp(abs(w - vView.w) / max(vView.w, 1e-3) * 10.0, 0.0, 1.0), 0.0, 0.0);
+    }
+    else if (debugView == 7)
+    {
+        // The screen mapping's check: the pixel's own point through ToScene against where the pixel is
+        // (black: they agree; red / green: off in x / y, full at 1/20 of the screen), the depth compared
+        // in blue (its w against the copy's at the same spot: blue where the water lies behind the copy).
+        vec3 self = ToScene(vView.xyz);
+        vec2 off = abs(self.xy - here) * 20.0;
+        fogged = vec3(clamp(off, 0.0, 1.0), textureLod(sceneW, here, 0.0).r < vView.w - 0.05 ? 1.0 : 0.0);
+    }
 
     oC0 = vec4(fogged, 1.0);
 }

@@ -39,6 +39,8 @@ namespace
         float extent[4];
         float waveSizes[4];
         float waveLook[4];
+        float depthProj[4];    ///< the capture's projection terms (P22, P32, P23, P33), for the debug view's self-test
+        float depthRange[4];   ///< and its depth range (min, max)
     };
 
     // The waves (Shaders/WaterWaves.glsl): N x N per cascade, three cascades.
@@ -559,7 +561,7 @@ namespace
 
         // The spectrum again when the wind (or the look) moved enough to see.
         const float key[5] = { w.speed, w.windX, w.windY, w.spread, w.amplitude };
-        bool changed = false;
+        bool changed = w.rebuild;
         for (uint32_t i = 0; i < 5; ++i) changed |= std::fabs(key[i] - s.spectrumKey[i]) > (i == 0 ? 0.2f : 0.02f);
         if (changed)
         {
@@ -648,6 +650,12 @@ namespace gxvk::vk::water
         p.waveLook[0]  = 220.0f;   // cascade 1 fades out by this distance (yd), cascade 2 by the next
         p.waveLook[1]  = 45.0f;
         p.waveLook[2]  = in.waves.foam;
+        p.depthProj[0] = in.proj[2 * 4 + 2];
+        p.depthProj[1] = in.proj[3 * 4 + 2];
+        p.depthProj[2] = in.proj[2 * 4 + 3];
+        p.depthProj[3] = in.proj[3 * 4 + 3];
+        p.depthRange[0] = in.viewport.minDepth;
+        p.depthRange[1] = in.viewport.maxDepth;
         std::memcpy(slot.params.block.mapped, &p, sizeof p);
         memory::FlushHost(slot.params.block);
 
