@@ -46,7 +46,9 @@ layout(std140, set = 2, binding = 2) uniform WaterScene {
     vec4 waveSizes;   // the cascades' world sizes (yd); w 1 when the waves run
     vec4 waveLook;    // how far cascades 1 and 2 reach (yd), the foam's strength, 0
     vec4 depthProj;   // the capture's projection terms (P22, P32, P23, P33) and
-    vec4 depthRange;  // depth range (min, max): the debug view's self-test
+    vec4 depthRange;  // depth range (min, max): the debug view's self-test; w how many sky bodies follow
+    vec4 bodyDir[4];  // the sky's bodies as drawn this frame: direction toward each, angular radius (rad)
+    vec4 bodyColour[4];
 } scene;
 // The waves (step 3, WaterWaves.glsl): per cascade the height's slopes, the Jacobian (below 1 the crest
 // folds), the height.
@@ -361,8 +363,28 @@ void main()
     // with the visible sun (it went on glinting "through the bottom of the ocean" at sundown, Seyri
     // 2026-10-28); low suns, the moons and the clouds come from the sky on screen (ScreenReflection), which
     // the glint gives way to.
-    float sun = below ? 0.0 : pow(max(dot(R, toSun), 0.0), regs.p[11].y) * smoothstep(0.1, 0.3, toSun.z) * (1.0 - ssr.a);
-    vec3 highlight = regs.v[36].rgb * sun * regs.p[11].x + (below ? vec3(0.0) : LampsReflected(world, N, V));
+    // The sky's bodies reflected (the sun, the moons, the mod's own), as the sky drew them this frame: their
+    // disc where the mirror direction meets it, and a glow by the glint's sharpness; setting with the body
+    // below the horizon. Off screen too (high moons). Without bodies, the light's direction stands in, only
+    // while clearly up (it needn't set with the visible sun: it glinted "through the bottom of the ocean" at
+    // sundown, Seyri 2026-10-28). The sky on screen (ScreenReflection) shows them already where it reaches.
+    int bodies = int(scene.depthRange.w + 0.5);
+    vec3 shine = vec3(0.0);
+
+    for (int b = 0; b < 4 && b < bodies; b++)
+    {
+        vec3 d = scene.bodyDir[b].xyz;
+        float r = max(scene.bodyDir[b].w, 0.002);
+        float c = dot(R, d);
+        float disc = smoothstep(cos(r * 1.3 + 0.004), cos(r * 0.7), c);
+        float glow = pow(max(c, 0.0), regs.p[11].y);
+        vec3 colour = scene.bodyColour[b].rgb;
+        shine += colour * (disc * 1.5 + glow * max(colour.r, max(colour.g, colour.b))) * smoothstep(-r, r, d.z);
+    }
+
+    float sun = below || bodies > 0 ? 0.0 : pow(max(dot(R, toSun), 0.0), regs.p[11].y) * smoothstep(0.1, 0.3, toSun.z);
+    shine += regs.v[36].rgb * sun;
+    vec3 highlight = below ? vec3(0.0) : shine * regs.p[11].x * (1.0 - ssr.a) + LampsReflected(world, N, V);
 
     // Foam where the crests fold: white, lit by the sun and the ambient, over the rest.
     float foam = below ? 0.0 : folding * scene.waveLook.z;

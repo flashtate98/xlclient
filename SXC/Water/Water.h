@@ -4,6 +4,8 @@
 // and the setting off keep the stock materials, untouched.
 #pragma once
 
+#include <cstdint>
+
 class C3Vector;
 
 namespace Liquid {
@@ -24,6 +26,10 @@ namespace SXC::Water {
         float chop = 1.2f;       // horizontal displacement (sharper crests)
         float foam = 1.0f;       // the foam's strength where crests fold
         bool rebuild = false;    // make the spectrum again even if the wind hasn't changed
+        // The sky's bodies this frame (SXC::Sky::BodiesSeen), reflected on the water: per body the direction
+        // toward it, its angular radius (rad), its colour.
+        uint32_t bodies = 0;
+        float body[4][7] = {};
     };
 
     // The device's copy of the scene behind the water and its waves, once per frame (later calls the same

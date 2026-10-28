@@ -40,7 +40,9 @@ namespace
         float waveSizes[4];
         float waveLook[4];
         float depthProj[4];    ///< the capture's projection terms (P22, P32, P23, P33), for the debug view's self-test
-        float depthRange[4];   ///< and its depth range (min, max)
+        float depthRange[4];   ///< and its depth range (min, max); w: how many sky bodies follow
+        float bodyDir[4][4];   ///< the sky's bodies: direction toward each (unit), its angular radius (rad)
+        float bodyColour[4][4];
     };
 
     // The waves (Shaders/WaterWaves.glsl): N x N per cascade, three cascades.
@@ -656,6 +658,12 @@ namespace gxvk::vk::water
         p.depthProj[3] = in.proj[3 * 4 + 3];
         p.depthRange[0] = in.viewport.minDepth;
         p.depthRange[1] = in.viewport.maxDepth;
+        p.depthRange[3] = static_cast<float>(in.waves.bodies);
+        for (uint32_t b = 0; b < in.waves.bodies && b < 4; ++b)
+        {
+            std::memcpy(p.bodyDir[b], in.waves.body[b], 4 * sizeof(float));
+            std::memcpy(p.bodyColour[b], &in.waves.body[b][4], 3 * sizeof(float));
+        }
         std::memcpy(slot.params.block.mapped, &p, sizeof p);
         memory::FlushHost(slot.params.block);
 

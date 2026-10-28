@@ -32,4 +32,15 @@ namespace SXC::Sky {
 
     // The top of CGameTime::IsDaytime for the game clock: false = the client's own answer.
     bool IsDaytime(bool& daytime);
+
+    // A body the sky drew this frame (the provider's, or the stock sun and moons), for reflections: the
+    // direction toward it (unit), its angular diameter (degrees), its colour (0..1).
+    struct BodySeen {
+        float dir[3];
+        float sizeDegrees;
+        float colour[3];
+    };
+
+    // This frame's bodies (since the last lighting update), up to `max`; returns how many.
+    uint32_t BodiesSeen(BodySeen* out, uint32_t max);
 }

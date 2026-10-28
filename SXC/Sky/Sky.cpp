@@ -27,6 +27,28 @@ namespace {
     bool s_hideSunGlare;
     bool s_hideMoonGlare;
     bool s_inBodies;         // draw_body may be called
+
+    // The bodies drawn this frame (SXC::Sky::BodiesSeen: our water reflects them).
+    constexpr uint32_t kMaxSeen = 8;
+    SXC::Sky::BodySeen s_seen[kMaxSeen];
+    uint32_t s_seenCount = 0;
+
+    void Seen(float x, float y, float z, float sizeDegrees, uint32_t argb) {
+        const float length = std::sqrt(x * x + y * y + z * z);
+
+        if (s_seenCount >= kMaxSeen || length < 1e-6f || sizeDegrees <= 0.0f) {
+            return;
+        }
+
+        SXC::Sky::BodySeen& b = s_seen[s_seenCount++];
+        b.dir[0] = x / length;
+        b.dir[1] = y / length;
+        b.dir[2] = z / length;
+        b.sizeDegrees = sizeDegrees;
+        b.colour[0] = static_cast<float>((argb >> 16) & 0xFF) / 255.0f;
+        b.colour[1] = static_cast<float>((argb >> 8) & 0xFF) / 255.0f;
+        b.colour[2] = static_cast<float>(argb & 0xFF) / 255.0f;
+    }
     bool s_bodiesReplace;    // pass 0 answered: the stock three are skipped
 
     // The bodies' textures by path, each in a planet of its own (DNPlanet::Initialize loads it the
@@ -170,6 +192,8 @@ namespace {
             return;
         }
 
+        Seen(body->direction.x, body->direction.y, body->direction.z, body->size_degrees, body->color);
+
         if (body->zenith_up || body->blend == 1 || body->rotation_degrees != 0.0f) {
             DrawOwn(*body);
         } else {
@@ -260,6 +284,7 @@ namespace SXC::Sky {
 
     void Lighting() {
         s_hideSunGlare = s_hideMoonGlare = false;
+        s_seenCount = 0;   // a new frame's bodies follow
 
         if (!s_haveProvider || !s_provider.lighting) {
             return;
@@ -324,6 +349,15 @@ namespace SXC::Sky {
         const bool stock = planet == &DayNight::g_planets.m_sun || planet == &DayNight::g_planets.m_moon || planet == &DayNight::g_planets.m_moon2;
 
         if (!stock || !s_haveProvider || !s_provider.bodies) {
+            // A stock body drawn the stock way: seen as it stands (its quad's angular size at its distance).
+            if (stock && planet->m_texture) {
+                const C3Vector& camera = DayNight::GetInfo()->m_cameraPos;
+                const C3Vector d(planet->m_position.x - camera.x, planet->m_position.y - camera.y, planet->m_position.z - camera.z);
+                const float distance = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+                const float size = distance > 1e-3f ? 2.0f * std::atan(planet->m_scale * 0.5f / distance) * 57.29578f : 0.0f;
+                Seen(d.x, d.y, d.z, size, Argb(planet->m_color));
+            }
+
             return false;
         }
 
@@ -350,6 +384,16 @@ namespace SXC::Sky {
 
     bool GlareHidden(const DayNight::DNGlare* glare) {
         return (glare == &DayNight::g_sunGlare && s_hideSunGlare) || (glare == &DayNight::g_moonGlare && s_hideMoonGlare);
+    }
+
+    uint32_t BodiesSeen(BodySeen* out, uint32_t max) {
+        const uint32_t n = s_seenCount < max ? s_seenCount : max;
+
+        for (uint32_t i = 0; i < n; i++) {
+            out[i] = s_seen[i];
+        }
+
+        return n;
     }
 
     bool IsDaytime(bool& daytime) {

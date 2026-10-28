@@ -17,6 +17,7 @@
 #include "Engine/Source/Storm/H/storm.h"
 #include "SXC/Fog/Fog.h"
 #include "SXC/Grass/Grass.h"
+#include "SXC/Sky/Sky.h"
 #include "SXC/Log.h"
 #include "SXC/Settings/Settings.h"
 #include "SXC/ThirdParty/imgui/imgui.h"
@@ -298,6 +299,21 @@ namespace SXC::Water {
 
         waves.rebuild = s_rebuildWaves;
         s_rebuildWaves = false;
+
+        // The sky's bodies as drawn this frame (the mod's, or the stock sun and moons): their reflections,
+        // rather than the light's direction, which needn't follow the visible sun.
+        SXC::Sky::BodySeen seen[4];
+        waves.bodies = SXC::Sky::BodiesSeen(seen, 4);
+
+        for (uint32_t b = 0; b < waves.bodies; b++) {
+            waves.body[b][0] = seen[b].dir[0];
+            waves.body[b][1] = seen[b].dir[1];
+            waves.body[b][2] = seen[b].dir[2];
+            waves.body[b][3] = seen[b].sizeDegrees * 0.5f * 0.017453292f;
+            waves.body[b][4] = seen[b].colour[0];
+            waves.body[b][5] = seen[b].colour[1];
+            waves.body[b][6] = seen[b].colour[2];
+        }
 
         if (!s_capture(waves)) {
             return false;
