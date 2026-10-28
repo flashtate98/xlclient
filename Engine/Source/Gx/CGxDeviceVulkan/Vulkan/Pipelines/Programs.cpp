@@ -4,6 +4,7 @@
 
 #include "Engine/Source/Gx/CGxDeviceVulkan/Shaders/Spirv.inc"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Shaders/TerrainSpirv.inc"  // SXC: our terrain shader
+#include "Engine/Source/Gx/CGxDeviceVulkan/Shaders/WaterSpirv.inc"    // SXC: our water
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"         // SXC: which set of its pixel modules
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/DeviceCaps.hpp"
 
@@ -114,6 +115,10 @@ namespace gxvk::vk::pipelines::detail
         // The projected textures on the raised covers (step 5e), in the generic slots.
         if (!CreateModule(kDecalVert, sizeof kDecalVert, s.vert[static_cast<uint32_t>(VertexProgram::Decal)], "Decal.vert")
             || !CreateModule(kDecalFrag, sizeof kDecalFrag, s.frag[static_cast<uint32_t>(FragmentProgram::Decal)], "Decal.frag"))
+            return false;
+        // Our water (SXC/Water), in the generic slots.
+        if (!CreateModule(kWaterVert, sizeof kWaterVert, s.vert[static_cast<uint32_t>(VertexProgram::Water)], "Water.vert")
+            || !CreateModule(kWaterFrag, sizeof kWaterFrag, s.frag[static_cast<uint32_t>(FragmentProgram::Water)], "Water.frag"))
             return false;
         // The bindless set (SPIR-V 1.5) only where the device is 1.2 with non-uniform indexing.
         const bool bindless = (context::Caps().enabled & gxvk::vk::kCapSampledArrayNonUniform) != 0;

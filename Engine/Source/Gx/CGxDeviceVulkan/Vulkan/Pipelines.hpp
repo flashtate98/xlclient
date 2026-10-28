@@ -32,7 +32,9 @@ namespace gxvk::vk::manifest { struct Record; }
 //   SXC: our terrain shader (Shaders/Terrain.vert, Terrain.frag), in the translated interface, in place
 //   of the client's terrain records when [Terrain] OurShader is on: Terrain for both stages, the
 //   record's options as specialization constants (Draw::terrainVertex / terrainFragment). And Decal for
-//   both (Shaders/Decal.vert, Decal.frag): a projected texture's box, shaded onto the raised covers.
+//   both (Shaders/Decal.vert, Decal.frag): a projected texture's box, shaded onto the raised covers. And
+//   Water for both (Shaders/Water.vert, Water.frag): the stock water materials' meshes, drawn by SXC/Water
+//   through shaders named "SxcWater"; they read the lights' set 3.
 //
 // A pipeline is built for each distinct combination of vertex layout, programs (and records),
 // topology, blend mode, depth and culling state, colour write mask, fill mode, sampler-slot set and
@@ -64,6 +66,7 @@ namespace gxvk::vk::pipelines
         Translated    = 3,
         Terrain       = 4,   // SXC:
         Decal         = 5,   // SXC: projected textures on the raised covers (step 5e)
+        Water         = 6,   // SXC: our water (SXC/Water)
         Count
     };
 
@@ -76,6 +79,7 @@ namespace gxvk::vk::pipelines
         Translated    = 4,
         Terrain       = 5,   // SXC:
         Decal         = 6,   // SXC: projected textures on the raised covers (step 5e)
+        Water         = 7,   // SXC: our water (SXC/Water)
         Count
     };
 

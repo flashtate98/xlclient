@@ -112,8 +112,8 @@ namespace gxvk::vk::pipelines::detail
     constexpr uint32_t kAttribTexCoord1 = 7;
 
     /// Whether a program is of the translated family (reads set 1, the semantic interface).
-    inline bool TranslatedFamily(VertexProgram v) { return v == VertexProgram::Translated || v == VertexProgram::FixedFunctionSemantic || v == VertexProgram::Terrain || v == VertexProgram::Decal; }
-    inline bool TranslatedFamily(FragmentProgram f) { return f == FragmentProgram::Translated || f == FragmentProgram::FixedFunctionTranslated || f == FragmentProgram::Terrain || f == FragmentProgram::Decal; }
+    inline bool TranslatedFamily(VertexProgram v) { return v == VertexProgram::Translated || v == VertexProgram::FixedFunctionSemantic || v == VertexProgram::Terrain || v == VertexProgram::Decal || v == VertexProgram::Water; }
+    inline bool TranslatedFamily(FragmentProgram f) { return f == FragmentProgram::Translated || f == FragmentProgram::FixedFunctionTranslated || f == FragmentProgram::Terrain || f == FragmentProgram::Decal || f == FragmentProgram::Water; }
 
     /// What a pipeline is built from. Compared bytewise, so every byte is set (zeroed first).
     struct Key

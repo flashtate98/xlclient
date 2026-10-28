@@ -69,6 +69,11 @@ OUTPUTS = [
         ("Decal.vert", "kDecalVert"),
         ("Decal.frag", "kDecalFrag"),
     ]),
+    # SXC: our water (SXC/Water: the stock water materials 1 and 3 drawn by these).
+    ("WaterSpirv.inc", [
+        ("Water.vert", "kWaterVert"),
+        ("Water.frag", "kWaterFrag"),
+    ]),
 ]
 
 

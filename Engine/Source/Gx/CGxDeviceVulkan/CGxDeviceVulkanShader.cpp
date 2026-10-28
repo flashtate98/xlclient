@@ -49,6 +49,9 @@ namespace {
     Program g_uiVertex   = { pipelines::VertexProgram::Ui, pipelines::FragmentProgram::FixedFunction, nullptr };
     Program g_uiPixel    = { pipelines::VertexProgram::FixedFunction, pipelines::FragmentProgram::Ui, nullptr };
     Program g_desaturate = { pipelines::VertexProgram::FixedFunction, pipelines::FragmentProgram::Desaturate, nullptr };
+    // SXC: our water (SXC/Water creates the "SxcWater" pair; no .bls behind them, this device knows them by name).
+    Program g_waterVertex = { pipelines::VertexProgram::Water, pipelines::FragmentProgram::FixedFunction, nullptr };
+    Program g_waterPixel  = { pipelines::VertexProgram::FixedFunction, pipelines::FragmentProgram::Water, nullptr };
 
     Program* g_translated      = nullptr;   ///< one per manifest record, made at first need
     uint32_t g_translatedCount = 0;
@@ -81,7 +84,15 @@ namespace {
             if (!SStrCmpI(name, "UI", STORM_MAX_STR) || !SStrCmpI(name, "UI:0", STORM_MAX_STR) || !SStrCmpI(name, "UI:1", STORM_MAX_STR)) {
                 return &g_uiVertex;
             }
+
+            if (!SStrCmpI(name, "SxcWater", STORM_MAX_STR)) {  // SXC:
+                return &g_waterVertex;
+            }
         } else if (shader->m_target == GxSh_Pixel) {
+            if (!SStrCmpI(name, "SxcWater", STORM_MAX_STR)) {  // SXC:
+                return &g_waterPixel;
+            }
+
             if (!SStrCmpI(name, "UI", STORM_MAX_STR)) {
                 return &g_uiPixel;
             }
@@ -436,6 +447,16 @@ uint32_t CGxDeviceVulkan::IShaderPrograms(pipelines::Draw& draw) {
 
         if (ps) {
             draw.fragment = ps->fragment;
+        }
+
+        // SXC: our water pairs only with itself; it reads the registers (set 1) and the lights' set 3,
+        // made now, before the draw takes the pass (as the terrain's).
+        if ((draw.vertex == pipelines::VertexProgram::Water) != (draw.fragment == pipelines::FragmentProgram::Water)) {
+            draw.vertex = pipelines::VertexProgram::FixedFunction;
+            draw.fragment = pipelines::FragmentProgram::FixedFunction;
+        } else if (draw.vertex == pipelines::VertexProgram::Water) {
+            gxvk::vk::lights::FrameSet(gxvk::vk::frame::Slot(), gxvk::vk::frame::Serial(), draw.lightsSurface);
+            return 1u;
         }
 
         if (draw.vertex == pipelines::VertexProgram::Ui) {

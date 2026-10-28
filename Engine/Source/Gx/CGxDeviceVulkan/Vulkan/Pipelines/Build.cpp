@@ -238,6 +238,14 @@ namespace
                 AddAttribute(k, in, 0, kAttribPosition, VK_FORMAT_R32G32B32_SFLOAT, 0);
                 return true;
 
+            // SXC: our water reads position0, color0 (white when the vertex has none: the terrain's PT2)
+            // and texcoord1 (the depth coordinate).
+            case VertexProgram::Water:
+                AddAttribute(k, in, 0, kAttribPosition, VK_FORMAT_R32G32B32_SFLOAT, 0);
+                AddAttribute(k, in, 1, kAttribColor0, VK_FORMAT_B8G8R8A8_UNORM, kConstantColourOffset);
+                AddAttribute(k, in, 2, kAttribTexCoord1, VK_FORMAT_R32G32_SFLOAT, kConstantTexcoordOffset);
+                return true;
+
             case VertexProgram::Translated:
             {
                 const manifest::Record* r = manifest::At(k.vertexRecord);
@@ -350,6 +358,13 @@ namespace
             return false;
         }
         if (v == VertexProgram::Decal) return true;
+        // SXC: and the water ones.
+        if ((v == VertexProgram::Water) != (f == FragmentProgram::Water))
+        {
+            why = "the water shader is paired with another program";
+            return false;
+        }
+        if (v == VertexProgram::Water) return true;
 
         uint32_t outputs = 0xFFFFFFFFu;
         if (v == VertexProgram::Translated)
@@ -387,8 +402,8 @@ namespace
     const char* ProgramName(uint32_t program, uint16_t record, bool vertex)
     {
         if (const manifest::Record* r = manifest::At(record)) return manifest::FirstName(*r);
-        static const char* kVertex[]   = { "FixedFunction", "Ui", "FixedFunctionSemantic", "Translated", "Terrain", "Decal" };
-        static const char* kFragment[] = { "FixedFunction", "Ui", "Desaturate", "FixedFunctionTranslated", "Translated", "Terrain", "Decal" };
+        static const char* kVertex[]   = { "FixedFunction", "Ui", "FixedFunctionSemantic", "Translated", "Terrain", "Decal", "Water" };
+        static const char* kFragment[] = { "FixedFunction", "Ui", "Desaturate", "FixedFunctionTranslated", "Translated", "Terrain", "Decal", "Water" };
         if (vertex) return program < kVertexPrograms ? kVertex[program] : "?";
         return program < kFragmentPrograms ? kFragment[program] : "?";
     }

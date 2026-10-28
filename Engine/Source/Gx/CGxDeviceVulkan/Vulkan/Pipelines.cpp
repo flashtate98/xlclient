@@ -198,7 +198,8 @@ namespace gxvk::vk::pipelines
         // The instanced grass reads the ground marks there (its vertex stage).
         const bool cover = draw.fragment == FragmentProgram::Terrain || draw.fragment == FragmentProgram::Decal
                            || (draw.vertex == VertexProgram::Translated && draw.vertexRecord && draw.vertexRecord->grass);
-        const bool lit = draw.fragment == FragmentProgram::Translated && draw.fragmentRecord && draw.fragmentRecord->lights;
+        const bool lit = (draw.fragment == FragmentProgram::Translated && draw.fragmentRecord && draw.fragmentRecord->lights)
+                         || draw.fragment == FragmentProgram::Water;  // SXC: our water (SXC/Water)
         if (!LayoutFor(samplerMask, cover ? kExtraCover : (lit ? kExtraLights : kExtraNone), layoutIndex))
         {
             ++s.stats.skipped;

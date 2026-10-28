@@ -31,6 +31,7 @@
 #include "SXC/Lights/Lights.h" // SXC: point lights
 #include "SXC/Log.h"
 #include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler
+#include "SXC/Water/Water.h"  // SXC: our water
 
 namespace context   = gxvk::vk::context;
 namespace frame     = gxvk::vk::frame;
@@ -263,6 +264,7 @@ void CGxDeviceVulkan::ICreateDrawPath() {
         gxvk::vk::lights::SetShadowReport(&SXC::Lights::ShadowsDrawn);
         SXC::Lights::SetDevice(gxvk::vk::cover::Ready() && gxvk::vk::lights::Ready(), &gxvk::vk::lights::Status);
         SXC::Lights::SetShadowDevice(gxvk::vk::shadows::Ready() ? gxvk::vk::shadows::Slots() : 0, gxvk::vk::shadows::kMaxVertices);
+        SXC::Water::SetDevice(gxvk::vk::lights::Ready());                              // SXC: our water reads the lights' set
         // SXC: the instanced grass.
         static const SXC::Grass::Device s_grass = { gxvk::vk::grass::Mesh, gxvk::vk::grass::Allocate, gxvk::vk::grass::Write, gxvk::vk::grass::Release,
                                                     &CGxDeviceVulkan::SxcGrassDraw, gxvk::vk::grass::PlantsInUse };
@@ -646,6 +648,7 @@ void CGxDeviceVulkan::IDestroyVulkan() {
     SXC::Fog::SetRenderer(nullptr, nullptr);  // SXC: volumetric fog
     SXC::Cover::SetDevice(false, 0, nullptr); // SXC: surface covers
     SXC::Grass::SetDevice(nullptr);           // SXC: the instanced grass (its buffers go below)
+    SXC::Water::SetDevice(false);             // SXC: our water (the stock materials draw until the path is back)
     SXC::Profiler::SetGpu(nullptr);           // SXC: the frame profiler's GPU times (the pools go below)
     frame::ReleaseSwapchain();
     this->IReleasePools();
