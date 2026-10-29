@@ -4,6 +4,7 @@
 // its stock material asks for (the terrain's batches keep that format once built), the liquid code's
 // constants, then ours.
 #include "SXC/Water/Water.h"
+#include "SXC/Water/Surface.h"
 
 #include <algorithm>
 #include <chrono>
@@ -20,6 +21,7 @@
 #include "SXC/Log.h"
 #include "SXC/Settings/Settings.h"
 #include "SXC/ThirdParty/imgui/imgui.h"
+#include "WoW/Source/DB/DBClient/DBClient.h"
 #include "WoW/Source/LiquidSystem/Liquid.h"
 #include "WoW/Source/WorldClient/DayNight.h"
 #include "WoW/Source/WorldClient/DayNight__DNInfo.h"
@@ -40,40 +42,28 @@ namespace {
     }
 
     // Our pixel registers (Water.frag): p6 = (time, debug view, ripple strength, 0), p7 the sky's zenith,
-    // p8 its horizon, p9..p11 the look below.
+    // p8 its horizon, p9..p11 the look, p12 = (shallow colour, colour mode), p13 = (deep colour, wave scale).
     constexpr uint32_t kPixelFirst = 6;
-    constexpr uint32_t kPixelRows = 6;
+    constexpr uint32_t kPixelRows = 8;
     constexpr float kRippleStrength = 1.0f;
 
-    // The look, as the Water panel sets it (live, not saved: the values go into the LiquidSurface table
-    // per water later). The defaults are the first tuning (Seyri, 2026-10-28).
-    struct Look {
-        // The water.
-        float clarityClear = 0.01f;   // absorption per yd where the stock tint's alpha is 0 ..
-        float clarityMurky = 0.12f;   // .. and where it is 1
-        float scatter = 0.65f;        // the water's own colour, x the stock tint
-        float refraction = 0.6f;      // how far the ripples bend the scene behind
-        // The surface.
-        float reflectivity = 0.02f;   // Fresnel looking straight down (real water 0.02)
-        float reflection = 1.0f;      // x the reflection
+    // The Water panel: test values over every water while `test` is on (not saved), and what isn't per
+    // water (the wind override, screen-space reflections, the debug view).
+    struct Panel {
+        bool test = false;
+        SXC::Water::Look look;
         bool screenReflections = true;
-        float window = 0.3f;          // Snell's window from below (cos; real water 0.66)
-        float glint = 1.5f;           // the sun's highlight
-        float glintSharpness = 600.0f;
-        // The waves.
-        float amplitude = 0.35f;
-        float chop = 1.2f;
-        float spread = 0.3f;
-        float foam = 1.0f;
-        float foamThreshold = 0.95f;  // the Jacobian below which crests foam
-        float move = 1.0f;            // the surface's displacement (0 flat; the height above sets how far)
         bool windOverride = false;    // the panel's wind instead of the mod's
         float windSpeed = 6.0f;       // yd / s
         float windAngle = 0.0f;       // degrees, 0 = +x
-        // The debug view (Water.frag).
         int debugView = 0;
     };
-    Look s_look;
+    Panel s_panel;
+
+    // The look a water draws with: the panel's test values, else its LiquidSurface row.
+    const SXC::Water::Look& LookFor(uint32_t liquidType) {
+        return s_panel.test ? s_panel.look : SXC::Water::SurfaceLook(liquidType);
+    }
 
     // Why the stock material kept a draw (the Water panel's counts).
     enum class Reason { Inactive, NotWater, NoTint, Shaders, Capture, Count };
@@ -285,17 +275,28 @@ namespace SXC::Water {
         dt = dt < 0.0f ? 0.0f : (dt > 0.5f ? 0.5f : dt);
         s_lastTime = waves.time;
         WindForWaves(waves, dt);
-        waves.amplitude = s_look.amplitude;
-        waves.chop = s_look.chop;
-        waves.spread = s_look.spread;
-        waves.foam = s_look.foam;
-        waves.move = s_look.move;
+        // The shared sea's spectrum from the water the player is in (looked up four times a second).
+        static uint32_t s_typeHere = 0;
+        static auto s_typeChecked = std::chrono::steady_clock::time_point();
+        const auto now = std::chrono::steady_clock::now();
 
-        if (s_look.windOverride) {
-            const float angle = s_look.windAngle * 0.017453292f;
+        if (now - s_typeChecked > std::chrono::milliseconds(250)) {
+            s_typeChecked = now;
+            s_typeHere = SXC::Water::LiquidTypeHere();
+        }
+
+        const SXC::Water::Look& sea = LookFor(s_typeHere);
+        waves.amplitude = sea.amplitude;
+        waves.chop = sea.chop;
+        waves.spread = sea.spread;
+        waves.foam = sea.foam;
+        waves.move = sea.move;
+
+        if (s_panel.windOverride) {
+            const float angle = s_panel.windAngle * 0.017453292f;
             waves.windX = std::cos(angle);
             waves.windY = std::sin(angle);
-            waves.speed = s_look.windSpeed;
+            waves.speed = s_panel.windSpeed;
         }
 
         waves.rebuild = s_rebuildWaves;
@@ -405,7 +406,7 @@ namespace SXC::Water {
 
         float rows[kPixelRows * 4] = {};
         rows[0] = RippleTime();
-        rows[1] = static_cast<float>(s_look.debugView);
+        rows[1] = static_cast<float>(s_panel.debugView);
         rows[2] = kRippleStrength;
         const DayNight::DNInfo* info = DayNight::GetInfo();
 
@@ -414,12 +415,15 @@ namespace SXC::Water {
             SkyRow(&rows[8], info->m_bands.m_skyColors[4]);
         }
 
-        const float look[12] = {
-            s_look.clarityClear, s_look.clarityMurky, s_look.scatter, s_look.refraction,
-            s_look.reflectivity, s_look.reflection, s_look.window, s_look.screenReflections ? 1.0f : 0.0f,
-            s_look.glint, s_look.glintSharpness, s_look.foamThreshold, 0.0f,
+        const SXC::Water::Look& look = LookFor(SXC::Water::LiquidTypeOf(instance->m_settings));
+        const float values[20] = {
+            look.clarityClear, look.clarityMurky, look.scatter, look.refraction,
+            look.reflectivity, look.reflection, look.window, s_panel.screenReflections ? 1.0f : 0.0f,
+            look.glint, look.glintSharpness, sea.foamThreshold, 0.0f,
+            look.shallow[0], look.shallow[1], look.shallow[2], static_cast<float>(look.colourMode),
+            look.deep[0], look.deep[1], look.deep[2], look.waveScale,
         };
-        std::memcpy(&rows[12], look, sizeof(look));
+        std::memcpy(&rows[12], values, sizeof(values));
 
         g_theGxDevicePtr->ShaderConstantsSet(GxSh_Pixel, kPixelFirst, rows, kPixelRows);
 
@@ -431,7 +435,6 @@ namespace SXC::Water {
     }
 
     void DrawPanel(void*) {
-        const Look defaults;
         bool on = OurShader().Get();
 
         if (ImGui::Checkbox("Our water", &on)) {
@@ -458,48 +461,93 @@ namespace SXC::Water {
         if (ImGui::Button("Rebuild waves")) {
             s_rebuildWaves = true;
         }
-        ImGui::TextWrapped("Live values for tuning, not saved: they go into the LiquidSurface table per water later.");
+        // The look: each water's LiquidSurface row, or the test values below over every water.
+        const uint32_t here = SXC::Water::LiquidTypeHere();
+        const LiquidTypeRec* hereRec = here ? g_liquidTypeDB.GetRecord(here) : nullptr;
+        ImGui::Separator();
+        ImGui::Text("Water here: %s", here ? (hereRec && hereRec->m_name ? hereRec->m_name : "?") : "none");
+
+        if (here) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("(LiquidType %u)", here);
+        }
+
+        ImGui::Checkbox("Test values over every water (not saved)", &s_panel.test);
+
+        if (here && ImGui::Button("Load this water's row")) {
+            s_panel.look = SXC::Water::SurfaceLook(here);
+            s_panel.test = true;
+        }
+
+        if (here) {
+            ImGui::SameLine();
+
+            if (ImGui::Button("Write to this water's row")) {
+                if (SXC::Water::WriteSurfaceRow(here, s_panel.look)) {
+                    s_panel.test = false;
+                }
+            }
+
+            ImGui::TextDisabled("Writes the test values into LiquidSurface (this LiquidType, everywhere); save in the Data view.");
+        }
 
         static const char* const kViews[] = { "Off", "Reflection hits (red: sky)", "Water crossed (white 20 yd)", "Normal",
                                               "Folding / foam", "Reflection alone", "Scene behind", "Screen mapping check (black: right)",
                                               "Reflection search outcome (blue: sky on screen)", "Depth conversion self-test (black: right)", "Movement easing (white: moves)" };
-        ImGui::Combo("Debug view", &s_look.debugView, kViews, IM_ARRAYSIZE(kViews));
+        ImGui::Combo("Debug view", &s_panel.debugView, kViews, IM_ARRAYSIZE(kViews));
+        ImGui::Checkbox("Screen-space reflections", &s_panel.screenReflections);
+        ImGui::Checkbox("Override the wind", &s_panel.windOverride);
+
+        if (s_panel.windOverride) {
+            ImGui::SliderFloat("Wind speed (yd/s)", &s_panel.windSpeed, 0.5f, 25.0f);
+            ImGui::SliderFloat("Wind direction", &s_panel.windAngle, 0.0f, 360.0f, "%.0f deg");
+        }
+
+        if (!s_panel.test) {
+            ImGui::TextDisabled("The sliders below are the test values; tick the box above to see them.");
+        }
+
+        SXC::Water::Look& l = s_panel.look;
 
         if (ImGui::CollapsingHeader("Water", ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::SliderFloat("Absorption, clear (/yd)", &s_look.clarityClear, 0.0f, 0.2f, "%.3f");
-            ImGui::SliderFloat("Absorption, murky (/yd)", &s_look.clarityMurky, 0.0f, 0.6f, "%.3f");
-            ImGui::SliderFloat("Own colour (x tint)", &s_look.scatter, 0.0f, 1.5f);
-            ImGui::SliderFloat("Refraction", &s_look.refraction, 0.0f, 3.0f);
+            ImGui::SliderFloat("Absorption, clear (/yd)", &l.clarityClear, 0.0f, 0.2f, "%.3f");
+            ImGui::SliderFloat("Absorption, murky (/yd)", &l.clarityMurky, 0.0f, 0.6f, "%.3f");
+            ImGui::SliderFloat("Own colour (x tint)", &l.scatter, 0.0f, 1.5f);
+            ImGui::SliderFloat("Refraction", &l.refraction, 0.0f, 3.0f);
+        }
+
+        if (ImGui::CollapsingHeader("Colour", ImGuiTreeNodeFlags_DefaultOpen)) {
+            static const char* const kModes[] = { "Stock (the light data, through the day)", "Hue (stock brightness, our hue)", "Replace" };
+            int mode = static_cast<int>(l.colourMode);
+
+            if (ImGui::Combo("Colour mode", &mode, kModes, IM_ARRAYSIZE(kModes))) {
+                l.colourMode = static_cast<SXC::Water::ColourMode>(mode);
+            }
+
+            ImGui::ColorEdit3("Shallow", l.shallow);
+            ImGui::ColorEdit3("Deep", l.deep);
         }
 
         if (ImGui::CollapsingHeader("Surface", ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::SliderFloat("Reflectivity (straight down)", &s_look.reflectivity, 0.0f, 0.5f, "%.3f");
-            ImGui::SliderFloat("Reflection strength", &s_look.reflection, 0.0f, 4.0f);
-            ImGui::Checkbox("Screen-space reflections", &s_look.screenReflections);
-            ImGui::SliderFloat("Window from below (cos)", &s_look.window, 0.0f, 0.9f);
-            ImGui::SliderFloat("Sun glint", &s_look.glint, 0.0f, 6.0f);
-            ImGui::SliderFloat("Glint sharpness", &s_look.glintSharpness, 20.0f, 2000.0f, "%.0f", ImGuiSliderFlags_Logarithmic);
+            ImGui::SliderFloat("Reflectivity (straight down)", &l.reflectivity, 0.0f, 0.5f, "%.3f");
+            ImGui::SliderFloat("Reflection strength", &l.reflection, 0.0f, 4.0f);
+            ImGui::SliderFloat("Window from below (cos)", &l.window, 0.0f, 0.9f);
+            ImGui::SliderFloat("Glint", &l.glint, 0.0f, 6.0f);
+            ImGui::SliderFloat("Glint sharpness", &l.glintSharpness, 20.0f, 2000.0f, "%.0f", ImGuiSliderFlags_Logarithmic);
         }
 
         if (ImGui::CollapsingHeader("Waves", ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::SliderFloat("Height", &s_look.amplitude, 0.0f, 2.0f);
-            ImGui::SliderFloat("Surface movement", &s_look.move, 0.0f, 2.0f);
-            ImGui::SliderFloat("Choppiness", &s_look.chop, 0.0f, 3.0f);
-            ImGui::SliderFloat("Spread", &s_look.spread, 0.0f, 1.0f);
-            ImGui::SliderFloat("Foam", &s_look.foam, 0.0f, 3.0f);
-            ImGui::SliderFloat("Foam threshold", &s_look.foamThreshold, 0.0f, 1.5f);
-            ImGui::Checkbox("Override the wind", &s_look.windOverride);
-
-            if (s_look.windOverride) {
-                ImGui::SliderFloat("Wind speed (yd/s)", &s_look.windSpeed, 0.5f, 25.0f);
-                ImGui::SliderFloat("Wind direction", &s_look.windAngle, 0.0f, 360.0f, "%.0f deg");
-            }
+            ImGui::SliderFloat("Wave scale (this water)", &l.waveScale, 0.0f, 3.0f);
+            ImGui::SliderFloat("Height (the sea)", &l.amplitude, 0.0f, 2.0f);
+            ImGui::SliderFloat("Surface movement", &l.move, 0.0f, 2.0f);
+            ImGui::SliderFloat("Choppiness (the sea)", &l.chop, 0.0f, 3.0f);
+            ImGui::SliderFloat("Spread (the sea)", &l.spread, 0.0f, 1.0f);
+            ImGui::SliderFloat("Foam", &l.foam, 0.0f, 3.0f);
+            ImGui::SliderFloat("Foam threshold (the sea)", &l.foamThreshold, 0.0f, 1.5f);
         }
 
-        if (ImGui::Button("Reset to defaults")) {
-            const int view = s_look.debugView;
-            s_look = defaults;
-            s_look.debugView = view;
+        if (ImGui::Button("Reset the test values")) {
+            l = SXC::Water::Look();
         }
     }
 }

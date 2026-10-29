@@ -59,7 +59,7 @@ void main()
         // WMO liquid carries no depth here, so it stays still. The liquid map's shore field does this
         // properly later.
         float deep = smoothstep(0.05, 0.6, inDepth.y);
-        rel.xyz += d * (scene.waveLook.w * deep);
+        rel.xyz += d * (scene.waveLook.w * deep * regs.p[13].w);   // p13.w: this water's wave scale
     }
 
     vec4 view = regs.v[50] * rel.x + regs.v[51] * rel.y + regs.v[52] * rel.z + regs.v[53] * rel.w;

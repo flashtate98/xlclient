@@ -20,7 +20,7 @@
 // the debug view; ripple strength; 0), p7 the sky's zenith, p8 its horizon, p9 = (clarity: absorption per yd
 // at the stock alpha 0 and 1; scatter brightness; refraction), p10 = (reflectivity looking straight down;
 // reflection strength; Snell's window (cos); screen-space reflections on), p11 = (glint strength; glint
-// sharpness; foam threshold (Jacobian); 0).
+// sharpness; foam threshold (Jacobian); 0), p12 = (shallow colour; colour mode), p13 = (deep colour; wave scale).
 #version 450
 #extension GL_GOOGLE_include_directive : require
 
@@ -275,6 +275,24 @@ vec4 ScreenReflection(vec3 origin, vec3 dir, float upward)
 void main()
 {
     vec4 tint = texture(s0, vTint);
+
+    // The water's colour by its LiquidSurface row (p12 = shallow, mode; p13 = deep): stock, or our colours from
+    // the shore to a few yards down, either with the stock brightness (Hue: it still darkens through the
+    // day) or as they are (Replace). The alpha (the murk) stays the stock one.
+    int colourMode = int(regs.p[12].w + 0.5);
+
+    if (colourMode != 0)
+    {
+        vec3 ours = mix(regs.p[12].rgb, regs.p[13].rgb, clamp(vTint.y, 0.0, 1.0));
+
+        if (colourMode == 1)
+        {
+            const vec3 kLuma = vec3(0.299, 0.587, 0.114);
+            ours *= dot(tint.rgb, kLuma) / max(dot(ours, kLuma), 1e-3);
+        }
+
+        tint.rgb = ours;
+    }
     vec3 world = LightsViewToWorld(vView.xyz);
     vec3 eye = LightsViewToWorld(vec3(0.0));
     vec3 toEye = eye - world;
@@ -284,7 +302,8 @@ void main()
 
     // The FFT waves when the device runs them, else the small ripples.
     float folding = 0.0;
-    vec2 slope = scene.waveSizes.w > 0.5 ? WaveSlope(world.xy, distance, folding) : RippleSlope(world.xy, regs.p[6].x, distance) * regs.p[6].z;
+    // This water's share of the shared sea (its row's WaveScale, p13.w).
+    vec2 slope = (scene.waveSizes.w > 0.5 ? WaveSlope(world.xy, distance, folding) : RippleSlope(world.xy, regs.p[6].x, distance) * regs.p[6].z) * regs.p[13].w;
     vec3 N = normalize(vec3(-slope, 1.0));
 
     if (below)

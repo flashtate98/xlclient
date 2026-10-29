@@ -4,6 +4,7 @@
 #include "SXC/Data/Data.h"
 #include "SXC/Settings/Settings.h"
 #include "SXC/Terrain/TextureParams.h"
+#include "SXC/Water/Surface.h"
 
 namespace SXC::Api {
     void Keep();
@@ -30,6 +31,7 @@ namespace SXC {
         // The services mods reach through the sxc.bridge mod (SXC/Api): keep their object linked.
         Api::Keep();
         Terrain::Register();
+        Water::RegisterSurface();  // the LiquidSurface table
         Data::Start();
         EventRegister(EVENT_ID_IDLE, Idle);
     }
