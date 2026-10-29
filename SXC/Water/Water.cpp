@@ -15,7 +15,6 @@
 #include "Engine/Source/Gx/Gx.h"
 #include "Engine/Source/Model2/M2Light.h"
 #include "Engine/Source/Storm/H/storm.h"
-#include "SXC/Fog/Fog.h"
 #include "SXC/Grass/Grass.h"
 #include "SXC/Sky/Sky.h"
 #include "SXC/Log.h"
@@ -349,7 +348,13 @@ namespace SXC::Water {
         g_theGxDevicePtr->PrimIndexPtr(indexBuf);
 
         g_theGxDevicePtr->RsSet(GxRs_Culling, 0);
-        g_theGxDevicePtr->RsSet(GxRs_DepthWrite, SXC::Fog::WaterWritesDepth() ? 1 : 0);
+        // Opaque to the depth buffer like any solid surface: our water covers what lies behind it itself (the
+        // scene's copy), and its moving surface hides parts of itself. Without writing depth, whichever patch
+        // the (unsorted) liquid list drew last painted over the others: chunk-shaped steps of the wrong wave,
+        // waves behind a character drawn over her (Seyri, 2026-10-29). The test explicitly too: the liquid
+        // pass inherits it from whatever drew before.
+        g_theGxDevicePtr->RsSet(GxRs_DepthTest, 1);
+        g_theGxDevicePtr->RsSet(GxRs_DepthWrite, 1);
         g_theGxDevicePtr->RsSet(GxRs_BlendingMode, 2);
         GxUpdateAlphaRef(GxRs_AlphaRef);
         g_theGxDevicePtr->RsSet(GxRs_Fog, 1);
