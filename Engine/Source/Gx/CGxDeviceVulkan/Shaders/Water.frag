@@ -31,6 +31,7 @@
 layout(location = 0) in vec4 vView;
 layout(location = 1) in vec4 vColor;
 layout(location = 2) in vec2 vTint;
+layout(location = 3) in float vEase;
 
 layout(location = 0) out vec4 oC0;
 
@@ -443,6 +444,11 @@ void main()
         float z = (scene.depthProj.y - ndc * scene.depthProj.w) / (ndc * scene.depthProj.z - scene.depthProj.x);
         float w = z * scene.depthProj.z + scene.depthProj.w;
         fogged = vec3(clamp(abs(w - vView.w) / max(vView.w, 1e-3) * 10.0, 0.0, 1.0), 0.0, 0.0);
+    }
+    else if (debugView == 10)
+    {
+        // The surface movement's easing from the depth byte: black still (the shore), white moving fully.
+        fogged = vec3(vEase);
     }
     else if (debugView == 7)
     {

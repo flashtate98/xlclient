@@ -8,8 +8,9 @@
 //
 // Step 3b: the surface moves with the FFT waves (WaterWaves.glsl's displacement, set 2 binding 4) at the
 // vertex's world position, so neighbouring patches agree at their edges. The stock mesh has a vertex about
-// every 4 yd: it carries the long waves (cascade 0, half of cascade 1 near the camera); the short ones stay
-// in the shading. How far: the wave height and the Look panel's "Surface movement" (WaterScene.waveLook.w).
+// every 4 yd: it carries the long waves (cascade 0, smoothed, the sideways part small, capped, fading with
+// distance); the short ones stay in the shading. How far: the wave height and the Look panel's "Surface
+// movement" (WaterScene.waveLook.w).
 #version 450
 #extension GL_GOOGLE_include_directive : require
 
@@ -24,20 +25,34 @@ layout(location = 2) in vec2 inDepth;   // texcoord1: the depth byte through the
 layout(location = 0) out vec4 vView;    // the point in view space, and its clip w (the fog's depth)
 layout(location = 1) out vec4 vColor;
 layout(location = 2) out vec2 vTint;    // where the tint gradient is read (Water.frag's s0)
+layout(location = 3) out float vEase;   // the movement's easing toward the shore (the debug view)
 
 layout(set = 2, binding = 4) uniform sampler2DArray waveDisp;   // per cascade: dx, dy, height (yd)
 
 void main()
 {
+    vEase = smoothstep(0.05, 0.6, inDepth.y);
     vec4 rel = regs.v[46] * inPos.x + regs.v[47] * inPos.y + regs.v[48] * inPos.z + regs.v[49];
     vec3 world = rel.xyz + regs.v[54].xyz;
 
     if (scene.waveSizes.w > 0.5 && scene.waveLook.w > 0.0)
     {
+        // Only what the mesh can hold, so the surface doesn't tear (Seyri, 2026-10-29: far-out waves at height
+        // and movement 1 grew choppy, then split apart): cascade 0 alone, averaged over the vertex spacing
+        // (shorter waves alias into spikes on a 4 yd mesh); the sideways part small (at full chop neighbouring
+        // vertices passed each other and the triangles turned over); capped; and fading out with distance,
+        // where the shading carries the waves alone.
         float distance = length(world - regs.p[5].xyz);
-        float near1 = clamp(1.0 - distance / scene.waveLook.x, 0.0, 1.0);
-        vec3 d = textureLod(waveDisp, vec3(world.xy / scene.waveSizes.x, 0.0), 0.0).xyz
-               + textureLod(waveDisp, vec3(world.xy / scene.waveSizes.y, 1.0), 0.0).xyz * (0.5 * near1);
+        float cascade0 = 1.0 / scene.waveSizes.x;
+        const float kSpacing = 2.0;   // yd, half the stock mesh's
+        vec3 d = (textureLod(waveDisp, vec3(world.xy * cascade0, 0.0), 0.0).xyz * 2.0
+                + textureLod(waveDisp, vec3((world.xy + vec2(kSpacing, 0.0)) * cascade0, 0.0), 0.0).xyz
+                + textureLod(waveDisp, vec3((world.xy - vec2(kSpacing, 0.0)) * cascade0, 0.0), 0.0).xyz
+                + textureLod(waveDisp, vec3((world.xy + vec2(0.0, kSpacing)) * cascade0, 0.0), 0.0).xyz
+                + textureLod(waveDisp, vec3((world.xy - vec2(0.0, kSpacing)) * cascade0, 0.0), 0.0).xyz) / 6.0;
+        d.xy *= 0.3;
+        d = clamp(d, vec3(-1.0), vec3(1.0));
+        d *= 1.0 - smoothstep(150.0, 260.0, distance);
         // Eased out toward the shore by the vertex's own depth (the MH2O depth byte through the depth table:
         // 0 at the waterline, 1 a few yards deep): moved at the beach, the water's edge rose above the sand
         // and showed its steps (Seyri, 2026-10-29). The coast stays put and joins, open water moves fully.
