@@ -639,6 +639,11 @@ bool CGxDeviceVulkan::SxcWaterCapture(const SXC::Water::Waves& waves) {
     in.waves.move = waves.move;
     in.waves.bodies = waves.bodies < 4 ? waves.bodies : 4;
     std::memcpy(in.waves.body, waves.body, sizeof in.waves.body);
+    in.looks.index = waves.lookIndex;
+    in.looks.palette = waves.lookPalette;
+    in.looks.count = waves.lookCount;
+    in.looks.originX = waves.lookOriginX;
+    in.looks.originY = waves.lookOriginY;
     return gxvk::vk::water::Capture(in);
 }
 

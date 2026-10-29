@@ -1,10 +1,16 @@
 // Our water's look per water (kb: water-shader): the LiquidSurface table (DBFilesClient\LiquidSurface.cdbc).
-// A row per LiquidType (0: every water) and place (Scope: empty everywhere, a map's folder name, an ADT's
-// "Map_x_y"); the most specific row for a water wins, its type's before the "every water" row. Without a
+// A row per LiquidType (0: every water) and place (Scope: empty everywhere, a map's folder name, an area's
+// name or "area:<ID>", an ADT's "Map_x_y"); the most specific row for a water wins, its type's before the
+// "every water" row: a tile over an area (a sub-area over its zone) over a map over everywhere. Without a
 // row, the defaults below (the first tuning, Seyri 2026-10-28).
+//
+// Terrain water reads its look per position: the look grid (64 x 64 terrain chunks around the player, an
+// index per chunk into a short palette of looks), which the water's vertex stage blends between chunk
+// centres, so looks fade into each other over a chunk (~33 yd) where areas meet.
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 namespace SXC::Water {
     // How a row's colour treats the stock one (the light data's shallow and deep water colour, through
@@ -36,11 +42,32 @@ namespace SXC::Water {
         float move = 1.0f;            // the surface's displacement (0 flat)
     };
 
+    // A look as the water shaders read it: five vec4s (Water.vert's look, Water.cpp's p9..p13).
+    constexpr uint32_t kPackedLook = 20;
+    void PackLook(const Look& look, float out[kPackedLook]);
+
+    // The look grid (SurfaceGrid): `index` per chunk (row-major, y then x; chunk x runs along world -y and
+    // chunk y along world -x, as the client counts them) into `palette`.
+    constexpr int32_t kGridSize = 64;
+    constexpr uint32_t kPaletteSize = 64;
+
+    struct LookGrid {
+        bool valid = false;
+        int32_t originX = 0, originY = 0;   // the chunk at index 0
+        uint8_t index[kGridSize * kGridSize] = {};
+        uint32_t paletteCount = 0;
+        float palette[kPaletteSize][kPackedLook] = {};
+    };
+
     // Registers the table (SXC::Startup).
     void RegisterSurface();
 
-    // The look of a LiquidType where the player is (cached; follows the table's edits).
-    const Look& SurfaceLook(uint32_t liquidType);
+    // The look grid around the player (rebuilt twice a second, and when the table changes).
+    const LookGrid& SurfaceGrid();
+
+    // The look of a LiquidType at a world point (its chunk's area and tile, from the grid; the player's
+    // place outside it).
+    const Look& SurfaceLookAt(uint32_t liquidType, float x, float y);
 
     // The LiquidType of a liquid instance's settings (the settings bank is indexed by type); 0 when unknown.
     uint32_t LiquidTypeOf(const void* settings);
@@ -48,7 +75,16 @@ namespace SXC::Water {
     // The LiquidType the player stands or swims in, 0 when none.
     uint32_t LiquidTypeHere();
 
-    // The Water panel's buttons: the row for a LiquidType everywhere (Scope empty), made if missing, set
-    // from `look`; false when the table isn't there. Saving is the Data view's.
-    bool WriteSurfaceRow(uint32_t liquidType, const Look& look);
+    // The places a row can name where the player is (the Water panel's "Write" choice).
+    enum class ScopeKind : int32_t { Everywhere = 0, Map = 1, Zone = 2, SubArea = 3, Tile = 4 };
+
+    // The Scope text for a kind of place here ("" when there is none, e.g. no sub-area), and a label for it.
+    bool ScopeHere(ScopeKind kind, std::string& scope, std::string& label);
+
+    // The Water panel's buttons: the row for a LiquidType and Scope, made if missing, set from `look`;
+    // false when the table isn't there. Saving is the Data view's.
+    bool WriteSurfaceRow(uint32_t liquidType, const std::string& scope, const Look& look);
+
+    // The player's position in the world (false when not in the world).
+    bool PlayerPosition(float& x, float& y);
 }

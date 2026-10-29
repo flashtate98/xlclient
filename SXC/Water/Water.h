@@ -31,6 +31,12 @@ namespace SXC::Water {
         // toward it, its angular radius (rad), its colour.
         uint32_t bodies = 0;
         float body[4][7] = {};
+        // The look grid (SXC/Water/Surface.h's LookGrid): 64 x 64 chunk indices into up to 64 packed looks of
+        // 20 floats; null when there is none (the draws then take their own look).
+        const uint8_t* lookIndex = nullptr;
+        const float* lookPalette = nullptr;
+        uint32_t lookCount = 0;
+        int32_t lookOriginX = 0, lookOriginY = 0;
     };
 
     // The device's copy of the scene behind the water and its waves, once per frame (later calls the same

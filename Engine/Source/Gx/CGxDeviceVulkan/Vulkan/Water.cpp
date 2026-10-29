@@ -43,6 +43,9 @@ namespace
         float depthRange[4];   ///< and its depth range (min, max); w: how many sky bodies follow
         float bodyDir[4][4];   ///< the sky's bodies: direction toward each (unit), its angular radius (rad)
         float bodyColour[4][4];
+        float lookGrid[4];     ///< the look grid's first chunk (x, y), 1 when it holds looks, 0
+        uint32_t lookIndex[gxvk::vk::water::kLookGrid * gxvk::vk::water::kLookGrid / 4];   ///< a byte per chunk (uvec4s)
+        float lookPalette[gxvk::vk::water::kLookPalette * gxvk::vk::water::kLookFloats];
     };
 
     // The waves (Shaders/WaterWaves.glsl): N x N per cascade, three cascades.
@@ -671,6 +674,15 @@ namespace gxvk::vk::water
         {
             std::memcpy(p.bodyDir[b], in.waves.body[b], 4 * sizeof(float));
             std::memcpy(p.bodyColour[b], &in.waves.body[b][4], 3 * sizeof(float));
+        }
+        if (in.looks.index && in.looks.palette && in.looks.count)
+        {
+            const uint32_t count = in.looks.count < kLookPalette ? in.looks.count : kLookPalette;
+            p.lookGrid[0] = static_cast<float>(in.looks.originX);
+            p.lookGrid[1] = static_cast<float>(in.looks.originY);
+            p.lookGrid[2] = 1.0f;
+            std::memcpy(p.lookIndex, in.looks.index, sizeof p.lookIndex);
+            std::memcpy(p.lookPalette, in.looks.palette, count * kLookFloats * sizeof(float));
         }
         std::memcpy(slot.params.block.mapped, &p, sizeof p);
         memory::FlushHost(slot.params.block);

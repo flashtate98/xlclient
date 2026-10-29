@@ -1,35 +1,44 @@
-// The LiquidSurface table (SXC/Water/Surface.h).
+// The LiquidSurface table and the look grid (SXC/Water/Surface.h).
 #include "SXC/Water/Surface.h"
 
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include "Engine/Source/Tempest/CMath.h"
 #include "SXC/Data/Data.h"
 #include "WoW/Source/DB/DBClient/DBClient.h"
 #include "WoW/Source/LiquidSystem/Liquid.h"
 #include "WoW/Source/Object/ObjectClient/Player_C.h"
 #include "WoW/Source/ObjectMgrClient/ObjectMgrClient.h"
+#include "WoW/Source/WorldClient/CChunkLiquid.h"
 #include "WoW/Source/WorldClient/Map.h"
 #include "WoW/Source/WorldClient/MapArea.h"
+#include "WoW/Source/WorldClient/MapChunk.h"
 
 namespace SXC::Water {
     namespace {
         const Look kDefaults;
 
+        // The client's world grid: 64 tiles of 16 chunks; chunk x runs along -y, chunk y along -x.
+        constexpr float kHalfWorld = 32.0f * 533.33333f;
+        constexpr float kChunk = 533.33333f / 16.0f;
+
         Data::Schema MakeSchema() {
             Data::Schema s("LiquidSurface", "DBFilesClient\\LiquidSurface.cdbc");
             s.Description("Our water's look per water: a row per LiquidType (0: every water) and place. The most specific row wins: the "
-                          "water's own type before the every-water row, a tile before a map before everywhere. The Water panel's "
-                          "\"Write to this water's row\" fills one; save here.");
+                          "water's own type before the every-water row, then a tile before an area (a sub-area before its zone) before a "
+                          "map before everywhere. Looks fade into each other over a terrain chunk (~33 yd) where places meet. The Water "
+                          "panel's \"Write\" fills one; save here.");
             s.Id();
             s.Uint("LiquidType").Group("Place").Tooltip("LiquidType.dbc's ID (1 Water, 2 Ocean, 17 WMO Water - Interior, ...); 0: every water.");
-            s.String("Scope").Group("Place").Tooltip("Empty: everywhere. A map's folder name (\"Kalimdor\"): that map. An ADT's name "
-                                                     "(\"Kalimdor_23_30\"): that tile. Any case. Read where the player is.");
+            s.String("Scope").Group("Place").Tooltip("Empty: everywhere. A map's folder name (\"Kalimdor\"): that map. An area's name "
+                                                     "(\"Elwynn Forest\", \"Crystal Lake\"; every area of that name) or \"area:<AreaTable ID>\": "
+                                                     "that area and its sub-areas. An ADT's name (\"Kalimdor_23_30\"): that tile. Any case.");
             s.Float("ClarityClear").Group("Water").Default(kDefaults.clarityClear).Range(0, 0.5)
                 .Tooltip("Absorption per yd where the stock tint's alpha is 0 (clear). Red goes first: the deep turns to the water's colour.");
             s.Float("ClarityMurky").Group("Water").Default(kDefaults.clarityMurky).Range(0, 1).Tooltip("Absorption per yd where the stock alpha is 1.");
@@ -68,39 +77,118 @@ namespace SXC::Water {
             return out;
         }
 
-        enum class Kind { Global, Map, Tile };
+        std::string Trimmed(const std::string& text) {
+            const size_t begin = text.find_first_not_of(" \t");
+            return begin == std::string::npos ? std::string() : text.substr(begin, text.find_last_not_of(" \t") + 1 - begin);
+        }
+
+        bool Digits(const std::string& t) {
+            return !t.empty() && t.find_first_not_of("0123456789") == std::string::npos;
+        }
+
+        // The AreaTable rows by name (lower case), made once the table is there.
+        std::unordered_map<std::string, std::vector<uint32_t>> s_areasByName;
+
+        const std::unordered_map<std::string, std::vector<uint32_t>>& AreasByName() {
+            if (s_areasByName.empty()) {
+                for (int32_t i = 0; i < g_areaTableDB.m_numRecords; i++) {
+                    const AreaTableRec* rec = g_areaTableDB.GetRecordByIndex(i);
+
+                    if (rec && rec->m_areaName && rec->m_areaName[0]) {
+                        s_areasByName[Lower(rec->m_areaName)].push_back(static_cast<uint32_t>(rec->m_id));
+                    }
+                }
+            }
+
+            return s_areasByName;
+        }
+
+        bool IsMapName(const std::string& lower) {
+            for (int32_t i = 0; i < g_mapDB.m_numRecords; i++) {
+                const MapRec* rec = g_mapDB.GetRecordByIndex(i);
+
+                if (rec && rec->m_directory && Lower(rec->m_directory) == lower) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        // An area and its parents (sub-area -> zone), the area first.
+        const std::vector<uint32_t>& AreaChain(uint32_t area) {
+            static std::unordered_map<uint32_t, std::vector<uint32_t>> s_chains;
+            const auto found = s_chains.find(area);
+
+            if (found != s_chains.end()) {
+                return found->second;
+            }
+
+            std::vector<uint32_t> chain;
+
+            // The cap guards against a malformed (cyclic) table.
+            for (uint32_t id = area; id && chain.size() < 8;) {
+                chain.push_back(id);
+                const AreaTableRec* rec = g_areaTableDB.GetRecord(static_cast<int32_t>(id));
+
+                if (!rec || static_cast<uint32_t>(rec->m_parentAreaID) == id) {
+                    break;
+                }
+
+                id = static_cast<uint32_t>(rec->m_parentAreaID);
+            }
+
+            return s_chains.emplace(area, std::move(chain)).first->second;
+        }
+
+        enum class Kind { Global, Map, Area, Tile };
 
         struct Entry {
             uint32_t liquidType = 0;
             Kind kind = Kind::Global;
             std::string map;
             int32_t x = 0, y = 0;
+            std::vector<uint32_t> areas;   // Kind::Area: every area the Scope names
             Look look;
         };
 
         Entry ParseScope(const std::string& scope) {
             Entry e;
-            const size_t begin = scope.find_first_not_of(" \t");
+            const std::string trimmed = Lower(Trimmed(scope));
 
-            if (begin == std::string::npos) {
+            if (trimmed.empty()) {
                 return e;
             }
 
-            const std::string trimmed = Lower(scope.substr(begin, scope.find_last_not_of(" \t") + 1 - begin));
+            if (trimmed.rfind("area", 0) == 0 && trimmed.size() > 5 && (trimmed[4] == ':' || trimmed[4] == ' ') && Digits(Trimmed(trimmed.substr(5)))) {
+                e.kind = Kind::Area;
+                e.areas.push_back(static_cast<uint32_t>(std::atoi(Trimmed(trimmed.substr(5)).c_str())));
+                return e;
+            }
+
             const size_t second = trimmed.rfind('_');
             const size_t first = second == std::string::npos || second == 0 ? std::string::npos : trimmed.rfind('_', second - 1);
-            auto digits = [](const std::string& t) { return !t.empty() && t.find_first_not_of("0123456789") == std::string::npos; };
 
-            if (first != std::string::npos && digits(trimmed.substr(first + 1, second - first - 1)) && digits(trimmed.substr(second + 1))) {
+            if (first != std::string::npos && Digits(trimmed.substr(first + 1, second - first - 1)) && Digits(trimmed.substr(second + 1))) {
                 e.kind = Kind::Tile;
                 e.map = trimmed.substr(0, first);
                 e.x = std::atoi(trimmed.c_str() + first + 1);
                 e.y = std::atoi(trimmed.c_str() + second + 1);
-            } else {
-                e.kind = Kind::Map;
-                e.map = trimmed;
+                return e;
             }
 
+            // A map's folder name first; else an area's name; else a map we don't know (it never applies).
+            const auto& byName = AreasByName();
+            const auto area = byName.find(trimmed);
+
+            if (!IsMapName(trimmed) && area != byName.end()) {
+                e.kind = Kind::Area;
+                e.areas = area->second;
+                return e;
+            }
+
+            e.kind = Kind::Map;
+            e.map = trimmed;
             return e;
         }
 
@@ -119,19 +207,48 @@ namespace SXC::Water {
         uint32_t s_generation = ~0u;
         std::vector<Entry> s_entries;
 
-        // Where the player is: the map's folder name (lower case), the ADT; refreshed four times a second.
+        // Where the player is: the map's folder name (lower case), the chunk, its tile and area.
         std::string s_map;
+        int32_t s_chunkX = -1, s_chunkY = -1;
         int32_t s_tileX = -1, s_tileY = -1;
+        uint32_t s_area = 0;
         std::chrono::steady_clock::time_point s_placeChecked;
-        uint32_t s_placeVersion = 0;
 
-        // The resolved looks for this generation and place.
-        std::unordered_map<uint32_t, Look> s_resolved;
-        uint32_t s_resolvedGeneration = ~0u, s_resolvedPlace = ~0u;
+        // Which row a (LiquidType, area, tile) takes, for this generation and map: an index into s_entries, -1 none.
+        std::unordered_map<uint64_t, int32_t> s_resolved;
+        uint32_t s_resolvedGeneration = ~0u;
+        std::string s_resolvedMap;
 
         CGPlayer_C* Player() {
             const WOWGUID guid = ClntObjMgrGetActivePlayer();
             return guid ? static_cast<CGPlayer_C*>(ClntObjMgrObjectPtr(guid, TYPE_PLAYER, __FILE__, __LINE__)) : nullptr;
+        }
+
+        // The chunk (client counting) a world point lies in; false outside the world.
+        bool ChunkOf(float x, float y, int32_t& cx, int32_t& cy) {
+            const float fx = (kHalfWorld - y) / kChunk, fy = (kHalfWorld - x) / kChunk;
+
+            if (!(fx >= 0.0f && fy >= 0.0f && fx < 1024.0f && fy < 1024.0f)) {
+                return false;
+            }
+
+            cx = static_cast<int32_t>(fx);
+            cy = static_cast<int32_t>(fy);
+            return true;
+        }
+
+        CMapArea* TileOf(int32_t cx, int32_t cy) {
+            if (cx < 0 || cy < 0 || cx >= 1024 || cy >= 1024) {
+                return nullptr;
+            }
+
+            CMapArea* area = CMap::m_areaTable[64 * (cy >> 4) + (cx >> 4)];
+            return area && !area->m_asyncObject ? area : nullptr;
+        }
+
+        CMapChunk* ChunkAt(int32_t cx, int32_t cy) {
+            CMapArea* tile = TileOf(cx, cy);
+            return tile ? tile->m_mapChunks[(cx & 0xF) + 16 * (cy & 0xF)] : nullptr;
         }
 
         void UpdatePlace() {
@@ -142,30 +259,20 @@ namespace SXC::Water {
             }
 
             s_placeChecked = now;
-            std::string map = Lower(CMap::mapName);
-            int32_t x = -1, y = -1;
+            s_map = Lower(CMap::mapName);
+            s_chunkX = s_chunkY = s_tileX = s_tileY = -1;
+            s_area = 0;
+            float x = 0.0f, y = 0.0f;
 
-            if (CGPlayer_C* player = Player()) {
-                // As CMap finds the area of a point (SXC/Terrain's CurrentTile).
-                const float half = 32.0f * 533.33333f;
-                const C3Vector p = player->GetPosition();
-                const float fx = -(p.x - half), fy = -(p.y - half);
-
-                if (fx >= 0.0f && fy >= 0.0f && fx < 2.0f * half && fy < 2.0f * half) {
-                    const int32_t cellX = CMath::fint_(fy * 0.24f - 0.5f), cellY = CMath::fint_(fx * 0.24f - 0.5f);
-
-                    if (const CMapArea* area = CMap::m_areaTable[64 * ((cellY >> 7) & 0x3F) + ((cellX >> 7) & 0x3F)]) {
-                        x = area->m_index.x;
-                        y = area->m_index.y;
-                    }
+            if (PlayerPosition(x, y) && ChunkOf(x, y, s_chunkX, s_chunkY)) {
+                if (CMapArea* tile = TileOf(s_chunkX, s_chunkY)) {
+                    s_tileX = tile->m_index.x;
+                    s_tileY = tile->m_index.y;
                 }
-            }
 
-            if (map != s_map || x != s_tileX || y != s_tileY) {
-                s_map = map;
-                s_tileX = x;
-                s_tileY = y;
-                s_placeVersion++;
+                if (CMapChunk* chunk = ChunkAt(s_chunkX, s_chunkY)) {
+                    s_area = static_cast<uint32_t>(chunk->m_areaId);
+                }
             }
         }
 
@@ -210,28 +317,213 @@ namespace SXC::Water {
                 l.foam = row.Float(foam);
                 l.foamThreshold = row.Float(threshold);
                 l.move = row.Float(move);
-                s_entries.push_back(e);
+                s_entries.push_back(std::move(e));
             }
         }
 
-        // The best row of one LiquidType here (a tile over a map over everywhere), or null.
-        const Entry* Best(uint32_t liquidType) {
-            const Entry* best = nullptr;
+        // How specific a row is at a place (higher wins), -1 when it doesn't apply there.
+        int32_t Rank(const Entry& e, const std::vector<uint32_t>& chain, int32_t tileX, int32_t tileY) {
+            switch (e.kind) {
+                case Kind::Global:
+                    return 0;
+                case Kind::Map:
+                    return e.map == s_map ? 1 : -1;
+                case Kind::Tile:
+                    return e.map == s_map && e.x == tileX && e.y == tileY ? 100 : -1;
+                case Kind::Area:
+                    // The deeper in the chain (a sub-area below its zone), the more specific.
+                    for (size_t k = 0; k < chain.size(); k++) {
+                        for (uint32_t id : e.areas) {
+                            if (id == chain[k]) {
+                                return 2 + static_cast<int32_t>(chain.size() - 1 - k);
+                            }
+                        }
+                    }
 
-            for (const Entry& e : s_entries) {
+                    return -1;
+            }
+
+            return -1;
+        }
+
+        int32_t Best(uint32_t liquidType, const std::vector<uint32_t>& chain, int32_t tileX, int32_t tileY) {
+            int32_t best = -1, bestRank = -1;
+
+            for (size_t i = 0; i < s_entries.size(); i++) {
+                const Entry& e = s_entries[i];
+
                 if (e.liquidType != liquidType) {
                     continue;
                 }
 
-                const bool applies = e.kind == Kind::Global || (e.map == s_map && (e.kind == Kind::Map || (e.x == s_tileX && e.y == s_tileY)));
+                const int32_t rank = Rank(e, chain, tileX, tileY);
 
-                if (applies && (!best || static_cast<int>(e.kind) > static_cast<int>(best->kind))) {
-                    best = &e;
+                if (rank > bestRank) {
+                    best = static_cast<int32_t>(i);
+                    bestRank = rank;
                 }
             }
 
             return best;
         }
+
+        // The row a water takes at a place: its type's, else the every-water row's; -1: the defaults.
+        int32_t Resolve(uint32_t liquidType, uint32_t area, int32_t tileX, int32_t tileY) {
+            Rebuild();
+
+            if (s_resolvedGeneration != s_generation || s_resolvedMap != s_map) {
+                s_resolved.clear();
+                s_resolvedGeneration = s_generation;
+                s_resolvedMap = s_map;
+            }
+
+            const uint64_t key = static_cast<uint64_t>(liquidType & 0xFFFF) << 48 | static_cast<uint64_t>(area & 0xFFFFFFu) << 16 |
+                                 static_cast<uint64_t>(tileX & 0xFF) << 8 | static_cast<uint64_t>(tileY & 0xFF);
+            const auto found = s_resolved.find(key);
+
+            if (found != s_resolved.end()) {
+                return found->second;
+            }
+
+            const std::vector<uint32_t>& chain = AreaChain(area);
+            int32_t e = Best(liquidType, chain, tileX, tileY);
+
+            if (e < 0 && liquidType != 0) {
+                e = Best(0, chain, tileX, tileY);
+            }
+
+            return s_resolved.emplace(key, e).first->second;
+        }
+
+        const Look& LookOf(int32_t entry) {
+            return entry >= 0 && entry < static_cast<int32_t>(s_entries.size()) ? s_entries[entry].look : kDefaults;
+        }
+
+        // --- the look grid ---------------------------------------------------------------------------
+
+        struct Cell {
+            bool known = false, wet = false;
+            uint32_t type = 0, area = 0;
+            int32_t tileX = -1, tileY = -1;
+        };
+
+        LookGrid s_grid;
+        std::vector<Cell> s_cells(kGridSize * kGridSize);
+        std::chrono::steady_clock::time_point s_gridBuilt;
+        uint32_t s_gridGeneration = ~0u;
+        int32_t s_gridChunkX = -1, s_gridChunkY = -1;
+
+        // The terrain liquid a chunk holds (its first water layer's LiquidType), 0 when dry.
+        uint32_t ChunkWater(CMapChunk* chunk) {
+            for (CChunkLiquid* liquid = chunk->m_liquidChunkLinkList.Head(); liquid; liquid = chunk->m_liquidChunkLinkList.Next(liquid)) {
+                if (liquid->m_type > 0) {
+                    return static_cast<uint32_t>(liquid->m_type);
+                }
+            }
+
+            return 0;
+        }
+
+        void BuildGrid() {
+            UpdatePlace();
+            Rebuild();
+            const auto now = std::chrono::steady_clock::now();
+            const bool moved = s_chunkX != s_gridChunkX || s_chunkY != s_gridChunkY;
+
+            if (!moved && s_gridGeneration == s_generation && now - s_gridBuilt < std::chrono::milliseconds(500)) {
+                return;
+            }
+
+            s_gridBuilt = now;
+            s_gridGeneration = s_generation;
+            s_gridChunkX = s_chunkX;
+            s_gridChunkY = s_chunkY;
+
+            if (s_chunkX < 0) {
+                s_grid.valid = false;
+                return;
+            }
+
+            const int32_t ox = s_chunkX - kGridSize / 2, oy = s_chunkY - kGridSize / 2;
+
+            for (int32_t j = 0; j < kGridSize; j++) {
+                for (int32_t i = 0; i < kGridSize; i++) {
+                    Cell& c = s_cells[j * kGridSize + i];
+                    c = Cell();
+                    CMapArea* tile = TileOf(ox + i, oy + j);
+                    CMapChunk* chunk = tile ? tile->m_mapChunks[((ox + i) & 0xF) + 16 * ((oy + j) & 0xF)] : nullptr;
+
+                    if (!chunk) {
+                        continue;
+                    }
+
+                    c.known = true;
+                    c.area = static_cast<uint32_t>(chunk->m_areaId);
+                    c.tileX = tile->m_index.x;
+                    c.tileY = tile->m_index.y;
+                    c.type = ChunkWater(chunk);
+                    c.wet = c.type != 0;
+                }
+            }
+
+            // A dry chunk next to water takes that water's place, so the water's look doesn't fade toward
+            // whatever the dry land would give (the blend runs between chunk centres).
+            std::vector<Cell> filled = s_cells;
+            static const int32_t kNear[8][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { 1, 1 }, { -1, -1 }, { 1, -1 }, { -1, 1 } };
+
+            for (int32_t j = 0; j < kGridSize; j++) {
+                for (int32_t i = 0; i < kGridSize; i++) {
+                    if (s_cells[j * kGridSize + i].wet) {
+                        continue;
+                    }
+
+                    for (const auto& d : kNear) {
+                        const int32_t ni = i + d[0], nj = j + d[1];
+
+                        if (ni >= 0 && nj >= 0 && ni < kGridSize && nj < kGridSize && s_cells[nj * kGridSize + ni].wet) {
+                            filled[j * kGridSize + i] = s_cells[nj * kGridSize + ni];
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // The palette: one slot per row taken (the defaults too), in the order met.
+            std::unordered_map<int32_t, uint8_t> slots;
+            s_grid.paletteCount = 0;
+
+            for (int32_t k = 0; k < kGridSize * kGridSize; k++) {
+                const Cell& c = filled[k];
+                const int32_t entry = c.known ? Resolve(c.type, c.area, c.tileX, c.tileY) : -1;
+                const auto found = slots.find(entry);
+                uint8_t slot = 0;
+
+                if (found != slots.end()) {
+                    slot = found->second;
+                } else if (s_grid.paletteCount < kPaletteSize) {
+                    slot = static_cast<uint8_t>(s_grid.paletteCount++);
+                    slots.emplace(entry, slot);
+                    PackLook(LookOf(entry), s_grid.palette[slot]);
+                }
+
+                s_grid.index[k] = slot;
+            }
+
+            s_grid.originX = ox;
+            s_grid.originY = oy;
+            s_grid.valid = true;
+        }
+    }
+
+    void PackLook(const Look& l, float out[kPackedLook]) {
+        const float values[kPackedLook] = {
+            l.clarityClear, l.clarityMurky, l.scatter, l.refraction,
+            l.reflectivity, l.reflection, l.window, l.glint,
+            l.shallow[0], l.shallow[1], l.shallow[2], l.colourMode == ColourMode::Hue ? 1.0f : 0.0f,
+            l.deep[0], l.deep[1], l.deep[2], l.colourMode == ColourMode::Replace ? 1.0f : 0.0f,
+            l.glintSharpness, l.waveScale, l.foam, l.move,
+        };
+        std::memcpy(out, values, sizeof(values));
     }
 
     void RegisterSurface() {
@@ -240,29 +532,28 @@ namespace SXC::Water {
         }
     }
 
-    const Look& SurfaceLook(uint32_t liquidType) {
+    const LookGrid& SurfaceGrid() {
+        BuildGrid();
+        return s_grid;
+    }
+
+    const Look& SurfaceLookAt(uint32_t liquidType, float x, float y) {
         UpdatePlace();
-        Rebuild();
+        uint32_t area = s_area;
+        int32_t tileX = s_tileX, tileY = s_tileY, cx = 0, cy = 0;
 
-        if (s_resolvedGeneration != s_generation || s_resolvedPlace != s_placeVersion) {
-            s_resolved.clear();
-            s_resolvedGeneration = s_generation;
-            s_resolvedPlace = s_placeVersion;
+        if (ChunkOf(x, y, cx, cy)) {
+            if (CMapArea* tile = TileOf(cx, cy)) {
+                tileX = tile->m_index.x;
+                tileY = tile->m_index.y;
+
+                if (CMapChunk* chunk = tile->m_mapChunks[(cx & 0xF) + 16 * (cy & 0xF)]) {
+                    area = static_cast<uint32_t>(chunk->m_areaId);
+                }
+            }
         }
 
-        const auto found = s_resolved.find(liquidType);
-
-        if (found != s_resolved.end()) {
-            return found->second;
-        }
-
-        const Entry* e = Best(liquidType);
-
-        if (!e && liquidType != 0) {
-            e = Best(0);
-        }
-
-        return s_resolved.emplace(liquidType, e ? e->look : kDefaults).first->second;
+        return LookOf(Resolve(liquidType, area, tileX, tileY));
     }
 
     uint32_t LiquidTypeOf(const void* settings) {
@@ -275,6 +566,19 @@ namespace SXC::Water {
         }
 
         return 0;
+    }
+
+    bool PlayerPosition(float& x, float& y) {
+        CGPlayer_C* player = Player();
+
+        if (!player) {
+            return false;
+        }
+
+        const C3Vector p = player->GetPosition();
+        x = p.x;
+        y = p.y;
+        return true;
     }
 
     uint32_t LiquidTypeHere() {
@@ -290,20 +594,79 @@ namespace SXC::Water {
         return CMap::QueryLiquidStatus(&p, &type, &height, &unused, 1) && type > 0 ? static_cast<uint32_t>(type) : 0u;
     }
 
-    bool WriteSurfaceRow(uint32_t liquidType, const Look& l) {
+    bool ScopeHere(ScopeKind kind, std::string& scope, std::string& label) {
+        UpdatePlace();
+        scope.clear();
+        label.clear();
+        char text[160];
+
+        // An area by its name when the name is its own, else by its ID.
+        auto areaScope = [&](uint32_t id, const char* what) {
+            const AreaTableRec* rec = g_areaTableDB.GetRecord(static_cast<int32_t>(id));
+            const char* name = rec && rec->m_areaName && rec->m_areaName[0] ? rec->m_areaName : nullptr;
+            const auto& byName = AreasByName();
+            const auto same = name ? byName.find(Lower(name)) : byName.end();
+
+            if (name && same != byName.end() && same->second.size() == 1 && !IsMapName(Lower(name))) {
+                scope = name;
+            } else {
+                std::snprintf(text, sizeof text, "area:%u", id);
+                scope = text;
+            }
+
+            std::snprintf(text, sizeof text, "%s %s", what, name ? name : scope.c_str());
+            label = text;
+            return true;
+        };
+
+        switch (kind) {
+            case ScopeKind::Everywhere:
+                label = "everywhere";
+                return true;
+            case ScopeKind::Map:
+                if (!CMap::mapName[0]) {
+                    return false;
+                }
+
+                scope = CMap::mapName;
+                label = "map " + scope;
+                return true;
+            case ScopeKind::Zone: {
+                const std::vector<uint32_t>& chain = AreaChain(s_area);
+                return !chain.empty() && areaScope(chain.back(), "zone");
+            }
+            case ScopeKind::SubArea: {
+                const std::vector<uint32_t>& chain = AreaChain(s_area);
+                return chain.size() > 1 && areaScope(chain.front(), "sub-area");
+            }
+            case ScopeKind::Tile:
+                if (s_tileX < 0 || !CMap::mapName[0]) {
+                    return false;
+                }
+
+                std::snprintf(text, sizeof text, "%s_%d_%d", CMap::mapName, s_tileX, s_tileY);
+                scope = text;
+                label = "tile " + scope;
+                return true;
+        }
+
+        return false;
+    }
+
+    bool WriteSurfaceRow(uint32_t liquidType, const std::string& place, const Look& l) {
         if (!s_table) {
             return false;
         }
 
         const Data::Schema& schema = s_table->GetSchema();
         const int type = schema.IndexOf("LiquidType"), scope = schema.IndexOf("Scope");
+        const std::string wanted = Lower(Trimmed(place));
         Data::Row row;
 
         for (uint32_t i = 0; i < s_table->RowCount() && !row; i++) {
             Data::Row candidate = s_table->At(i);
-            const std::string& place = candidate.String(scope);
 
-            if (candidate.Uint(type) == liquidType && place.find_first_not_of(" \t") == std::string::npos) {
+            if (candidate.Uint(type) == liquidType && Lower(Trimmed(candidate.String(scope))) == wanted) {
                 row = candidate;
             }
         }
@@ -311,6 +674,7 @@ namespace SXC::Water {
         if (!row) {
             row = s_table->Add();
             row.SetUint(type, 0, liquidType);
+            row.SetString(scope, 0, place.c_str());
         }
 
         auto set = [&](const char* name, float value) { row.SetFloat(schema.IndexOf(name), 0, value); };

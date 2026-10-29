@@ -9,8 +9,14 @@
 // Step 3b: the surface moves with the FFT waves (WaterWaves.glsl's displacement, set 2 binding 4) at the
 // vertex's world position, so neighbouring patches agree at their edges. The stock mesh has a vertex about
 // every 4 yd: it carries the long waves (cascade 0, smoothed, the sideways part small, capped, fading with
-// distance); the short ones stay in the shading. How far: the wave height and the Look panel's "Surface
-// movement" (WaterScene.waveLook.w).
+// distance); the short ones stay in the shading. How far: the wave height and this water's look (its
+// movement and wave scale).
+//
+// The look (SXC/Water/Surface.h, five vec4s, out to Water.frag): (clarity clear, clarity murky, own colour,
+// refraction), (reflectivity, reflection, Snell's window, glint), (shallow colour, Hue weight), (deep colour,
+// Replace weight), (glint sharpness, wave scale, foam, movement). Terrain water (p14.z 1) blends it from the
+// look grid between the four nearest chunk centres, so places fade into each other over a chunk; other
+// water takes the draw's own, p9..p13.
 #version 450
 #extension GL_GOOGLE_include_directive : require
 
@@ -26,16 +32,55 @@ layout(location = 0) out vec4 vView;    // the point in view space, and its clip
 layout(location = 1) out vec4 vColor;
 layout(location = 2) out vec2 vTint;    // where the tint gradient is read (Water.frag's s0)
 layout(location = 3) out float vEase;   // the movement's easing toward the shore (the debug view)
+layout(location = 4) out vec4 vLook[5]; // this water's look here (above)
 
 layout(set = 2, binding = 4) uniform sampler2DArray waveDisp;   // per cascade: dx, dy, height (yd)
+
+const float kHalfWorld = 32.0 * 533.33333;
+const float kChunk = 533.33333 / 16.0;
+
+uint LookSlot(ivec2 c)
+{
+    int b = c.y * 64 + c.x;
+    uint word = scene.lookIndex[b >> 4][(b >> 2) & 3];
+    return (word >> uint((b & 3) * 8)) & 0xFFu;
+}
+
+void LookAt(vec3 world)
+{
+    if (regs.p[14].z < 0.5 || scene.lookGrid.z < 0.5)
+    {
+        for (int m = 0; m < 5; m++)
+        {
+            vLook[m] = regs.p[9 + m];
+        }
+
+        return;
+    }
+
+    // Chunk centres sit at whole + 0.5 chunks; past the grid's edge its last chunks hold.
+    vec2 g = vec2(kHalfWorld - world.y, kHalfWorld - world.x) / kChunk - scene.lookGrid.xy - 0.5;
+    g = clamp(g, vec2(0.0), vec2(63.0));
+    ivec2 i0 = min(ivec2(g), ivec2(62));
+    vec2 f = g - vec2(i0);
+    uint a = LookSlot(i0) * 5u, b = LookSlot(i0 + ivec2(1, 0)) * 5u;
+    uint c = LookSlot(i0 + ivec2(0, 1)) * 5u, d = LookSlot(i0 + ivec2(1, 1)) * 5u;
+
+    for (uint m = 0u; m < 5u; m++)
+    {
+        vLook[m] = mix(mix(scene.lookPalette[a + m], scene.lookPalette[b + m], f.x),
+                       mix(scene.lookPalette[c + m], scene.lookPalette[d + m], f.x), f.y);
+    }
+}
 
 void main()
 {
     vEase = smoothstep(0.05, 0.6, inDepth.y);
     vec4 rel = regs.v[46] * inPos.x + regs.v[47] * inPos.y + regs.v[48] * inPos.z + regs.v[49];
     vec3 world = rel.xyz + regs.v[54].xyz;
+    LookAt(world);
 
-    if (scene.waveSizes.w > 0.5 && scene.waveLook.w > 0.0)
+    if (scene.waveSizes.w > 0.5 && vLook[4].w > 0.0)
     {
         // Only what the mesh can hold, so the surface doesn't tear (Seyri, 2026-10-29: far-out waves at height
         // and movement 1 grew choppy, then split apart): cascade 0 alone, averaged over the vertex spacing
@@ -59,7 +104,7 @@ void main()
         // WMO liquid carries no depth here, so it stays still. The liquid map's shore field does this
         // properly later.
         float deep = smoothstep(0.05, 0.6, inDepth.y);
-        rel.xyz += d * (scene.waveLook.w * deep * regs.p[13].w);   // p13.w: this water's wave scale
+        rel.xyz += d * (vLook[4].w * deep * vLook[4].y);   // this water's movement and wave scale
     }
 
     vec4 view = regs.v[50] * rel.x + regs.v[51] * rel.y + regs.v[52] * rel.z + regs.v[53] * rel.w;

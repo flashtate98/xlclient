@@ -31,11 +31,27 @@ namespace gxvk::vk::water
         float body[4][7] = {};
     };
 
+    /// The look grid (SXC/Water/Surface.h): per terrain chunk around the player an index into a palette of
+    /// looks, which Water.vert blends between chunk centres.
+    constexpr uint32_t kLookGrid    = 64;   ///< chunks per side
+    constexpr uint32_t kLookPalette = 64;   ///< looks at most
+    constexpr uint32_t kLookFloats  = 20;   ///< per look (five vec4s)
+
+    struct LookInput
+    {
+        const uint8_t* index   = nullptr;   ///< kLookGrid x kLookGrid, row-major (chunk y, then x); null: none
+        const float*   palette = nullptr;   ///< count x kLookFloats
+        uint32_t       count   = 0;
+        int32_t        originX = 0;         ///< the chunk at index 0 (the client's counting)
+        int32_t        originY = 0;
+    };
+
     struct CaptureInput
     {
         VkViewport viewport = {};      ///< the draws' viewport on the target (pixels, depth range)
         float      proj[16] = {};      ///< the native projection, row-major (row vectors)
         WaveInput  waves;
+        LookInput  looks;
     };
 
     /// The copy, once per frame (later calls the same frame answer as the first). False: nothing to copy

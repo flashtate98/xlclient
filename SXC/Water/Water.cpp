@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include "Engine/Source/Gx/CGxDevice/CGxDevice.h"
 #include "Engine/Source/Gx/CGxDevice/CGxShader.h"
 #include "Engine/Source/Gx/Gx.h"
@@ -25,6 +26,7 @@
 #include "WoW/Source/LiquidSystem/Liquid.h"
 #include "WoW/Source/WorldClient/DayNight.h"
 #include "WoW/Source/WorldClient/DayNight__DNInfo.h"
+#include "WoW/Source/WorldClient/LiquidGeomFactories.h"
 
 namespace {
     bool s_available = false;
@@ -42,9 +44,10 @@ namespace {
     }
 
     // Our pixel registers (Water.frag): p6 = (time, debug view, ripple strength, 0), p7 the sky's zenith,
-    // p8 its horizon, p9..p11 the look, p12 = (shallow colour, colour mode), p13 = (deep colour, wave scale).
+    // p8 its horizon, p9..p13 the draw's own look (Surface.h's PackLook), p14 = (screen-space reflections,
+    // the sea's foam threshold, 1 when the look comes from the look grid, 0).
     constexpr uint32_t kPixelFirst = 6;
-    constexpr uint32_t kPixelRows = 8;
+    constexpr uint32_t kPixelRows = 9;
     constexpr float kRippleStrength = 1.0f;
 
     // The Water panel: test values over every water while `test` is on (not saved), and what isn't per
@@ -57,12 +60,13 @@ namespace {
         float windSpeed = 6.0f;       // yd / s
         float windAngle = 0.0f;       // degrees, 0 = +x
         int debugView = 0;
+        int writeScope = 0;           // SXC::Water::ScopeKind: where "Write" puts the row
     };
     Panel s_panel;
 
-    // The look a water draws with: the panel's test values, else its LiquidSurface row.
-    const SXC::Water::Look& LookFor(uint32_t liquidType) {
-        return s_panel.test ? s_panel.look : SXC::Water::SurfaceLook(liquidType);
+    // The look a water draws with at a world point: the panel's test values, else its LiquidSurface row there.
+    const SXC::Water::Look& LookFor(uint32_t liquidType, float x, float y) {
+        return s_panel.test ? s_panel.look : SXC::Water::SurfaceLookAt(liquidType, x, y);
     }
 
     // Why the stock material kept a draw (the Water panel's counts).
@@ -285,7 +289,9 @@ namespace SXC::Water {
             s_typeHere = SXC::Water::LiquidTypeHere();
         }
 
-        const SXC::Water::Look& sea = LookFor(s_typeHere);
+        float playerX = 0.0f, playerY = 0.0f;
+        SXC::Water::PlayerPosition(playerX, playerY);
+        const SXC::Water::Look& sea = LookFor(s_typeHere, playerX, playerY);
         waves.amplitude = sea.amplitude;
         waves.chop = sea.chop;
         waves.spread = sea.spread;
@@ -315,6 +321,17 @@ namespace SXC::Water {
             waves.body[b][4] = seen[b].colour[0];
             waves.body[b][5] = seen[b].colour[1];
             waves.body[b][6] = seen[b].colour[2];
+        }
+
+        // The looks of terrain water by place (none while the panel tests its values over every water).
+        const SXC::Water::LookGrid& grid = SXC::Water::SurfaceGrid();
+
+        if (!s_panel.test && grid.valid) {
+            waves.lookIndex = grid.index;
+            waves.lookPalette = &grid.palette[0][0];
+            waves.lookCount = grid.paletteCount;
+            waves.lookOriginX = grid.originX;
+            waves.lookOriginY = grid.originY;
         }
 
         if (!s_capture(waves)) {
@@ -415,15 +432,14 @@ namespace SXC::Water {
             SkyRow(&rows[8], info->m_bands.m_skyColors[4]);
         }
 
-        const SXC::Water::Look& look = LookFor(SXC::Water::LiquidTypeOf(instance->m_settings));
-        const float values[20] = {
-            look.clarityClear, look.clarityMurky, look.scatter, look.refraction,
-            look.reflectivity, look.reflection, look.window, s_panel.screenReflections ? 1.0f : 0.0f,
-            look.glint, look.glintSharpness, sea.foamThreshold, 0.0f,
-            look.shallow[0], look.shallow[1], look.shallow[2], static_cast<float>(look.colourMode),
-            look.deep[0], look.deep[1], look.deep[2], look.waveScale,
-        };
-        std::memcpy(&rows[12], values, sizeof(values));
+        // The draw's own look, where its bounds' centre lies (WMO water, the panel's tests); terrain water
+        // reads the look grid per vertex instead, blended between places.
+        const SXC::Water::Look& look = LookFor(SXC::Water::LiquidTypeOf(instance->m_settings), instance->m_bounds.c.x, instance->m_bounds.c.y);
+        SXC::Water::PackLook(look, &rows[12]);
+        const bool terrain = dynamic_cast<Liquid::CChunkGeomFactory*>(instance->m_geomFactory) != nullptr;
+        rows[32] = s_panel.screenReflections ? 1.0f : 0.0f;
+        rows[33] = sea.foamThreshold;
+        rows[34] = terrain && !s_panel.test && grid.valid ? 1.0f : 0.0f;
 
         g_theGxDevicePtr->ShaderConstantsSet(GxSh_Pixel, kPixelFirst, rows, kPixelRows);
 
@@ -474,21 +490,39 @@ namespace SXC::Water {
 
         ImGui::Checkbox("Test values over every water (not saved)", &s_panel.test);
 
-        if (here && ImGui::Button("Load this water's row")) {
-            s_panel.look = SXC::Water::SurfaceLook(here);
+        if (here && ImGui::Button("Load the look here")) {
+            float x = 0.0f, y = 0.0f;
+            SXC::Water::PlayerPosition(x, y);
+            s_panel.look = SXC::Water::SurfaceLookAt(here, x, y);
             s_panel.test = true;
         }
 
         if (here) {
-            ImGui::SameLine();
+            // Where the row goes: the places the player is in.
+            std::string scopes[5], labels[5];
+            const char* names[5] = {};
+            int kinds[5] = {}, count = 0, chosen = 0;
 
-            if (ImGui::Button("Write to this water's row")) {
-                if (SXC::Water::WriteSurfaceRow(here, s_panel.look)) {
+            for (int k = 0; k < 5; k++) {
+                if (SXC::Water::ScopeHere(static_cast<SXC::Water::ScopeKind>(k), scopes[count], labels[count])) {
+                    kinds[count] = k;
+                    names[count] = labels[count].c_str();
+                    chosen = k == s_panel.writeScope ? count : chosen;
+                    count++;
+                }
+            }
+
+            if (ImGui::Combo("Row for", &chosen, names, count)) {
+                s_panel.writeScope = kinds[chosen];
+            }
+
+            if (ImGui::Button("Write the test values to that row")) {
+                if (SXC::Water::WriteSurfaceRow(here, scopes[chosen], s_panel.look)) {
                     s_panel.test = false;
                 }
             }
 
-            ImGui::TextDisabled("Writes the test values into LiquidSurface (this LiquidType, everywhere); save in the Data view.");
+            ImGui::TextDisabled("This LiquidType's row for that place in LiquidSurface (made if missing); save in the Data view.");
         }
 
         static const char* const kViews[] = { "Off", "Reflection hits (red: sky)", "Water crossed (white 20 yd)", "Normal",

@@ -16,11 +16,13 @@
 //
 // From below: the world above inside Snell's window, the water mirrored outside it.
 //
-// The registers SXC/Water adds (its Look, the Water panel's values): p6 = (time in s, wrapping every 600 s;
-// the debug view; ripple strength; 0), p7 the sky's zenith, p8 its horizon, p9 = (clarity: absorption per yd
-// at the stock alpha 0 and 1; scatter brightness; refraction), p10 = (reflectivity looking straight down;
-// reflection strength; Snell's window (cos); screen-space reflections on), p11 = (glint strength; glint
-// sharpness; foam threshold (Jacobian); 0), p12 = (shallow colour; colour mode), p13 = (deep colour; wave scale).
+// The registers SXC/Water adds: p6 = (time in s, wrapping every 600 s; the debug view; ripple strength; 0), p7
+// the sky's zenith, p8 its horizon, p9..p13 the draw's own look, p14 = (screen-space reflections on; the
+// sea's foam threshold (Jacobian); 1 when the look comes from the look grid; 0). The look itself (its
+// LiquidSurface row, blended between places for terrain water) comes from Water.vert: vLook[0] = (clarity:
+// absorption per yd at the stock alpha 0 and 1; own colour; refraction), [1] = (reflectivity looking straight
+// down; reflection strength; Snell's window (cos); glint), [2] = (shallow colour; Hue weight), [3] = (deep
+// colour; Replace weight), [4] = (glint sharpness; wave scale; foam; movement).
 #version 450
 #extension GL_GOOGLE_include_directive : require
 
@@ -32,6 +34,7 @@ layout(location = 0) in vec4 vView;
 layout(location = 1) in vec4 vColor;
 layout(location = 2) in vec2 vTint;
 layout(location = 3) in float vEase;
+layout(location = 4) in vec4 vLook[5];
 
 layout(location = 0) out vec4 oC0;
 
@@ -67,7 +70,7 @@ vec2 WaveSlope(vec2 xy, float distance, out float folding)
         jacobian += (w.z - 1.0) * fade;
     }
 
-    folding = clamp((regs.p[11].z - jacobian) * 2.5, 0.0, 1.0);
+    folding = clamp((regs.p[14].y - jacobian) * 2.5, 0.0, 1.0);
     return slope;
 }
 
@@ -276,22 +279,18 @@ void main()
 {
     vec4 tint = texture(s0, vTint);
 
-    // The water's colour by its LiquidSurface row (p12 = shallow, mode; p13 = deep): stock, or our colours from
-    // the shore to a few yards down, either with the stock brightness (Hue: it still darkens through the
-    // day) or as they are (Replace). The alpha (the murk) stays the stock one.
-    int colourMode = int(regs.p[12].w + 0.5);
+    // The water's colour by its look (shallow and deep, the Hue and Replace weights: one of them 1 for a row,
+    // between where places blend): stock, or our colours from the shore to a few yards down, either with the
+    // stock brightness (Hue: it still darkens through the day) or as they are (Replace). The alpha (the
+    // murk) stays the stock one.
+    float hue = vLook[2].w, replace = vLook[3].w;
 
-    if (colourMode != 0)
+    if (hue + replace > 0.001)
     {
-        vec3 ours = mix(regs.p[12].rgb, regs.p[13].rgb, clamp(vTint.y, 0.0, 1.0));
-
-        if (colourMode == 1)
-        {
-            const vec3 kLuma = vec3(0.299, 0.587, 0.114);
-            ours *= dot(tint.rgb, kLuma) / max(dot(ours, kLuma), 1e-3);
-        }
-
-        tint.rgb = ours;
+        const vec3 kLuma = vec3(0.299, 0.587, 0.114);
+        vec3 ours = mix(vLook[2].rgb, vLook[3].rgb, clamp(vTint.y, 0.0, 1.0));
+        vec3 hued = ours * (dot(tint.rgb, kLuma) / max(dot(ours, kLuma), 1e-3));
+        tint.rgb = tint.rgb * max(1.0 - hue - replace, 0.0) + hued * hue + ours * replace;
     }
     vec3 world = LightsViewToWorld(vView.xyz);
     vec3 eye = LightsViewToWorld(vec3(0.0));
@@ -302,8 +301,8 @@ void main()
 
     // The FFT waves when the device runs them, else the small ripples.
     float folding = 0.0;
-    // This water's share of the shared sea (its row's WaveScale, p13.w).
-    vec2 slope = (scene.waveSizes.w > 0.5 ? WaveSlope(world.xy, distance, folding) : RippleSlope(world.xy, regs.p[6].x, distance) * regs.p[6].z) * regs.p[13].w;
+    // This water's share of the shared sea (its look's wave scale).
+    vec2 slope = (scene.waveSizes.w > 0.5 ? WaveSlope(world.xy, distance, folding) : RippleSlope(world.xy, regs.p[6].x, distance) * regs.p[6].z) * vLook[4].y;
     vec3 N = normalize(vec3(-slope, 1.0));
 
     if (below)
@@ -328,7 +327,7 @@ void main()
     // everything a little lower, moving with the camera (Seyri, 2026-10-28).
     vec2 here = gl_FragCoord.xy * scene.extent.zw;
     vec3 tilt = WorldDirToView(N) - WorldDirToView(below ? vec3(0.0, 0.0, -1.0) : vec3(0.0, 0.0, 1.0));
-    vec2 bent = here + vec2(tilt.x, -tilt.y) * (regs.p[9].w / max(vView.w, 1.0));
+    vec2 bent = here + vec2(tilt.x, -tilt.y) * (vLook[0].w / max(vView.w, 1.0));
     float sceneBent = textureLod(sceneW, bent, 0.0).r;
 
     if (sceneBent < vView.w)
@@ -343,27 +342,27 @@ void main()
     // the surface (below). Murkier where the stock alpha is higher; red absorbed first.
     float crossed = below ? distance : max(sceneBent - vView.w, 0.0) * (distance / max(vView.w, 1e-3));
     // (First tuning: 0.025..0.35 per yd was milky on WoW's steep shores, Seyri 2026-10-28.)
-    float murk = mix(regs.p[9].x, regs.p[9].y, clamp(tint.a, 0.0, 1.0));
+    float murk = mix(vLook[0].x, vLook[0].y, clamp(tint.a, 0.0, 1.0));
     vec3 absorb = murk * (1.25 - clamp(body, 0.0, 1.0));
     vec3 through = exp(-absorb * crossed);
     // The light the water itself sends back: darker than the stock tint (as a surface colour it is light).
-    vec3 scatter = body * regs.p[9].z;
+    vec3 scatter = body * vLook[0].z;
 
     // From below, past the critical angle, the surface mirrors the water. Real water's (cos 0.66) leaves a
     // third-person camera seeing up only when it looks steeply up; this one is wider, for the game.
-    float kWindowCos = regs.p[10].z;
+    float kWindowCos = vLook[1].z;
     float window = below ? smoothstep(kWindowCos - 0.06, kWindowCos + 0.06, abs(dot(N, V))) : 1.0;
     vec3 seen = mix(scatter, behind * through + scatter * (1.0 - through), window);
 
     float cosV = clamp(dot(N, V), 0.0, 1.0);
-    float fresnel = below ? 1.0 - window : min((regs.p[10].x + (1.0 - regs.p[10].x) * pow(1.0 - cosV, 5.0)) * regs.p[10].y, 1.0);
+    float fresnel = below ? 1.0 - window : min((vLook[1].x + (1.0 - vLook[1].x) * pow(1.0 - cosV, 5.0)) * vLook[1].y, 1.0);
     vec3 R = reflect(-V, N);
     vec3 sky = mix(regs.p[8].rgb, regs.p[7].rgb, sqrt(clamp(R.z, 0.0, 1.0)));
     vec3 reflected = scatter;
 
     vec4 ssr = vec4(0.0);
 
-    if (!below && regs.p[10].w > 0.5)
+    if (!below && regs.p[14].x > 0.5)
     {
         ssr = ScreenReflection(vView.xyz, normalize(WorldDirToView(R)), R.z);
         reflected = mix(sky, ssr.rgb, ssr.a);
@@ -388,17 +387,17 @@ void main()
         float r = max(scene.bodyDir[b].w, 0.002);
         float c = dot(R, d);
         float disc = smoothstep(cos(r * 1.3 + 0.004), cos(r * 0.7), c);
-        float glow = pow(max(c, 0.0), regs.p[11].y);
+        float glow = pow(max(c, 0.0), vLook[4].x);
         vec3 colour = scene.bodyColour[b].rgb;
         shine += colour * (disc * 1.5 + glow * max(colour.r, max(colour.g, colour.b))) * smoothstep(-r, r, d.z);
     }
 
-    float sun = below || bodies > 0 ? 0.0 : pow(max(dot(R, toSun), 0.0), regs.p[11].y) * smoothstep(0.1, 0.3, toSun.z);
+    float sun = below || bodies > 0 ? 0.0 : pow(max(dot(R, toSun), 0.0), vLook[4].x) * smoothstep(0.1, 0.3, toSun.z);
     shine += regs.v[36].rgb * sun;
-    vec3 highlight = below ? vec3(0.0) : shine * regs.p[11].x * (1.0 - ssr.a) + LampsReflected(world, N, V);
+    vec3 highlight = below ? vec3(0.0) : shine * vLook[1].w * (1.0 - ssr.a) + LampsReflected(world, N, V);
 
     // Foam where the crests fold: white, lit by the sun and the ambient, over the rest.
-    float foam = below ? 0.0 : folding * scene.waveLook.z;
+    float foam = below ? 0.0 : folding * vLook[4].z;
     vec3 foamColour = clamp(regs.v[34].rgb + regs.v[35].rgb * max(toSun.z, 0.0), 0.0, 1.0) * 0.9 + lamps * 0.3;
     vec3 surface = mix(mix(seen, reflected, fresnel) + highlight, foamColour, foam);
 
