@@ -37,6 +37,15 @@ namespace SXC::Water {
         const float* lookPalette = nullptr;
         uint32_t lookCount = 0;
         int32_t lookOriginX = 0, lookOriginY = 0;
+        // The shore field (SXC/Water/Shore.h): 256 x 256 cells of four half floats, stored toroidally; null
+        // when there is none. Uploaded when the version changes.
+        const uint16_t* shore = nullptr;
+        uint32_t shoreVersion = 0;
+        int32_t shoreOriginX = 0, shoreOriginY = 0;
+        float shoreFoam = 1.0f;          // the shore's foam strength
+        float shoreWaveHeight = 0.12f;   // yd
+        float shoreWavelength = 7.0f;    // yd
+        float shoreReach = 28.0f;        // yd: how far out the shore waves begin
     };
 
     // The device's copy of the scene behind the water and its waves, once per frame (later calls the same

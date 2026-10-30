@@ -46,12 +46,29 @@ namespace gxvk::vk::water
         int32_t        originY = 0;
     };
 
+    /// The shore field (SXC/Water/Shore.h): per cell (a sixteenth of a chunk) the signed shore distance,
+    /// the depth and the direction to the shore, as half floats, kept toroidally around the player.
+    constexpr uint32_t kShoreSize = 256;
+
+    struct ShoreInput
+    {
+        const uint16_t* texels  = nullptr;   ///< kShoreSize x kShoreSize x 4; null: none
+        uint32_t        version = 0;         ///< uploaded again when it changes
+        int32_t         originX = 0;         ///< the window's first cell (global)
+        int32_t         originY = 0;
+        float           foam       = 1.0f;    ///< the shore's foam strength
+        float           waveHeight = 0.12f;   ///< yd
+        float           wavelength = 7.0f;    ///< yd
+        float           reach      = 28.0f;   ///< yd: how far out the shore waves begin
+    };
+
     struct CaptureInput
     {
         VkViewport viewport = {};      ///< the draws' viewport on the target (pixels, depth range)
         float      proj[16] = {};      ///< the native projection, row-major (row vectors)
         WaveInput  waves;
         LookInput  looks;
+        ShoreInput shore;
     };
 
     /// The copy, once per frame (later calls the same frame answer as the first). False: nothing to copy

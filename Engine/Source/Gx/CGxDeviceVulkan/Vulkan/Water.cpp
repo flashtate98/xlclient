@@ -46,6 +46,8 @@ namespace
         float lookGrid[4];     ///< the look grid's first chunk (x, y), 1 when it holds looks, 0
         uint32_t lookIndex[gxvk::vk::water::kLookGrid * gxvk::vk::water::kLookGrid / 4];   ///< a byte per chunk (uvec4s)
         float lookPalette[gxvk::vk::water::kLookPalette * gxvk::vk::water::kLookFloats];
+        float shoreGrid[4];    ///< the shore field's first cell (x, y), 1 when it holds a field, the cell (yd)
+        float shoreLook[4];    ///< the shore's foam, wave height (yd), wavelength (yd), reach (yd)
     };
 
     // The waves (Shaders/WaterWaves.glsl): N x N per cascade, three cascades.
@@ -129,6 +131,15 @@ namespace
         bool                  wavesFresh  = true;             ///< the images still undefined
         bool                  wavesRan    = false;            ///< the slopes hold waves
         float                 spectrumKey[5] = { -1.0f, 0.0f, 0.0f, 0.0f, 0.0f };   ///< the wind the h0 was made for
+
+        // The shore field: one image, uploaded from `shoreStaging` when the CPU's version changes (the last
+        // upload's frame waited for before the staging is written again).
+        Image          shore;
+        memory::Buffer shoreStaging;
+        bool           shoreFresh   = true;   ///< still undefined
+        uint32_t       shoreVersion = 0;
+        bool           shoreHas     = false;  ///< holds a field
+        uint64_t       shoreUpload  = 0;      ///< the serial of the last upload
 
         char status[160] = "not drawn yet";
     };
@@ -273,20 +284,20 @@ namespace
 
         // Set 2 of the draws: 0 the scene's colour, 1 its depth (w), 2 where the draws lie on it and the
         // waves' parameters, 3 the waves' slopes (a layer per cascade), 4 their displacement (the vertex
-        // stage moves the surface with it, step 3b).
-        VkDescriptorSetLayoutBinding draw[5] = {};
-        for (uint32_t i = 0; i < 5; ++i)
+        // stage moves the surface with it, step 3b), 5 the shore field (both stages).
+        VkDescriptorSetLayoutBinding draw[6] = {};
+        for (uint32_t i = 0; i < 6; ++i)
         {
             draw[i].binding         = i;
             draw[i].descriptorType  = i == 2 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             draw[i].descriptorCount = 1;
-            draw[i].stageFlags      = i == 2 ? VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
+            draw[i].stageFlags      = i == 2 || i == 5 ? VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
                                     : i == 4 ? VK_SHADER_STAGE_VERTEX_BIT
                                              : VK_SHADER_STAGE_FRAGMENT_BIT;
         }
         VkDescriptorSetLayoutCreateInfo drawInfo = {};
         drawInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        drawInfo.bindingCount = 5;
+        drawInfo.bindingCount = 6;
         drawInfo.pBindings    = draw;
         if (!Check(d.CreateDescriptorSetLayout(s.device, &drawInfo, nullptr, &s.drawLayout), "vkCreateDescriptorSetLayout (set 2)")) return false;
 
@@ -312,7 +323,7 @@ namespace
 
         VkDescriptorPoolSize sizes[3] = {};
         sizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[0].descriptorCount = 6 * kSlots;
+        sizes[0].descriptorCount = 7 * kSlots;
         sizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         sizes[1].descriptorCount = 2 * kSlots;
         sizes[2].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -363,6 +374,16 @@ namespace
         for (uint32_t i = 0; i < kWaveImages && !s.failed; ++i) CreateImage(waveFormats[i], waveExtent, s.waveImages[i], kCascades);
         if (s.failed) return false;
 
+        const VkExtent2D shoreExtent = { gxvk::vk::water::kShoreSize, gxvk::vk::water::kShoreSize };
+        const VkDeviceSize shoreBytes = static_cast<VkDeviceSize>(gxvk::vk::water::kShoreSize) * gxvk::vk::water::kShoreSize * 8;
+        if (!CreateImage(VK_FORMAT_R16G16B16A16_SFLOAT, shoreExtent, s.shore)) return false;
+        if (!memory::CreateBuffer(shoreBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, memory::Where::Stream, s.shoreStaging) || !s.shoreStaging.block.mapped)
+        {
+            Write(Error, "vulkan: water: no staging buffer for the shore field");
+            s.failed = true;
+            return false;
+        }
+
         s.ready = true;
         Write(Debug, "vulkan: water: ready");
         return true;
@@ -385,16 +406,17 @@ namespace
 
     void WriteDrawSet(Slot& slot)
     {
-        VkDescriptorImageInfo images[5] = {
+        VkDescriptorImageInfo images[6] = {
             { s.linearClamp, s.colour.view, VK_IMAGE_LAYOUT_GENERAL },
             { s.nearestClamp, s.depth.view, VK_IMAGE_LAYOUT_GENERAL },
             {},
             { s.linearRepeat, s.waveImages[6].view, VK_IMAGE_LAYOUT_GENERAL },
             { s.linearRepeat, s.waveImages[5].view, VK_IMAGE_LAYOUT_GENERAL },
+            { s.linearRepeat, s.shore.view, VK_IMAGE_LAYOUT_GENERAL },
         };
         VkDescriptorBufferInfo params = { slot.params.handle, 0, sizeof(Params) };
-        VkWriteDescriptorSet writes[5] = {};
-        for (uint32_t i = 0; i < 5; ++i)
+        VkWriteDescriptorSet writes[6] = {};
+        for (uint32_t i = 0; i < 6; ++i)
         {
             writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[i].dstSet          = slot.drawSet;
@@ -404,8 +426,52 @@ namespace
             if (i == 2) writes[i].pBufferInfo = &params;
             else writes[i].pImageInfo = &images[i];
         }
-        s.dapi->UpdateDescriptorSets(s.device, 5, writes, 0, nullptr);
+        s.dapi->UpdateDescriptorSets(s.device, 6, writes, 0, nullptr);
         slot.written = true;
+    }
+
+    /// The shore field into its image when the CPU's version moved (in the pre-pass, ahead of the draws);
+    /// the image zeroed once before (without a field the draws read a weight of 0 through shoreGrid).
+    void UploadShore(const gxvk::vk::water::ShoreInput& in)
+    {
+        VkCommandBuffer cmd = frame::PrePass();
+        if (!cmd) return;
+        const loader::Device& d = *s.dapi;
+        const VkPipelineStageFlags readers = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+
+        if (s.shoreFresh)
+        {
+            VkClearColorValue zero = {};
+            VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+            ImageBarrier(cmd, s.shore.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+            d.CmdClearColorImage(cmd, s.shore.image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
+            ImageBarrier(cmd, s.shore.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_ACCESS_TRANSFER_WRITE_BIT, readers, VK_ACCESS_SHADER_READ_BIT);
+            s.shore.layout = VK_IMAGE_LAYOUT_GENERAL;
+            s.shoreFresh = false;
+        }
+
+        if (!in.texels || (s.shoreHas && in.version == s.shoreVersion)) return;
+
+        // The staging is rewritten only after the frame that last copied from it is done.
+        if (s.shoreUpload && !frame::WaitSerial(s.shoreUpload)) return;
+        const size_t bytes = static_cast<size_t>(gxvk::vk::water::kShoreSize) * gxvk::vk::water::kShoreSize * 8;
+        std::memcpy(s.shoreStaging.block.mapped, in.texels, bytes);
+        memory::FlushHost(s.shoreStaging.block);
+
+        ImageBarrier(cmd, s.shore.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, readers, VK_ACCESS_SHADER_READ_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+        VkBufferImageCopy region = {};
+        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.layerCount = 1;
+        region.imageExtent = VkExtent3D{ gxvk::vk::water::kShoreSize, gxvk::vk::water::kShoreSize, 1 };
+        d.CmdCopyBufferToImage(cmd, s.shoreStaging.handle, s.shore.image, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+        ImageBarrier(cmd, s.shore.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_ACCESS_TRANSFER_WRITE_BIT, readers, VK_ACCESS_SHADER_READ_BIT);
+        s.shoreVersion = in.version;
+        s.shoreHas     = true;
+        s.shoreUpload  = frame::Serial();
     }
 
     /// The waves' compute side, once: the device must run 256 threads a group with the FFT's shared memory.
@@ -608,6 +674,7 @@ namespace gxvk::vk::water
 
         // The waves first, into the pre-pass (they don't need the pass ended).
         RecordWaves(in.waves);
+        UploadShore(in.shore);
 
         frame::EffectTarget t;
         if (!frame::BeginEffect(t))
@@ -684,6 +751,17 @@ namespace gxvk::vk::water
             std::memcpy(p.lookIndex, in.looks.index, sizeof p.lookIndex);
             std::memcpy(p.lookPalette, in.looks.palette, count * kLookFloats * sizeof(float));
         }
+        if (in.shore.texels && s.shoreHas)
+        {
+            p.shoreGrid[0] = static_cast<float>(in.shore.originX);
+            p.shoreGrid[1] = static_cast<float>(in.shore.originY);
+            p.shoreGrid[2] = 1.0f;
+            p.shoreGrid[3] = 533.33333f / static_cast<float>(kShoreSize);
+        }
+        p.shoreLook[0] = in.shore.foam;
+        p.shoreLook[1] = in.shore.waveHeight;
+        p.shoreLook[2] = in.shore.wavelength;
+        p.shoreLook[3] = in.shore.reach;
         std::memcpy(slot.params.block.mapped, &p, sizeof p);
         memory::FlushHost(slot.params.block);
 
@@ -761,6 +839,8 @@ namespace gxvk::vk::water
         DestroyImage(s.colour);
         DestroyImage(s.depth);
         for (Image& img : s.waveImages) DestroyImage(img);
+        DestroyImage(s.shore);
+        memory::DestroyBuffer(s.shoreStaging);
         for (VkPipeline& p : s.wavePipes)
             if (p != VK_NULL_HANDLE) d.DestroyPipeline(s.device, p, nullptr);
         for (VkShaderModule& m : s.waveModules)

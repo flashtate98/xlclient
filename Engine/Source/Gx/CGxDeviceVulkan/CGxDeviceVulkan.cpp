@@ -644,6 +644,14 @@ bool CGxDeviceVulkan::SxcWaterCapture(const SXC::Water::Waves& waves) {
     in.looks.count = waves.lookCount;
     in.looks.originX = waves.lookOriginX;
     in.looks.originY = waves.lookOriginY;
+    in.shore.texels = waves.shore;
+    in.shore.version = waves.shoreVersion;
+    in.shore.originX = waves.shoreOriginX;
+    in.shore.originY = waves.shoreOriginY;
+    in.shore.foam = waves.shoreFoam;
+    in.shore.waveHeight = waves.shoreWaveHeight;
+    in.shore.wavelength = waves.shoreWavelength;
+    in.shore.reach = waves.shoreReach;
     return gxvk::vk::water::Capture(in);
 }
 

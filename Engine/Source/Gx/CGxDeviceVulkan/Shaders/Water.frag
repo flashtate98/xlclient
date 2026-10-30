@@ -18,7 +18,8 @@
 //
 // The registers SXC/Water adds: p6 = (time in s, wrapping every 600 s; the debug view; ripple strength; 0), p7
 // the sky's zenith, p8 its horizon, p9..p13 the draw's own look, p14 = (screen-space reflections on; the
-// sea's foam threshold (Jacobian); 1 when the look comes from the look grid; 0). The look itself (its
+// sea's foam threshold (Jacobian); 1 when the look comes from the look grid; 1 for terrain water, which reads
+// the shore field); not p15, which the device fills with the fixed-function fog. The look itself (its
 // LiquidSurface row, blended between places for terrain water) comes from Water.vert: vLook[0] = (clarity:
 // absorption per yd at the stock alpha 0 and 1; own colour; refraction), [1] = (reflectivity looking straight
 // down; reflection strength; Snell's window (cos); glint), [2] = (shallow colour; Hue weight), [3] = (deep
@@ -45,6 +46,7 @@ layout(set = 0, binding = 0) uniform sampler2D s0;
 layout(set = 2, binding = 0) uniform sampler2D sceneColour;
 layout(set = 2, binding = 1) uniform sampler2D sceneW;
 #include "WaterScene.glsl"
+#include "WaterShore.glsl"
 // The waves (step 3, WaterWaves.glsl): per cascade the height's slopes, the Jacobian (below 1 the crest
 // folds), the height.
 layout(set = 2, binding = 3) uniform sampler2DArray waveSlopes;
@@ -75,6 +77,23 @@ vec2 WaveSlope(vec2 xy, float distance, out float folding)
 }
 
 const float kTau = 6.2831853;
+
+// Value noise over the world (yd), for breaking up the shore's foam; hashed without sin (precise far from the
+// origin: the world is wrapped every 1024 yd first).
+float Hash(vec2 p)
+{
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+float Noise(vec2 p)
+{
+    p = mod(p, 1024.0);
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(Hash(i), Hash(i + vec2(1.0, 0.0)), f.x), mix(Hash(i + vec2(0.0, 1.0)), Hash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
 
 // Travelling sines over the world xy (yd), their slopes summed: the surface's small movement until the FFT
 // waves come (step 3). Four long ones and four short ones (the short ones break the sun's glint into
@@ -303,6 +322,30 @@ void main()
     float folding = 0.0;
     // This water's share of the shared sea (its look's wave scale).
     vec2 slope = (scene.waveSizes.w > 0.5 ? WaveSlope(world.xy, distance, folding) : RippleSlope(world.xy, regs.p[6].x, distance) * regs.p[6].z) * vLook[4].y;
+
+    // The shore (the shore field, terrain water near the player): the open sea calms over the shallows, and
+    // shore waves roll in toward the beach, rounder out, sharper crests near it, foaming where they break;
+    // foam laps at the waterline. One speed for every pixel (a speed by depth would shear the bands as the
+    // clock runs), a whole number of turns per 600 s (p6.x's wrap); bent a little by noise so the bands
+    // aren't drawn with a ruler.
+    float shoreWeight;
+    vec4 shore = ShoreAt(world.xy, shoreWeight);
+    float shoreDist = shore.x, shoreDepth = shore.y;
+    float shoreCrest = 0.0, shorePhase = 0.0;
+    slope *= mix(1.0, mix(0.35, 1.0, smoothstep(0.5, 5.0, shoreDepth)), shoreWeight);
+    float shoreK = kTau / max(scene.shoreLook.z, 1.0);
+    float shoreOmega = max(round(shoreK * 3.0 * 600.0 / kTau), 1.0) * kTau / 600.0;   // ~3 yd/s
+
+    if (shoreWeight > 0.0 && shoreDist > 0.0)
+    {
+        shorePhase = shoreK * shoreDist + shoreOmega * regs.p[6].x + 2.5 * Noise(world.xy / 24.0);
+        float amp = scene.shoreLook.y * vLook[4].y * smoothstep(0.3, 2.5, shoreDist) * (1.0 - smoothstep(scene.shoreLook.w * 0.4, max(scene.shoreLook.w, 1.0), shoreDist));
+        float rise = 0.5 + 0.5 * sin(shorePhase);
+        // h = amp * rise^2 along the distance; the distance grows away from the shore (-toShore).
+        float dh = amp * rise * cos(shorePhase) * shoreK;
+        slope -= shore.zw * dh * shoreWeight;
+        shoreCrest = pow(rise, 6.0) * smoothstep(0.02, 0.1, amp);
+    }
     vec3 N = normalize(vec3(-slope, 1.0));
 
     if (below)
@@ -396,8 +439,20 @@ void main()
     shine += regs.v[36].rgb * sun;
     vec3 highlight = below ? vec3(0.0) : shine * vLook[1].w * (1.0 - ssr.a) + LampsReflected(world, N, V);
 
-    // Foam where the crests fold: white, lit by the sun and the ambient, over the rest.
+    // Foam where the crests fold: white, lit by the sun and the ambient, over the rest. At the shore: a band
+    // at the waterline, widening and narrowing with the waves, and the crests where they break, both torn by
+    // noise.
     float foam = below ? 0.0 : folding * vLook[4].z;
+
+    if (!below && shoreWeight > 0.0 && scene.shoreLook.x > 0.0)
+    {
+        float d = max(shoreDist, 0.0);
+        float lapWidth = 0.8 + 1.6 * (0.5 + 0.5 * sin(shoreOmega * regs.p[6].x + 3.0 * Noise(world.xy / 16.0)));
+        float lap = 1.0 - smoothstep(0.0, lapWidth, d);
+        float breaking = shoreCrest * (1.0 - smoothstep(1.5, 7.0, d)) * smoothstep(0.3, 1.2, d);
+        float torn = smoothstep(0.3, 0.7, Noise(world.xy * 0.7) * 0.65 + Noise(world.xy * 2.3) * 0.35);
+        foam = max(foam, scene.shoreLook.x * shoreWeight * max(lap, breaking) * torn);
+    }
     vec3 foamColour = clamp(regs.v[34].rgb + regs.v[35].rgb * max(toSun.z, 0.0), 0.0, 1.0) * 0.9 + lamps * 0.3;
     vec3 surface = mix(mix(seen, reflected, fresnel) + highlight, foamColour, foam);
 
@@ -413,6 +468,13 @@ void main()
     float fog = regs.v[4].z > 0.0 ? min(pow(max(vView.z * regs.v[4].x + regs.v[4].y, 0.0), regs.v[4].z), 1.0) : 1.0;
     fog = pc.fog.w > 0.5 ? fog : 1.0;
     vec3 fogged = clear + own * fog + regs.p[4].rgb * (1.0 - fog) * coverage;
+
+    // The water's edge fades into the ground behind it over the last half yard of water crossed (no hard
+    // line along the beach), but for its foam.
+    if (!below)
+    {
+        fogged = mix(behind, fogged, max(smoothstep(0.0, 0.5, crossed), foam));
+    }
 
     // The Water panel's debug views (p6.y): 1 the screen-space reflection (its colour where it found
     // something, red where the sky stands in), 2 the water crossed (white: 20 yd and more), 3 the normal,
@@ -462,6 +524,17 @@ void main()
         float z = (scene.depthProj.y - ndc * scene.depthProj.w) / (ndc * scene.depthProj.z - scene.depthProj.x);
         float w = z * scene.depthProj.z + scene.depthProj.w;
         fogged = vec3(clamp(abs(w - vView.w) / max(vView.w, 1e-3) * 10.0, 0.0, 1.0), 0.0, 0.0);
+    }
+    else if (debugView == 11)
+    {
+        // The shore field: red over land by its distance to the water (16 yd), blue over water by its distance
+        // to the shore (32 yd), green the depth (8 yd); grey outside the field.
+        fogged = mix(vec3(0.25), vec3(clamp(-shoreDist / 16.0, 0.0, 1.0), clamp(shoreDepth / 8.0, 0.0, 1.0), clamp(shoreDist / 32.0, 0.0, 1.0)), shoreWeight);
+    }
+    else if (debugView == 12)
+    {
+        // The shore waves: their crests (red) and the foam (white).
+        fogged = mix(vec3(shoreCrest, 0.0, 0.0), vec3(1.0), foam);
     }
     else if (debugView == 10)
     {

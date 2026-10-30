@@ -4,6 +4,7 @@
 // its stock material asks for (the terrain's batches keep that format once built), the liquid code's
 // constants, then ours.
 #include "SXC/Water/Water.h"
+#include "SXC/Water/Shore.h"
 #include "SXC/Water/Surface.h"
 
 #include <algorithm>
@@ -45,7 +46,8 @@ namespace {
 
     // Our pixel registers (Water.frag): p6 = (time, debug view, ripple strength, 0), p7 the sky's zenith,
     // p8 its horizon, p9..p13 the draw's own look (Surface.h's PackLook), p14 = (screen-space reflections,
-    // the sea's foam threshold, 1 when the look comes from the look grid, 0).
+    // the sea's foam threshold, 1 when the look comes from the look grid, 1 for terrain water: the shore
+    // field applies). Not p15: the device fills it with the fixed-function fog for every draw.
     constexpr uint32_t kPixelFirst = 6;
     constexpr uint32_t kPixelRows = 9;
     constexpr float kRippleStrength = 1.0f;
@@ -61,6 +63,12 @@ namespace {
         float windAngle = 0.0f;       // degrees, 0 = +x
         int debugView = 0;
         int writeScope = 0;           // SXC::Water::ScopeKind: where "Write" puts the row
+        // The shore (one setting for every water for now).
+        float shoreFoam = 1.0f;
+        float shoreWaveHeight = 0.12f;   // yd
+        float shoreWavelength = 7.0f;    // yd
+        float shoreReach = 28.0f;        // yd
+        bool shoreField = true;          // off: the depth byte alone, as before the shore field
     };
     Panel s_panel;
 
@@ -334,6 +342,21 @@ namespace SXC::Water {
             waves.lookOriginY = grid.originY;
         }
 
+        // The shore field around the player (terrain liquid).
+        const SXC::Water::ShoreMap& shore = SXC::Water::ShoreField();
+
+        if (s_panel.shoreField && shore.valid) {
+            waves.shore = shore.texels;
+            waves.shoreVersion = shore.version;
+            waves.shoreOriginX = shore.originX;
+            waves.shoreOriginY = shore.originY;
+        }
+
+        waves.shoreFoam = s_panel.shoreFoam;
+        waves.shoreWaveHeight = s_panel.shoreWaveHeight;
+        waves.shoreWavelength = s_panel.shoreWavelength;
+        waves.shoreReach = s_panel.shoreReach;
+
         if (!s_capture(waves)) {
             return false;
         }
@@ -440,6 +463,7 @@ namespace SXC::Water {
         rows[32] = s_panel.screenReflections ? 1.0f : 0.0f;
         rows[33] = sea.foamThreshold;
         rows[34] = terrain && !s_panel.test && grid.valid ? 1.0f : 0.0f;
+        rows[35] = terrain ? 1.0f : 0.0f;
 
         g_theGxDevicePtr->ShaderConstantsSet(GxSh_Pixel, kPixelFirst, rows, kPixelRows);
 
@@ -527,7 +551,8 @@ namespace SXC::Water {
 
         static const char* const kViews[] = { "Off", "Reflection hits (red: sky)", "Water crossed (white 20 yd)", "Normal",
                                               "Folding / foam", "Reflection alone", "Scene behind", "Screen mapping check (black: right)",
-                                              "Reflection search outcome (blue: sky on screen)", "Depth conversion self-test (black: right)", "Movement easing (white: moves)" };
+                                              "Reflection search outcome (blue: sky on screen)", "Depth conversion self-test (black: right)", "Movement easing (white: moves)",
+                                              "Shore field (blue water, red land, green depth)", "Shore waves (red crests, white foam)" };
         ImGui::Combo("Debug view", &s_panel.debugView, kViews, IM_ARRAYSIZE(kViews));
         ImGui::Checkbox("Screen-space reflections", &s_panel.screenReflections);
         ImGui::Checkbox("Override the wind", &s_panel.windOverride);
@@ -578,6 +603,15 @@ namespace SXC::Water {
             ImGui::SliderFloat("Spread (the sea)", &l.spread, 0.0f, 1.0f);
             ImGui::SliderFloat("Foam", &l.foam, 0.0f, 3.0f);
             ImGui::SliderFloat("Foam threshold (the sea)", &l.foamThreshold, 0.0f, 1.5f);
+        }
+
+        if (ImGui::CollapsingHeader("Shore", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Checkbox("Shore field", &s_panel.shoreField);
+            ImGui::SliderFloat("Shore foam", &s_panel.shoreFoam, 0.0f, 2.0f);
+            ImGui::SliderFloat("Shore wave height (yd)", &s_panel.shoreWaveHeight, 0.0f, 0.6f);
+            ImGui::SliderFloat("Shore wavelength (yd)", &s_panel.shoreWavelength, 2.0f, 20.0f);
+            ImGui::SliderFloat("Shore waves reach (yd)", &s_panel.shoreReach, 4.0f, 60.0f);
+            ImGui::TextDisabled("Every water for now; not saved.");
         }
 
         if (ImGui::Button("Reset the test values")) {

@@ -23,6 +23,7 @@
 #include "Push.glsl"
 #include "TerrainRegs.glsl"
 #include "WaterScene.glsl"
+#include "WaterShore.glsl"
 
 layout(location = 0) in vec3 inPos;     // position0
 layout(location = 1) in vec4 inColor;   // color0: a WMO interior's liquid colour (white when the vertex has none)
@@ -75,10 +76,19 @@ void LookAt(vec3 world)
 
 void main()
 {
-    vEase = smoothstep(0.05, 0.6, inDepth.y);
     vec4 rel = regs.v[46] * inPos.x + regs.v[47] * inPos.y + regs.v[48] * inPos.z + regs.v[49];
     vec3 world = rel.xyz + regs.v[54].xyz;
     LookAt(world);
+
+    // How freely the surface moves here: eased out toward the shore. By the shore field where it reaches
+    // (still at the waterline and in water under a yard or so deep, free some 8 yd out); beyond it by the
+    // vertex's own depth (the MH2O depth byte through the depth table: 0 at the waterline, 1 a few yards
+    // deep). Moved at the beach, the water's edge rose above the sand and showed its steps (Seyri,
+    // 2026-10-29). WMO liquid carries neither, so it stays still.
+    float shoreWeight;
+    vec4 shore = ShoreAt(world.xy, shoreWeight);
+    float deep = mix(smoothstep(0.05, 0.6, inDepth.y), smoothstep(0.5, 8.0, shore.x) * smoothstep(0.3, 2.0, shore.y), shoreWeight);
+    vEase = deep;
 
     if (scene.waveSizes.w > 0.5 && vLook[4].w > 0.0)
     {
@@ -98,12 +108,7 @@ void main()
         d.xy *= 0.3;
         d = clamp(d, vec3(-1.0), vec3(1.0));
         d *= 1.0 - smoothstep(150.0, 260.0, distance);
-        // Eased out toward the shore by the vertex's own depth (the MH2O depth byte through the depth table:
-        // 0 at the waterline, 1 a few yards deep): moved at the beach, the water's edge rose above the sand
-        // and showed its steps (Seyri, 2026-10-29). The coast stays put and joins, open water moves fully.
-        // WMO liquid carries no depth here, so it stays still. The liquid map's shore field does this
-        // properly later.
-        float deep = smoothstep(0.05, 0.6, inDepth.y);
+        // Eased out toward the shore (`deep`, above): the coast stays put and joins, open water moves fully.
         rel.xyz += d * (vLook[4].w * deep * vLook[4].y);   // this water's movement and wave scale
     }
 
