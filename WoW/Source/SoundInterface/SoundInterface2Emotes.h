@@ -4,9 +4,13 @@
 #include <cstddef>
 #include <cstdint>
 
+// Not in the original: the stock table held races 0-21, so emote sounds of any later race (FlashWOW's
+// Eredar, Naga, Broken, Dark Iron Dwarf, ...) were dropped. ChrRaces IDs are bytes; 64 covers every race used.
+constexpr uint32_t kTextEmoteRaces = 64;
+
 struct TEXTEMOTELOOKUP {
-    /* 0000 */ int32_t m_soundIds[22][2];
-    /* 00B0 */ int32_t m_emotesTextId;
+    /* 0000 */ int32_t m_soundIds[kTextEmoteRaces][2];
+    /*      */ int32_t m_emotesTextId;
 
     TEXTEMOTELOOKUP();
 };
