@@ -48,6 +48,7 @@ namespace
         float lookPalette[gxvk::vk::water::kLookPalette * gxvk::vk::water::kLookFloats];
         float shoreGrid[4];    ///< the shore field's first cell (x, y), 1 when it holds a field, the cell (yd)
         float shoreLook[4];    ///< the shore's foam, wave height (yd), wavelength (yd), reach (yd)
+        float shoreWind[4];    ///< the waves' direction (unit x, y), the wind speed (yd / s), 0
     };
 
     // The waves (Shaders/WaterWaves.glsl): N x N per cascade, three cascades.
@@ -762,6 +763,9 @@ namespace gxvk::vk::water
         p.shoreLook[1] = in.shore.waveHeight;
         p.shoreLook[2] = in.shore.wavelength;
         p.shoreLook[3] = in.shore.reach;
+        p.shoreWind[0] = in.waves.windX;
+        p.shoreWind[1] = in.waves.windY;
+        p.shoreWind[2] = in.waves.speed;
         std::memcpy(slot.params.block.mapped, &p, sizeof p);
         memory::FlushHost(slot.params.block);
 

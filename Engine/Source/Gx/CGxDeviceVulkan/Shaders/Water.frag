@@ -324,25 +324,48 @@ void main()
     vec2 slope = (scene.waveSizes.w > 0.5 ? WaveSlope(world.xy, distance, folding) : RippleSlope(world.xy, regs.p[6].x, distance) * regs.p[6].z) * vLook[4].y;
 
     // The shore (the shore field, terrain water near the player): the open sea calms over the shallows, and
-    // shore waves roll in toward the beach, rounder out, sharper crests near it, foaming where they break;
-    // foam laps at the waterline. One speed for every pixel (a speed by depth would shear the bands as the
-    // clock runs), a whole number of turns per 600 s (p6.x's wrap); bent a little by noise so the bands
-    // aren't drawn with a ruler.
+    // shore waves roll in toward the beach, steepening as they come, breaking into whitewater that runs on
+    // to the waterline. One speed for every pixel (a speed by depth would shear the bands as the clock
+    // runs), a whole number of turns per 600 s (p6.x's wrap); bent a little by noise so the bands aren't
+    // drawn with a ruler.
+    //
+    // Exposure: waves come from the open sea, downwind. A shore gets them by how much it faces into the
+    // waves' direction and how much open water lies upwind of it (the field read 20 and 50 yd upwind):
+    // the lee of an island and a sheltered bay stay calm (Seyri, 2026-10-30: islands were ringed). A
+    // stronger wind, higher waves.
     float shoreWeight;
     vec4 shore = ShoreAt(world.xy, shoreWeight);
     float shoreDist = shore.x, shoreDepth = shore.y;
-    float shoreCrest = 0.0, shorePhase = 0.0;
+    float shoreCrest = 0.0, shoreExposure = 1.0;
     slope *= mix(1.0, mix(0.35, 1.0, smoothstep(0.5, 5.0, shoreDepth)), shoreWeight);
     float shoreK = kTau / max(scene.shoreLook.z, 1.0);
     float shoreOmega = max(round(shoreK * 3.0 * 600.0 / kTau), 1.0) * kTau / 600.0;   // ~3 yd/s
+    float shoreBend = 2.5 * Noise(world.xy / 24.0);
+    // The phase at the waterline: a crest arrives there when its sine peaks.
+    float arrival = shoreOmega * regs.p[6].x + shoreBend;
+
+    if (shoreWeight > 0.0)
+    {
+        vec2 wind = scene.shoreWind.xy;
+        float facing = smoothstep(-0.2, 0.6, dot(wind, shore.zw));
+        float w1, w2;
+        float up1 = ShoreAt(world.xy - wind * 20.0, w1).x;
+        float up2 = ShoreAt(world.xy - wind * 50.0, w2).x;
+        float open = 0.5 * mix(1.0, smoothstep(0.0, 15.0, up1), w1) + 0.5 * mix(1.0, smoothstep(0.0, 15.0, up2), w2);
+        shoreExposure = mix(0.1, 1.0, facing * open) * clamp(scene.shoreWind.z / 8.0, 0.25, 1.5);
+    }
 
     if (shoreWeight > 0.0 && shoreDist > 0.0)
     {
-        shorePhase = shoreK * shoreDist + shoreOmega * regs.p[6].x + 2.5 * Noise(world.xy / 24.0);
-        float amp = scene.shoreLook.y * vLook[4].y * smoothstep(0.3, 2.5, shoreDist) * (1.0 - smoothstep(scene.shoreLook.w * 0.4, max(scene.shoreLook.w, 1.0), shoreDist));
-        float rise = 0.5 + 0.5 * sin(shorePhase);
-        // h = amp * rise^2 along the distance; the distance grows away from the shore (-toShore).
-        float dh = amp * rise * cos(shorePhase) * shoreK;
+        float phase = shoreK * shoreDist + arrival;
+        // Taller toward the shore until they break about a yard out; steeper (a narrower crest) as they go.
+        float amp = scene.shoreLook.y * vLook[4].y * shoreExposure * smoothstep(0.3, 1.5, shoreDist)
+                  * mix(1.4, 1.0, smoothstep(1.0, 10.0, shoreDist))
+                  * (1.0 - smoothstep(scene.shoreLook.w * 0.4, max(scene.shoreLook.w, 1.0), shoreDist));
+        float sharp = mix(4.0, 1.5, smoothstep(1.0, 12.0, shoreDist));
+        float rise = 0.5 + 0.5 * sin(phase);
+        // h = amp * rise^sharp along the distance; the distance grows away from the shore (-toShore).
+        float dh = amp * sharp * pow(rise, sharp - 1.0) * 0.5 * cos(phase) * shoreK;
         slope -= shore.zw * dh * shoreWeight;
         shoreCrest = pow(rise, 6.0) * smoothstep(0.02, 0.1, amp);
     }
@@ -447,10 +470,29 @@ void main()
     if (!below && shoreWeight > 0.0 && scene.shoreLook.x > 0.0)
     {
         float d = max(shoreDist, 0.0);
-        float lapWidth = 0.8 + 1.6 * (0.5 + 0.5 * sin(shoreOmega * regs.p[6].x + 3.0 * Noise(world.xy / 16.0)));
-        float lap = 1.0 - smoothstep(0.0, lapWidth, d);
+        // The whitewater band at the waterline on the waves' own timing: a crest arriving pushes it out
+        // (the run-up, a moment after it breaks), then it slides back. Narrower and calmer where the
+        // shore is sheltered.
+        float swash = 0.5 + 0.5 * sin(arrival - 0.8);
+        float lapWidth = (0.5 + 2.2 * swash * swash) * mix(0.5, 1.0, min(shoreExposure, 1.0));
+        float lap = (1.0 - smoothstep(0.0, lapWidth, d)) * mix(0.4, 1.0, min(shoreExposure, 1.0));
         float breaking = shoreCrest * (1.0 - smoothstep(1.5, 7.0, d)) * smoothstep(0.3, 1.2, d);
-        float torn = smoothstep(0.3, 0.7, Noise(world.xy * 0.7) * 0.65 + Noise(world.xy * 2.3) * 0.35);
+        // The foam's pattern carried toward the beach with the waves: two copies half a cycle apart, each
+        // fading out as it starts over (a new pattern each cycle), so neither the reset nor the clock's
+        // wrap shows (600 s is a whole number of cycles).
+        const float kCycle = 4.0;   // s
+        vec2 drift = shore.zw * (shoreOmega / shoreK) * kCycle;
+        float t = regs.p[6].x / kCycle;
+        float phaseA = fract(t), phaseB = fract(t + 0.5);
+        vec2 seedA = vec2(37.1, 17.3) * mod(floor(t), 150.0), seedB = vec2(37.1, 17.3) * mod(floor(t + 0.5), 150.0) + vec2(11.0, 5.0);
+        vec2 pa = world.xy - drift * phaseA + seedA, pb = world.xy - drift * phaseB + seedB;
+        float noiseA = Noise(pa * 0.7) * 0.65 + Noise(pa * 2.3) * 0.35;
+        float noiseB = Noise(pb * 0.7) * 0.65 + Noise(pb * 2.3) * 0.35;
+        float weightA = 1.0 - abs(2.0 * phaseA - 1.0);
+        float pattern = mix(noiseB, noiseA, weightA);
+        // Thinning out as it travels: it tears more the older the copy is.
+        float age = mix(phaseB, phaseA, weightA);
+        float torn = smoothstep(0.28 + 0.15 * age, 0.68 + 0.1 * age, pattern);
         foam = max(foam, scene.shoreLook.x * shoreWeight * max(lap, breaking) * torn);
     }
     vec3 foamColour = clamp(regs.v[34].rgb + regs.v[35].rgb * max(toSun.z, 0.0), 0.0, 1.0) * 0.9 + lamps * 0.3;
