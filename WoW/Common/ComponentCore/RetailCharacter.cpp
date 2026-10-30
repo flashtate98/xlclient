@@ -1004,6 +1004,10 @@ uint32_t RetailCharacterHelmetRace(const CCharacterComponent* character) {
     uint32_t retailRace = 0;
     const uint32_t stock = RetailModelOf(character, retailRace) ? StockRaceFor(race) : 0;
     if (stock) return stock;
+    // A race past the 32-bit masks that copies a stock race (the NPC races 34-43: Human, Orc, Dwarf, ... by
+    // their ChrRaces client prefix) hides as that race.
+    if (race >= 32)
+        if (const uint32_t copied = StockRaceFor(race)) return copied;
     // FlashWOW moved its NPC races above 32 to free 23, 24 and 27-32 for new player races. The helmet hides
     // are 32-bit race masks, so the moved races keep the bit of their old number (which the new player races,
     // hiding by a stock race, do not read). Any other race past the masks hides nothing.
@@ -1596,7 +1600,10 @@ void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
     // Retail bodies group 0's 1-99 are the hairstyles (0 itself is the scalp), so those go.
     const auto& prefs = character->m_data.m_preferences;
     const uint32_t displayId = character->m_itemDisplayID[ITEMSLOT_HEAD];
-    if (!displayId || prefs.m_sexID > 1 || prefs.m_raceID >= 32) return;
+    // The race whose HelmetGeosetVisData bit applies: a new race's stock race, an NPC copy's stock race (34-43),
+    // a moved NPC race's old bit. A race past the 32-bit masks with none of those hides nothing.
+    const uint32_t hideRace = RetailCharacterHelmetRace(character);
+    if (!displayId || prefs.m_sexID > 1 || hideRace >= 32) return;
     CM2Model* helmet = model->m_attachList;
     while (helmet && helmet->m_attachmentId != ATTACH_HELM) helmet = helmet->m_attachNext;
     if (!helmet) return;    // hidden helm, barber shop
@@ -1605,8 +1612,6 @@ void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
     const auto* visibility = g_helmetGeosetVisDataDB.GetRecord(display.m_helmetGeosetVisID[prefs.m_sexID]);
     if (!visibility) return;
     static const uint32_t kGroups[7] = {0, 1, 2, 3, 7, 16, 17};
-    // A new race takes the hides of the race whose helmets it wears (the 3.3.5 masks stop at Draenei).
-    const uint32_t hideRace = StockRaceFor(prefs.m_raceID) ? StockRaceFor(prefs.m_raceID) : prefs.m_raceID;
     const uint32_t raceBit = uint32_t{1} << hideRace;
     const auto hides = [&](uint32_t slot) { return (static_cast<uint32_t>(visibility->m_hideGeoset[slot]) & raceBit) != 0; };
     // Facial hair goes only under helmets that hide all of it (full-face helms). Hoods and half helms
