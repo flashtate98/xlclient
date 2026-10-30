@@ -310,6 +310,7 @@ void main()
     float distance = length(toEye);
     vec3 V = toEye / max(distance, 1e-4);
     bool below = V.z < 0.0;
+    float pixel = length(fwidth(world.xy));   // yd per pixel on the surface (the foam's detail fades by it)
 
     // The FFT waves when the device runs them, else the small ripples.
     float folding = 0.0;
@@ -451,11 +452,18 @@ void main()
     if (!below && shoreWeight > 0.0 && scene.shoreLook.x > 0.0)
     {
         float d = max(shoreDist, 0.0);
+        // Near the waterline, the distance from the water's real depth under this pixel (the surface
+        // down to the scene behind it, along the view ray: the ground, a rock, a leg), so the band hugs
+        // every bump and moves with the waves; the field's 2 yd cells alone drew it soft and blocky.
+        // As if the floor fell a yard per 6 yd; further out, the field.
+        float sceneHere = textureLod(sceneW, here, 0.0).r;
+        float floorZ = eye.z + (world.z - eye.z) * (sceneHere / max(vView.w, 1e-3));
+        float dLap = min(d, max(world.z - floorZ, 0.0) * 6.0);
         // The whitewater band at the waterline on the waves' own timing: a crest arriving pushes it out
         // (the run-up, a moment after it breaks), then it slides back. Narrower and calmer where the
         // shore is sheltered.
         float lapWidth = (0.5 + 2.2 * ShoreSwash(arrival)) * mix(0.5, 1.0, min(shoreExposure, 1.0));
-        float lap = (1.0 - smoothstep(0.0, lapWidth, d)) * mix(0.4, 1.0, min(shoreExposure, 1.0));
+        float lap = (1.0 - smoothstep(0.0, lapWidth, dLap)) * mix(0.4, 1.0, min(shoreExposure, 1.0));
         float breaking = shoreCrest * (1.0 - smoothstep(1.5, 7.0, d)) * smoothstep(0.3, 1.2, d);
         // The foam's pattern carried with the wind (the waves come downwind): two copies half a cycle apart,
         // each fading out as it starts over (a new pattern each cycle), so neither the reset nor the clock's
@@ -468,13 +476,13 @@ void main()
         float phaseA = fract(t), phaseB = fract(t + 0.5);
         vec2 seedA = vec2(37.1, 17.3) * mod(floor(t), 150.0), seedB = vec2(37.1, 17.3) * mod(floor(t + 0.5), 150.0) + vec2(11.0, 5.0);
         vec2 pa = world.xy - drift * phaseA + seedA, pb = world.xy - drift * phaseB + seedB;
-        float noiseA = Noise(pa * 0.7) * 0.65 + Noise(pa * 2.3) * 0.35;
-        float noiseB = Noise(pb * 0.7) * 0.65 + Noise(pb * 2.3) * 0.35;
         float weightA = 1.0 - abs(2.0 * phaseA - 1.0);
-        float pattern = mix(noiseB, noiseA, weightA);
-        // Thinning out as it travels: it tears more the older the copy is.
+        float pattern = mix(FoamPattern(pb, pixel, regs.p[6].x), FoamPattern(pa, pixel, regs.p[6].x), weightA);
+        // Thinning out as it travels: it tears more the older the copy is. A narrow edge for crisp
+        // froth, widened where a pixel covers more of the pattern.
         float age = mix(phaseB, phaseA, weightA);
-        float torn = smoothstep(0.28 + 0.15 * age, 0.68 + 0.1 * age, pattern);
+        float tear = 0.42 + 0.12 * age, edge = 0.07 + clamp(pixel * 0.4, 0.0, 0.2);
+        float torn = smoothstep(tear - edge, tear + edge, pattern);
         foam = max(foam, scene.shoreLook.x * shoreWeight * max(lap, breaking) * torn);
     }
     vec3 foamColour = clamp(regs.v[34].rgb + regs.v[35].rgb * max(toSun.z, 0.0), 0.0, 1.0) * 0.9 + lamps * 0.3;

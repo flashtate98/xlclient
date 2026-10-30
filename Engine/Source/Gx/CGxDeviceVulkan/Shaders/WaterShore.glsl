@@ -81,6 +81,73 @@ float Noise(vec2 p)
     return mix(mix(Hash(i), Hash(i + vec2(1.0, 0.0)), f.x), mix(Hash(i + vec2(0.0, 1.0)), Hash(i + vec2(1.0, 1.0)), f.x), f.y);
 }
 
+// A rate of whole turns per 600 s (the clock's wrap, p6.x) near `seconds` per turn, so nothing jumps
+// when the clock wraps.
+float TurnsPer600(float seconds)
+{
+    return max(round(600.0 / seconds), 1.0) * 6.2831853 / 600.0;
+}
+
+// Cellular noise over the world: the distances to the nearest and the second-nearest of one point per
+// unit cell, and the nearest's own random value. The points wander around their places over time.
+vec3 Cells(vec2 p, float time)
+{
+    p = mod(p, 1024.0);
+    vec2 i = floor(p), f = fract(p);
+    float d1 = 8.0, d2 = 8.0, id = 0.0;
+    float w = TurnsPer600(3.0);
+
+    for (int y = -1; y <= 1; y++)
+    {
+        for (int x = -1; x <= 1; x++)
+        {
+            vec2 o = vec2(float(x), float(y));
+            vec2 h = vec2(Hash(i + o), Hash(i + o + 17.0));
+            vec2 r = o + 0.5 + 0.35 * sin(w * time + 6.2831853 * h) - f;
+            float d = dot(r, r);
+
+            if (d < d1)
+            {
+                d2 = d1;
+                d1 = d;
+                id = h.x;
+            }
+            else if (d < d2)
+            {
+                d2 = d;
+            }
+        }
+    }
+
+    return vec3(sqrt(vec2(d1, d2)), id);
+}
+
+// The shore foam's pattern at a point (yd) and time (s), 0..1, higher where frothier (mean about a half):
+// patches of froth (value noise) laced with bubbles (cells: dark holes at their centres, bright where they
+// meet), and finer bubbles in them. Alive, not just carried (Seyri, 2026-10-30: it looked like a scrolling
+// band): the patches churn (their noise warped by noise that circles), the bubbles wander, and each grows
+// and pops on its own timing. `pixel`: yd per pixel; each scale fades to its mean where a pixel covers
+// it, so distant foam doesn't shimmer. (Value noise alone looked soft and low-resolution.)
+float FoamPattern(vec2 p, float pixel, float time)
+{
+    float churn = TurnsPer600(9.0) * time;
+    vec2 circle = vec2(cos(churn), sin(churn)) * 3.0;
+    vec2 warp = vec2(Noise(p * 0.3 + circle), Noise(p * 0.3 - circle.yx + 7.0)) - 0.5;
+    vec2 q = p + warp * 2.0;
+    float patches = Noise(q * 0.45) * 0.6 + Noise(q * 1.3) * 0.4;
+
+    vec3 c = Cells(q * 1.6, time);
+    // The hole grows from nothing to its full size, then pops (back to nothing): every 2.5 s, each
+    // bubble at its own moment.
+    float grown = fract(time * (round(600.0 / 2.5) / 600.0) + c.z);
+    float hole = 1.0 - smoothstep(0.05 + 0.4 * grown - 0.12, 0.05 + 0.4 * grown, c.x);
+    float bubbles = (1.0 - hole) * 0.6 + (1.0 - smoothstep(0.0, 0.2, c.y - c.x)) * 0.4;
+    bubbles = mix(0.55, bubbles, 1.0 - smoothstep(0.15, 0.5, pixel * 1.6));
+    float fine = smoothstep(0.1, 0.55, Cells(q * 5.0 + 31.0, time).x);
+    fine = mix(0.6, fine, 1.0 - smoothstep(0.15, 0.5, pixel * 5.0));
+    return patches * 0.55 + bubbles * 0.3 + fine * 0.15;
+}
+
 const float kShoreTau = 6.2831853;
 
 // The shore waves' wave number and speed: one speed for every pixel (a speed by depth would shear the bands
