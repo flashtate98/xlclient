@@ -40,6 +40,7 @@ namespace SXC::Water {
         // The shore field (SXC/Water/Shore.h): 256 x 256 cells of four half floats, stored toroidally; null
         // when there is none. Uploaded when the version changes.
         const uint16_t* shore = nullptr;
+        const float* shoreCells = nullptr;   // the near mesh's cells (Shore.h's ShoreMap::cells)
         uint32_t shoreVersion = 0;
         int32_t shoreOriginX = 0, shoreOriginY = 0;
         float shoreFoam = 1.0f;          // the shore's foam strength
@@ -50,7 +51,8 @@ namespace SXC::Water {
 
     // The device's copy of the scene behind the water and its waves, once per frame (later calls the same
     // frame answer as the first); false: the stock water draws this frame.
-    using CaptureFn = bool (*)(const Waves& waves);
+    // `first`: this is the frame's first call (the near water mesh draws then).
+    using CaptureFn = bool (*)(const Waves& waves, bool* first);
     using StatusFn = const char* (*)();
 
     // The Vulkan device: available once its water programs and the lights' set are up, false when it goes.

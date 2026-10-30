@@ -183,7 +183,7 @@ class CGxDeviceVulkan : public CGxDevice {
     static bool SxcLightsFrame(gxvk::vk::lights::Frame& out);
     // SXC: the instanced grass (SXC/Grass -> Vulkan/Grass): a texture's runs with the client's grass state.
     static bool SxcGrassDraw(CGxTex* texture, const SXC::Grass::Run* runs, uint32_t count);
-    static bool SxcWaterCapture(const SXC::Water::Waves& waves);  // SXC: our water: the scene behind it and the waves, once per frame
+    static bool SxcWaterCapture(const SXC::Water::Waves& waves, bool* first);  // SXC: our water: the scene behind it and the waves, once per frame
 };
 
 CGxDevice* CreateCGxDeviceVulkan();

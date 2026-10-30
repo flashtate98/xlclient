@@ -53,6 +53,7 @@ namespace gxvk::vk::water
     struct ShoreInput
     {
         const uint16_t* texels  = nullptr;   ///< kShoreSize x kShoreSize x 4; null: none
+        const float*    cells   = nullptr;   ///< kShoreSize x kShoreSize x 4 floats: surface, ground, type, covered
         uint32_t        version = 0;         ///< uploaded again when it changes
         int32_t         originX = 0;         ///< the window's first cell (global)
         int32_t         originY = 0;
@@ -73,7 +74,7 @@ namespace gxvk::vk::water
 
     /// The copy, once per frame (later calls the same frame answer as the first). False: nothing to copy
     /// over yet, or the device can't; the water draws the stock way this frame.
-    bool Capture(const CaptureInput& in);
+    bool Capture(const CaptureInput& in, bool* first = nullptr);
 
     /// The cascades' world sizes (yd), for the draws.
     constexpr float kWaveSizes[3] = { 256.0f, 48.0f, 9.0f };

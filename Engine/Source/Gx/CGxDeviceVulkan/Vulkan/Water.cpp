@@ -137,6 +137,8 @@ namespace
         // upload's frame waited for before the staging is written again).
         Image          shore;
         memory::Buffer shoreStaging;
+        Image          shoreCells;          ///< the near mesh's cells (full floats), uploaded with the field
+        memory::Buffer shoreCellsStaging;
         bool           shoreFresh   = true;   ///< still undefined
         uint32_t       shoreVersion = 0;
         bool           shoreHas     = false;  ///< holds a field
@@ -285,20 +287,21 @@ namespace
 
         // Set 2 of the draws: 0 the scene's colour, 1 its depth (w), 2 where the draws lie on it and the
         // waves' parameters, 3 the waves' slopes (a layer per cascade), 4 their displacement (the vertex
-        // stage moves the surface with it, step 3b), 5 the shore field (both stages).
-        VkDescriptorSetLayoutBinding draw[6] = {};
-        for (uint32_t i = 0; i < 6; ++i)
+        // stage moves the surface with it, step 3b), 5 the shore field, 6 its cells for the near mesh
+        // (both stages).
+        VkDescriptorSetLayoutBinding draw[7] = {};
+        for (uint32_t i = 0; i < 7; ++i)
         {
             draw[i].binding         = i;
             draw[i].descriptorType  = i == 2 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             draw[i].descriptorCount = 1;
-            draw[i].stageFlags      = i == 2 || i == 5 ? VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
+            draw[i].stageFlags      = i == 2 || i >= 5 ? VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
                                     : i == 4 ? VK_SHADER_STAGE_VERTEX_BIT
                                              : VK_SHADER_STAGE_FRAGMENT_BIT;
         }
         VkDescriptorSetLayoutCreateInfo drawInfo = {};
         drawInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        drawInfo.bindingCount = 6;
+        drawInfo.bindingCount = 7;
         drawInfo.pBindings    = draw;
         if (!Check(d.CreateDescriptorSetLayout(s.device, &drawInfo, nullptr, &s.drawLayout), "vkCreateDescriptorSetLayout (set 2)")) return false;
 
@@ -324,7 +327,7 @@ namespace
 
         VkDescriptorPoolSize sizes[3] = {};
         sizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[0].descriptorCount = 7 * kSlots;
+        sizes[0].descriptorCount = 8 * kSlots;
         sizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         sizes[1].descriptorCount = 2 * kSlots;
         sizes[2].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -378,7 +381,9 @@ namespace
         const VkExtent2D shoreExtent = { gxvk::vk::water::kShoreSize, gxvk::vk::water::kShoreSize };
         const VkDeviceSize shoreBytes = static_cast<VkDeviceSize>(gxvk::vk::water::kShoreSize) * gxvk::vk::water::kShoreSize * 8;
         if (!CreateImage(VK_FORMAT_R16G16B16A16_SFLOAT, shoreExtent, s.shore)) return false;
-        if (!memory::CreateBuffer(shoreBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, memory::Where::Stream, s.shoreStaging) || !s.shoreStaging.block.mapped)
+        if (!CreateImage(VK_FORMAT_R32G32B32A32_SFLOAT, shoreExtent, s.shoreCells)) return false;
+        if (!memory::CreateBuffer(shoreBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, memory::Where::Stream, s.shoreStaging) || !s.shoreStaging.block.mapped
+            || !memory::CreateBuffer(shoreBytes * 2, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, memory::Where::Stream, s.shoreCellsStaging) || !s.shoreCellsStaging.block.mapped)
         {
             Write(Error, "vulkan: water: no staging buffer for the shore field");
             s.failed = true;
@@ -407,17 +412,18 @@ namespace
 
     void WriteDrawSet(Slot& slot)
     {
-        VkDescriptorImageInfo images[6] = {
+        VkDescriptorImageInfo images[7] = {
             { s.linearClamp, s.colour.view, VK_IMAGE_LAYOUT_GENERAL },
             { s.nearestClamp, s.depth.view, VK_IMAGE_LAYOUT_GENERAL },
             {},
             { s.linearRepeat, s.waveImages[6].view, VK_IMAGE_LAYOUT_GENERAL },
             { s.linearRepeat, s.waveImages[5].view, VK_IMAGE_LAYOUT_GENERAL },
             { s.linearRepeat, s.shore.view, VK_IMAGE_LAYOUT_GENERAL },
+            { s.nearestClamp, s.shoreCells.view, VK_IMAGE_LAYOUT_GENERAL },
         };
         VkDescriptorBufferInfo params = { slot.params.handle, 0, sizeof(Params) };
-        VkWriteDescriptorSet writes[6] = {};
-        for (uint32_t i = 0; i < 6; ++i)
+        VkWriteDescriptorSet writes[7] = {};
+        for (uint32_t i = 0; i < 7; ++i)
         {
             writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[i].dstSet          = slot.drawSet;
@@ -427,7 +433,7 @@ namespace
             if (i == 2) writes[i].pBufferInfo = &params;
             else writes[i].pImageInfo = &images[i];
         }
-        s.dapi->UpdateDescriptorSets(s.device, 6, writes, 0, nullptr);
+        s.dapi->UpdateDescriptorSets(s.device, 7, writes, 0, nullptr);
         slot.written = true;
     }
 
@@ -444,12 +450,16 @@ namespace
         {
             VkClearColorValue zero = {};
             VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-            ImageBarrier(cmd, s.shore.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
-                         VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-            d.CmdClearColorImage(cmd, s.shore.image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
-            ImageBarrier(cmd, s.shore.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                         VK_ACCESS_TRANSFER_WRITE_BIT, readers, VK_ACCESS_SHADER_READ_BIT);
-            s.shore.layout = VK_IMAGE_LAYOUT_GENERAL;
+            Image* const fresh[2] = { &s.shore, &s.shoreCells };
+            for (Image* img : fresh)
+            {
+                ImageBarrier(cmd, img->image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+                d.CmdClearColorImage(cmd, img->image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
+                ImageBarrier(cmd, img->image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_ACCESS_TRANSFER_WRITE_BIT, readers, VK_ACCESS_SHADER_READ_BIT);
+                img->layout = VK_IMAGE_LAYOUT_GENERAL;
+            }
             s.shoreFresh = false;
         }
 
@@ -460,6 +470,11 @@ namespace
         const size_t bytes = static_cast<size_t>(gxvk::vk::water::kShoreSize) * gxvk::vk::water::kShoreSize * 8;
         std::memcpy(s.shoreStaging.block.mapped, in.texels, bytes);
         memory::FlushHost(s.shoreStaging.block);
+        if (in.cells)
+        {
+            std::memcpy(s.shoreCellsStaging.block.mapped, in.cells, bytes * 2);
+            memory::FlushHost(s.shoreCellsStaging.block);
+        }
 
         ImageBarrier(cmd, s.shore.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, readers, VK_ACCESS_SHADER_READ_BIT,
                      VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
@@ -470,6 +485,14 @@ namespace
         d.CmdCopyBufferToImage(cmd, s.shoreStaging.handle, s.shore.image, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
         ImageBarrier(cmd, s.shore.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_TRANSFER_BIT,
                      VK_ACCESS_TRANSFER_WRITE_BIT, readers, VK_ACCESS_SHADER_READ_BIT);
+        if (in.cells)
+        {
+            ImageBarrier(cmd, s.shoreCells.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, readers, VK_ACCESS_SHADER_READ_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+            d.CmdCopyBufferToImage(cmd, s.shoreCellsStaging.handle, s.shoreCells.image, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+            ImageBarrier(cmd, s.shoreCells.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_ACCESS_TRANSFER_WRITE_BIT, readers, VK_ACCESS_SHADER_READ_BIT);
+        }
         s.shoreVersion = in.version;
         s.shoreHas     = true;
         s.shoreUpload  = frame::Serial();
@@ -659,10 +682,11 @@ namespace
 
 namespace gxvk::vk::water
 {
-    bool Capture(const CaptureInput& in)
+    bool Capture(const CaptureInput& in, bool* first)
     {
         const uint64_t serial = frame::Serial();
 
+        if (first) *first = s.lastCapture != serial;
         if (s.lastCapture == serial) return s.lastOk;
         s.lastCapture = serial;
         s.lastOk      = false;
@@ -845,6 +869,8 @@ namespace gxvk::vk::water
         for (Image& img : s.waveImages) DestroyImage(img);
         DestroyImage(s.shore);
         memory::DestroyBuffer(s.shoreStaging);
+        DestroyImage(s.shoreCells);
+        memory::DestroyBuffer(s.shoreCellsStaging);
         for (VkPipeline& p : s.wavePipes)
             if (p != VK_NULL_HANDLE) d.DestroyPipeline(s.device, p, nullptr);
         for (VkShaderModule& m : s.waveModules)

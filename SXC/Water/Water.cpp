@@ -14,6 +14,7 @@
 #include <cstring>
 #include <string>
 #include "Engine/Source/Gx/CGxDevice/CGxDevice.h"
+#include "Engine/Source/Gx/CGxBuf.h"
 #include "Engine/Source/Gx/CGxDevice/CGxShader.h"
 #include "Engine/Source/Gx/Gx.h"
 #include "Engine/Source/Model2/M2Light.h"
@@ -69,6 +70,7 @@ namespace {
         float shoreWavelength = 7.0f;    // yd
         float shoreReach = 28.0f;        // yd
         bool shoreField = true;          // off: the depth byte alone, as before the shore field
+        bool nearMesh = true;            // our own water mesh over the shore field (off: the stock mesh, pinned)
     };
     Panel s_panel;
 
@@ -250,6 +252,232 @@ namespace SXC::Water {
         return s_hideStock;
     }
 
+    // What a water draw needs beyond its mesh.
+    struct Setup {
+        CGxTex* tint = nullptr;
+        float depthScale = 1.0f;
+        bool identity = true;
+        const C44Matrix* transform = nullptr;   // the mesh's, unless identity
+        Liquid::IEnvironment* environment = nullptr;
+        CAaSphere bounds;
+        uint32_t liquidType = 0;
+        float lookX = 0.0f, lookY = 0.0f;       // where its own look is taken
+        float terrain = 0.0f;                   // p14.w: 0 WMO, 1 terrain, 2 terrain giving way to the near mesh
+        bool nearMesh = false;                  // the near mesh (v55)
+    };
+
+    // The near mesh drew this frame (the stock terrain water gives way where it covers).
+    bool s_nearDrawn = false;
+
+    // The state, the liquid code's constants and ours, then the draw (the mesh's buffers already set).
+    void Submit(const Setup& d, const C3Vector& cameraPos, const SXC::Water::Look& sea, bool gridValid, CGxBatch& batch) {
+        g_theGxDevicePtr->RsSet(GxRs_Culling, 0);
+        // Opaque to the depth buffer like any solid surface: our water covers what lies behind it itself (the
+        // scene's copy), and its moving surface hides parts of itself. Without writing depth, whichever patch
+        // the (unsorted) liquid list drew last painted over the others: chunk-shaped steps of the wrong wave,
+        // waves behind a character drawn over her (Seyri, 2026-10-29). The test explicitly too: the liquid
+        // pass inherits it from whatever drew before.
+        g_theGxDevicePtr->RsSet(GxRs_DepthTest, 1);
+        g_theGxDevicePtr->RsSet(GxRs_DepthWrite, 1);
+        g_theGxDevicePtr->RsSet(GxRs_BlendingMode, 2);
+        GxUpdateAlphaRef(GxRs_AlphaRef);
+        g_theGxDevicePtr->RsSet(GxRs_Fog, 1);
+
+        Liquid::s_vsConstants.m_projection = g_theGxDevicePtr->m_projNative;
+
+        C44Matrix matrix;
+        Liquid::SetShaderTransforms(cameraPos, d.identity ? matrix : *d.transform);
+
+        CM2Lighting lighting(d.bounds);
+        d.environment->SelectLights(&lighting);
+        Liquid::SetShaderLighting(lighting);
+
+        // Texture transform 1 takes the depth coordinate (the stock vsLiquidWater's c13..c16).
+        C44Matrix depthMatrix;
+        depthMatrix.b1 = d.depthScale;
+        Liquid::s_vsConstants.m_texTransforms[1] = depthMatrix;
+
+        g_theGxDevicePtr->RsSet(GxRs_Texture0, d.tint);
+        Liquid::SetShaderConstants();
+
+        // Ours past the liquid's (Water.vert, step 3b): c46..c49 the mesh's world transform (camera-
+        // relative when the liquid code works that way), c50..c53 the view, c54 what the world transform
+        // leaves out of the world position (the camera's, when camera-relative): the vertex stage moves
+        // the surface in the world and then views it. c55 = (1 for the near mesh, its LiquidType).
+        {
+            C44Matrix world = d.identity ? C44Matrix() : *d.transform;
+            C3Vector offset(0.0f, 0.0f, 0.0f);
+
+            if (Liquid::UseCameraRelativeCoords()) {
+                world.d0 -= cameraPos.x;
+                world.d1 -= cameraPos.y;
+                world.d2 -= cameraPos.z;
+                offset = cameraPos;
+            }
+
+            C44Matrix view;
+            GxXformView(view);
+            float vertexRows[10 * 4] = {};
+            std::memcpy(&vertexRows[0], &world, sizeof(world));
+            std::memcpy(&vertexRows[16], &view, sizeof(view));
+            vertexRows[32] = offset.x;
+            vertexRows[33] = offset.y;
+            vertexRows[34] = offset.z;
+            vertexRows[36] = d.nearMesh ? 1.0f : 0.0f;
+            vertexRows[37] = static_cast<float>(d.liquidType);
+            g_theGxDevicePtr->ShaderConstantsSet(GxSh_Vertex, 46, vertexRows, 10);
+        }
+
+        float rows[kPixelRows * 4] = {};
+        rows[0] = RippleTime();
+        rows[1] = static_cast<float>(s_panel.debugView);
+        rows[2] = kRippleStrength;
+        const DayNight::DNInfo* info = DayNight::GetInfo();
+
+        if (info) {
+            SkyRow(&rows[4], info->m_bands.m_skyColors[0]);
+            SkyRow(&rows[8], info->m_bands.m_skyColors[4]);
+        }
+
+        // The draw's own look, where it lies (WMO water, the panel's tests); terrain water reads the look
+        // grid per vertex instead, blended between places.
+        SXC::Water::PackLook(LookFor(d.liquidType, d.lookX, d.lookY), &rows[12]);
+        rows[32] = s_panel.screenReflections ? 1.0f : 0.0f;
+        rows[33] = sea.foamThreshold;
+        rows[34] = d.terrain > 0.0f && !s_panel.test && gridValid ? 1.0f : 0.0f;
+        rows[35] = d.terrain;
+
+        g_theGxDevicePtr->ShaderConstantsSet(GxSh_Pixel, kPixelFirst, rows, kPixelRows);
+
+        g_theGxDevicePtr->RsSet(GxRs_VertexShader, s_vertexShader);
+        g_theGxDevicePtr->RsSet(GxRs_PixelShader, s_pixelShader);
+        g_theGxDevicePtr->Draw(&batch, 1);
+    }
+
+    // The near mesh's grid: a vertex per cell of the shore field's window (its position the cell in the
+    // window), two triangles per square; made once, filled again if the device lost it.
+    CGxBuf* s_nearVertices = nullptr;
+    CGxBuf* s_nearIndices = nullptr;
+    constexpr uint32_t kNear = static_cast<uint32_t>(SXC::Water::kShoreSize);
+    constexpr EGxVertexBufferFormat kNearFormat = GxVBF_PNCT2;
+
+    bool NearBuffers() {
+        const uint32_t vertexCount = kNear * kNear, indexCount = (kNear - 1) * (kNear - 1) * 6;
+
+        if (!s_nearVertices) {
+            const uint32_t stride = GxVertexSize(kNearFormat);
+            CGxPool* vertexPool = g_theGxDevicePtr->PoolCreate(GxPoolTarget_Vertex, GxPoolUsage_Dynamic, stride * vertexCount, GxPoolHintBit_Unk3, "SxcWaterNear_vtx");
+            CGxPool* indexPool = g_theGxDevicePtr->PoolCreate(GxPoolTarget_Index, GxPoolUsage_Dynamic, 2 * indexCount, GxPoolHintBit_Unk3, "SxcWaterNear_idx");
+            s_nearVertices = g_theGxDevicePtr->BufCreate(vertexPool, stride, vertexCount, 0);
+            s_nearIndices = g_theGxDevicePtr->BufCreate(indexPool, 2, indexCount, 0);
+        }
+
+        if (!s_nearVertices || !s_nearIndices) {
+            return false;
+        }
+
+        if (!s_nearVertices->m_hasData || !s_nearVertices->m_valid) {
+            char* data = g_theGxDevicePtr->BufLock(s_nearVertices);
+
+            if (!data) {
+                return false;
+            }
+
+            const uint32_t stride = GxVertexSize(kNearFormat);
+            std::memset(data, 0, static_cast<size_t>(stride) * vertexCount);
+            const uint32_t position = GxVertexAttribOffset(kNearFormat, GxVA_Position), normal = GxVertexAttribOffset(kNearFormat, GxVA_Normal),
+                           colour = GxVertexAttribOffset(kNearFormat, GxVA_Color0);
+
+            for (uint32_t j = 0; j < kNear; j++) {
+                for (uint32_t i = 0; i < kNear; i++) {
+                    char* v = data + static_cast<size_t>(j * kNear + i) * stride;
+                    const float p[3] = { static_cast<float>(i), static_cast<float>(j), 0.0f }, n[3] = { 0.0f, 0.0f, 1.0f };
+                    const uint32_t white = 0xFFFFFFFFu;
+                    std::memcpy(v + position, p, sizeof(p));
+                    std::memcpy(v + normal, n, sizeof(n));
+                    std::memcpy(v + colour, &white, sizeof(white));
+                }
+            }
+
+            g_theGxDevicePtr->BufUnlock(s_nearVertices, 0);
+            s_nearVertices->m_hasData = 1;
+        }
+
+        if (!s_nearIndices->m_hasData || !s_nearIndices->m_valid) {
+            uint16_t* indices = reinterpret_cast<uint16_t*>(g_theGxDevicePtr->BufLock(s_nearIndices));
+
+            if (!indices) {
+                return false;
+            }
+
+            for (uint32_t j = 0; j + 1 < kNear; j++) {
+                for (uint32_t i = 0; i + 1 < kNear; i++) {
+                    const uint16_t a = static_cast<uint16_t>(j * kNear + i), b = static_cast<uint16_t>(a + 1);
+                    const uint16_t c = static_cast<uint16_t>(a + kNear), e = static_cast<uint16_t>(c + 1);
+                    *indices++ = a;
+                    *indices++ = b;
+                    *indices++ = c;
+                    *indices++ = b;
+                    *indices++ = e;
+                    *indices++ = c;
+                }
+            }
+
+            g_theGxDevicePtr->BufUnlock(s_nearIndices, 0);
+            s_nearIndices->m_hasData = 1;
+        }
+
+        return true;
+    }
+
+    // The near mesh, once per water type it covers, at the frame's first water draw (`from`: the instance
+    // whose environment picks the lights).
+    void DrawNear(Liquid::CInstance* from, const C3Vector& cameraPos, const SXC::Water::ShoreMap& shore, const SXC::Water::Look& sea, bool gridValid) {
+        if (!s_panel.nearMesh || !s_panel.shoreField || !shore.valid || !shore.typeCount || !NearBuffers()) {
+            return;
+        }
+
+        float playerX = 0.0f, playerY = 0.0f;
+        SXC::Water::PlayerPosition(playerX, playerY);
+
+        for (uint32_t t = 0; t < shore.typeCount; t++) {
+            const uint32_t type = shore.types[t];
+            Liquid::CMaterialSettings* settings = Liquid::CSettingsBank::GetSettings(type);
+            const uint32_t stockId = StockWaterId(Liquid::CMaterialBank::GetMaterial(type));
+            CGxTex* tint = settings && stockId ? TintTexture(settings) : nullptr;
+
+            if (!tint) {
+                continue;   // not one of our waters (magma, slime): the stock mesh keeps it
+            }
+
+            g_theGxDevicePtr->RsPush();
+            GxPrimVertexPtr(s_nearVertices, kNearFormat);
+            g_theGxDevicePtr->PrimIndexPtr(s_nearIndices);
+            CGxBatch batch;
+            batch.m_primType = GxPrim_Triangles;
+            batch.m_start = 0;
+            batch.m_count = (kNear - 1) * (kNear - 1) * 6;
+            batch.m_minIndex = 0;
+            batch.m_maxIndex = static_cast<uint16_t>(kNear * kNear - 1);
+
+            Setup d;
+            d.tint = tint;
+            d.depthScale = settings->GetFloat(stockId == 3 ? 8 : 2);
+            d.environment = from->m_environment;
+            d.bounds = CAaSphere();
+            d.bounds.c = C3Vector(playerX, playerY, cameraPos.z);
+            d.bounds.r = 300.0f;
+            d.liquidType = type;
+            d.lookX = playerX;
+            d.lookY = playerY;
+            d.terrain = 1.0f;
+            d.nearMesh = true;
+            Submit(d, cameraPos, sea, gridValid, batch);
+            g_theGxDevicePtr->RsPop();
+            s_nearDrawn = true;
+        }
+    }
+
     bool DrawOurs(Liquid::CInstance* instance, const C3Vector& cameraPos, Reason& why) {
         if (!Active() || !instance) {
             why = Reason::Inactive;
@@ -347,6 +575,7 @@ namespace SXC::Water {
 
         if (s_panel.shoreField && shore.valid) {
             waves.shore = shore.texels;
+            waves.shoreCells = shore.cells;
             waves.shoreVersion = shore.version;
             waves.shoreOriginX = shore.originX;
             waves.shoreOriginY = shore.originY;
@@ -357,8 +586,16 @@ namespace SXC::Water {
         waves.shoreWavelength = s_panel.shoreWavelength;
         waves.shoreReach = s_panel.shoreReach;
 
-        if (!s_capture(waves)) {
+        bool first = false;
+
+        if (!s_capture(waves, &first)) {
             return false;
+        }
+
+        // Our own water mesh near the player, ahead of the frame's stock terrain water.
+        if (first) {
+            s_nearDrawn = false;
+            DrawNear(instance, cameraPos, shore, sea, grid.valid);
         }
 
         // The format the stock material builds the mesh in (ProcWater PT2, the old water PNCT2).
@@ -388,88 +625,19 @@ namespace SXC::Water {
         GxPrimVertexPtr(vertexBuf, format);
         g_theGxDevicePtr->PrimIndexPtr(indexBuf);
 
-        g_theGxDevicePtr->RsSet(GxRs_Culling, 0);
-        // Opaque to the depth buffer like any solid surface: our water covers what lies behind it itself (the
-        // scene's copy), and its moving surface hides parts of itself. Without writing depth, whichever patch
-        // the (unsorted) liquid list drew last painted over the others: chunk-shaped steps of the wrong wave,
-        // waves behind a character drawn over her (Seyri, 2026-10-29). The test explicitly too: the liquid
-        // pass inherits it from whatever drew before.
-        g_theGxDevicePtr->RsSet(GxRs_DepthTest, 1);
-        g_theGxDevicePtr->RsSet(GxRs_DepthWrite, 1);
-        g_theGxDevicePtr->RsSet(GxRs_BlendingMode, 2);
-        GxUpdateAlphaRef(GxRs_AlphaRef);
-        g_theGxDevicePtr->RsSet(GxRs_Fog, 1);
-
-        Liquid::s_vsConstants.m_projection = g_theGxDevicePtr->m_projNative;
-
-        C44Matrix matrix;
-        Liquid::SetShaderTransforms(cameraPos, identity ? matrix : instance->m_transform);
-
-        CM2Lighting lighting(instance->m_bounds);
-        instance->m_environment->SelectLights(&lighting);
-        Liquid::SetShaderLighting(lighting);
-
-        // Texture transform 1 takes the depth coordinate (the stock vsLiquidWater's c13..c16).
-        C44Matrix depthMatrix;
-        depthMatrix.b1 = depthScale;
-        Liquid::s_vsConstants.m_texTransforms[1] = depthMatrix;
-
-        g_theGxDevicePtr->RsSet(GxRs_Texture0, tint);
-        Liquid::SetShaderConstants();
-
-        // Ours past the liquid's (Water.vert, step 3b): c46..c49 the mesh's world transform (camera-
-        // relative when the liquid code works that way), c50..c53 the view, c54 what the world transform
-        // leaves out of the world position (the camera's, when camera-relative): the vertex stage moves
-        // the surface in the world and then views it.
-        {
-            C44Matrix world = identity ? C44Matrix() : instance->m_transform;
-            C3Vector offset(0.0f, 0.0f, 0.0f);
-
-            if (Liquid::UseCameraRelativeCoords()) {
-                world.d0 -= cameraPos.x;
-                world.d1 -= cameraPos.y;
-                world.d2 -= cameraPos.z;
-                offset = cameraPos;
-            }
-
-            C44Matrix view;
-            GxXformView(view);
-            float vertexRows[9 * 4];
-            std::memcpy(&vertexRows[0], &world, sizeof(world));
-            std::memcpy(&vertexRows[16], &view, sizeof(view));
-            vertexRows[32] = offset.x;
-            vertexRows[33] = offset.y;
-            vertexRows[34] = offset.z;
-            vertexRows[35] = 0.0f;
-            g_theGxDevicePtr->ShaderConstantsSet(GxSh_Vertex, 46, vertexRows, 9);
-        }
-
-        float rows[kPixelRows * 4] = {};
-        rows[0] = RippleTime();
-        rows[1] = static_cast<float>(s_panel.debugView);
-        rows[2] = kRippleStrength;
-        const DayNight::DNInfo* info = DayNight::GetInfo();
-
-        if (info) {
-            SkyRow(&rows[4], info->m_bands.m_skyColors[0]);
-            SkyRow(&rows[8], info->m_bands.m_skyColors[4]);
-        }
-
-        // The draw's own look, where its bounds' centre lies (WMO water, the panel's tests); terrain water
-        // reads the look grid per vertex instead, blended between places.
-        const SXC::Water::Look& look = LookFor(SXC::Water::LiquidTypeOf(instance->m_settings), instance->m_bounds.c.x, instance->m_bounds.c.y);
-        SXC::Water::PackLook(look, &rows[12]);
+        Setup d;
+        d.tint = tint;
+        d.depthScale = depthScale;
+        d.identity = identity;
+        d.transform = &instance->m_transform;
+        d.environment = instance->m_environment;
+        d.bounds = instance->m_bounds;
+        d.liquidType = SXC::Water::LiquidTypeOf(instance->m_settings);
+        d.lookX = instance->m_bounds.c.x;
+        d.lookY = instance->m_bounds.c.y;
         const bool terrain = dynamic_cast<Liquid::CChunkGeomFactory*>(instance->m_geomFactory) != nullptr;
-        rows[32] = s_panel.screenReflections ? 1.0f : 0.0f;
-        rows[33] = sea.foamThreshold;
-        rows[34] = terrain && !s_panel.test && grid.valid ? 1.0f : 0.0f;
-        rows[35] = terrain ? 1.0f : 0.0f;
-
-        g_theGxDevicePtr->ShaderConstantsSet(GxSh_Pixel, kPixelFirst, rows, kPixelRows);
-
-        g_theGxDevicePtr->RsSet(GxRs_VertexShader, s_vertexShader);
-        g_theGxDevicePtr->RsSet(GxRs_PixelShader, s_pixelShader);
-        g_theGxDevicePtr->Draw(&batch, 1);
+        d.terrain = terrain ? (s_nearDrawn ? 2.0f : 1.0f) : 0.0f;
+        Submit(d, cameraPos, sea, grid.valid, batch);
         g_theGxDevicePtr->RsPop();
         return true;
     }
@@ -607,6 +775,10 @@ namespace SXC::Water {
 
         if (ImGui::CollapsingHeader("Shore", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::Checkbox("Shore field", &s_panel.shoreField);
+            ImGui::SameLine();
+            ImGui::Checkbox("Our water mesh near you", &s_panel.nearMesh);
+            ImGui::SetItemTooltip("Over the shore field's window, our own mesh in place of the stock terrain water: the waterline is "
+                                  "wherever the surface meets the ground. Off: the stock mesh, its edge held still.");
             ImGui::SliderFloat("Shore foam", &s_panel.shoreFoam, 0.0f, 2.0f);
             ImGui::SliderFloat("Shore wave height (yd)", &s_panel.shoreWaveHeight, 0.0f, 0.6f);
             ImGui::SliderFloat("Shore wavelength (yd)", &s_panel.shoreWavelength, 2.0f, 20.0f);

@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 #include "Engine/Source/Tempest/C2Vector.h"
@@ -19,7 +20,7 @@ namespace SXC::Water {
     namespace {
         constexpr float kHalfWorld = 32.0f * 533.33333f;
         constexpr int32_t kChunks = kShoreSize / 16;     // chunks per side
-        constexpr int32_t kResamplePerFrame = 8;         // changed chunks sampled per frame
+        constexpr int32_t kResamplePerFrame = 16;        // changed chunks sampled per frame (a row: the window's step)
         constexpr float kMaxDistance = 64.0f;            // yd: farther shores count as this far
         constexpr float kMaxDepth = 50.0f;               // yd: holes and the deep
 
@@ -37,6 +38,10 @@ namespace SXC::Water {
             Slot slots[kChunks * kChunks];
             std::vector<uint8_t> water = std::vector<uint8_t>(kShoreSize * kShoreSize, 0);
             std::vector<float> depth = std::vector<float>(kShoreSize * kShoreSize, 0.0f);
+            std::vector<float> surface = std::vector<float>(kShoreSize * kShoreSize, 0.0f);
+            std::vector<float> ground = std::vector<float>(kShoreSize * kShoreSize, -1e6f);
+            std::vector<uint16_t> type = std::vector<uint16_t>(kShoreSize * kShoreSize, 0);
+            std::vector<float> coord = std::vector<float>(kShoreSize * kShoreSize, 0.0f);   // the stock depth coordinate
             int32_t chunkX = -1, chunkY = -1;   // the window's first chunk
             bool dirty = false;
             std::chrono::steady_clock::time_point solved;
@@ -89,8 +94,30 @@ namespace SXC::Water {
             return chunk && chunk->m_header && chunk->m_height ? chunk : nullptr;
         }
 
+        // The depth coordinate the stock mesh gives this point (CChunkLiquid::BuildVertices: the vertices'
+        // depth bytes through the type's table, which for the sea is authored, not measured), between the
+        // tile's corners as GetHeight reads the heights. The near mesh's tint, so it matches the stock water.
+        float DepthCoord(const CChunkLiquid* liquid, const C2iVector& tile, const C2Vector& frac) {
+            DepthCoordTable* table = CMap::GetDepthCoordTable(static_cast<uint32_t>(liquid->m_type));
+
+            if (!table || !liquid->m_vertexData) {
+                return 0.0f;
+            }
+
+            const int32_t cols = liquid->m_tileEnd.y - liquid->m_tileBegin.y + 1;
+            const uint32_t index = static_cast<uint32_t>((tile.x - liquid->m_tileBegin.y) + cols * (tile.y - liquid->m_tileBegin.x));
+            const uint32_t next = index + static_cast<uint32_t>(cols);
+            Liquid::IVertexData* data = liquid->m_vertexData;
+            const float d00 = (*table)[data->GetDepth(index)], d01 = (*table)[data->GetDepth(index + 1)];
+            const float d10 = (*table)[data->GetDepth(next)], d11 = (*table)[data->GetDepth(next + 1)];
+            const float top = d00 + (d01 - d00) * frac.x;
+            return top + (d10 + (d11 - d10) * frac.x - top) * frac.y;
+        }
+
         // A chunk's 16 x 16 cells: water where its liquid stands above the ground (a hole under the
-        // surface counts as deep).
+        // surface counts as deep). A chunk not loaded (yet, or no tile there: the open sea past a map's
+        // tiles) counts as open water, which the near mesh doesn't cover: as land, it drew a shore with its
+        // foam where the window met it (Seyri, 2026-10-30).
         void SampleChunk(int32_t cx, int32_t cy, CMapChunk* chunk) {
             for (int32_t j = 0; j < 16; j++) {
                 for (int32_t i = 0; i < 16; i++) {
@@ -98,23 +125,48 @@ namespace SXC::Water {
                     const int32_t k = Stored(gy) * kShoreSize + Stored(gx);
                     s.water[k] = 0;
                     s.depth[k] = 0.0f;
+                    s.surface[k] = 0.0f;
+                    s.ground[k] = -1e6f;
+                    s.type[k] = 0;
+                    s.coord[k] = 0.0f;
 
                     if (!chunk) {
+                        s.water[k] = 1;
+                        s.depth[k] = kMaxDepth;
                         continue;
                     }
 
                     // The client's sub-chunk coordinates (0.24 per yd), as CMap::QueryHeight passes them.
                     const float px = (static_cast<float>(gx) + 0.5f) * 0.5f, py = (static_cast<float>(gy) + 0.5f) * 0.5f;
-                    float surface = 0.0f;
-
-                    if (!chunk->m_liquidChunkLinkList.Head() || !chunk->GetLiquidHeight(C2Vector(px, py), &surface) || !std::isfinite(surface)) {
-                        continue;
-                    }
-
                     C3Vector world(kHalfWorld - py / 0.24f, kHalfWorld - px / 0.24f, 0.0f);
                     float ground = 0.0f;
                     const bool solid = CMap::GetHeightTerrain(chunk, world, CMath::fint_(px - 0.5f), CMath::fint_(py - 0.5f), &ground) && std::isfinite(ground);
+                    s.ground[k] = solid ? ground : -1e6f;
+
+                    // The first liquid layer here, as CMapChunk::GetLiquidHeight finds it, with its type.
+                    const int32_t lx = CMath::fint_(px - 0.5f), ly = CMath::fint_(py - 0.5f);
+                    C2iVector tile;
+                    tile.x = lx & 7;
+                    tile.y = ly & 7;
+                    const C2Vector frac(px - static_cast<float>(lx), py - static_cast<float>(ly));
+                    float surface = 0.0f;
+                    uint32_t liquidType = 0;
+
+                    for (CChunkLiquid* liquid = chunk->m_liquidChunkLinkList.Head(); liquid; liquid = chunk->m_liquidChunkLinkList.Next(liquid)) {
+                        if (liquid->TileExists(tile.x, tile.y) && liquid->GetHeight(frac, tile, surface) && std::isfinite(surface)) {
+                            liquidType = static_cast<uint32_t>(liquid->m_type);
+                            s.coord[k] = DepthCoord(liquid, tile, frac);
+                            break;
+                        }
+                    }
+
+                    if (!liquidType) {
+                        continue;
+                    }
+
                     const float d = solid ? surface - ground : kMaxDepth;
+                    s.surface[k] = surface;
+                    s.type[k] = static_cast<uint16_t>(liquidType);
 
                     if (d > 0.02f) {
                         s.water[k] = 1;
@@ -197,6 +249,100 @@ namespace SXC::Water {
                 }
             }
 
+            // The near mesh's cells: water, and land within reach of its nearest water (that water's surface
+            // and type), then not where two levels meet.
+            constexpr int32_t kReachAbove = 3;    // cells onto land above the surface
+            constexpr int32_t kReachBelow = 12;   // cells onto land below it (water a map cut short)
+            constexpr float kAbove = 2.0f;        // yd: land higher than this above the surface: never
+            constexpr float kStep = 0.4f;         // yd: neighbours further apart are two levels
+            std::vector<float> surfaceOf(n * n, 0.0f);
+            std::vector<uint16_t> typeOf(n * n, 0);
+            std::vector<uint8_t> covered(n * n, 0);
+
+            for (int32_t wj = 0; wj < n; wj++) {
+                for (int32_t wi = 0; wi < n; wi++) {
+                    const int32_t w = wj * n + wi, k = at(wi, wj);
+
+                    if (s.water[k]) {
+                        surfaceOf[w] = s.surface[k];
+                        typeOf[w] = s.type[k];
+                        covered[w] = s.type[k] != 0 ? 1 : 0;   // not a chunk not loaded
+                        continue;
+                    }
+
+                    if (offX[w] == kFar) {
+                        continue;
+                    }
+
+                    const int32_t ni = wi + offX[w], nj = wj + offY[w];
+
+                    if (ni < 0 || nj < 0 || ni >= n || nj >= n) {
+                        continue;
+                    }
+
+                    const int32_t nk = at(ni, nj);
+                    const int32_t reach = std::abs(offX[w]) > std::abs(offY[w]) ? std::abs(offX[w]) : std::abs(offY[w]);
+                    const float above = s.ground[k] - s.surface[nk];
+                    surfaceOf[w] = s.surface[nk];
+                    typeOf[w] = s.type[nk];
+                    covered[w] = s.type[nk] != 0 && ((above < 0.0f && reach <= kReachBelow) || (above < kAbove && reach <= kReachAbove)) ? 1 : 0;
+                }
+            }
+
+            std::vector<uint8_t> own(n * n, 0);
+            s.map.typeCount = 0;
+
+            for (int32_t wj = 0; wj < n; wj++) {
+                for (int32_t wi = 0; wi < n; wi++) {
+                    const int32_t w = wj * n + wi;
+
+                    if (!covered[w]) {
+                        continue;
+                    }
+
+                    bool level = true;
+                    static const int32_t kSides[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
+
+                    for (const auto& d : kSides) {
+                        const int32_t ni = wi + d[0], nj = wj + d[1];
+
+                        if (ni >= 0 && nj >= 0 && ni < n && nj < n && covered[nj * n + ni] &&
+                            (std::fabs(surfaceOf[nj * n + ni] - surfaceOf[w]) > kStep || typeOf[nj * n + ni] != typeOf[w])) {
+                            level = false;
+                        }
+                    }
+
+                    if (!level) {
+                        continue;
+                    }
+
+                    own[w] = 1;
+                    bool known = false;
+
+                    for (uint32_t t = 0; t < s.map.typeCount; t++) {
+                        known |= s.map.types[t] == typeOf[w];
+                    }
+
+                    if (!known && s.map.typeCount < ShoreMap::kMaxTypes) {
+                        s.map.types[s.map.typeCount++] = typeOf[w];
+                    } else if (!known) {
+                        own[w] = 0;   // more waters than the mesh draws: the stock mesh keeps this one
+                    }
+                }
+            }
+
+            for (int32_t wj = 0; wj < n; wj++) {
+                for (int32_t wi = 0; wi < n; wi++) {
+                    const int32_t w = wj * n + wi, k = at(wi, wj);
+                    float* c = &s.map.cells[static_cast<size_t>(k) * 4];
+                    c[0] = surfaceOf[w];
+                    c[1] = s.ground[k] > -1e5f ? s.ground[k] : surfaceOf[w] - kMaxDepth;
+                    c[2] = static_cast<float>(typeOf[w]);
+                    // Covered: 1 plus the stock depth coordinate (land the mesh reaches over: 0, the waterline's).
+                    c[3] = own[w] ? 1.0f + (s.water[k] ? s.coord[k] : 0.0f) : 0.0f;
+                }
+            }
+
             for (int32_t wj = 0; wj < n; wj++) {
                 for (int32_t wi = 0; wi < n; wi++) {
                     const int32_t w = wj * n + wi, k = at(wi, wj);
@@ -266,9 +412,10 @@ namespace SXC::Water {
 
         // The chunks whose source changed, a few per frame.
         int32_t sampled = 0;
+        bool pending = false;
 
-        for (int32_t j = 0; j < kChunks && sampled < kResamplePerFrame; j++) {
-            for (int32_t i = 0; i < kChunks && sampled < kResamplePerFrame; i++) {
+        for (int32_t j = 0; j < kChunks && !pending; j++) {
+            for (int32_t i = 0; i < kChunks && !pending; i++) {
                 const int32_t cx = firstX + i, cy = firstY + j;
                 Slot& slot = s.slots[(cy & (kChunks - 1)) * kChunks + (cx & (kChunks - 1))];
                 CMapChunk* chunk = ChunkAt(cx, cy);
@@ -277,6 +424,11 @@ namespace SXC::Water {
 
                 if (slot.cx == cx && slot.cy == cy && slot.chunk == chunk && slot.liquid == liquid && slot.cornerX == cornerX && slot.cornerY == cornerY) {
                     continue;
+                }
+
+                if (sampled == kResamplePerFrame) {
+                    pending = true;
+                    break;
                 }
 
                 SampleChunk(cx, cy, chunk);
@@ -288,7 +440,9 @@ namespace SXC::Water {
 
         const auto now = std::chrono::steady_clock::now();
 
-        if (s.dirty && (now - s.solved > std::chrono::milliseconds(200) || !s.map.valid)) {
+        // Not while chunks wait: after the window moves, their cells still hold the window's far side (the
+        // cells are stored toroidally) - the coast behind the player, solved as a shore ahead.
+        if (s.dirty && !pending && (now - s.solved > std::chrono::milliseconds(200) || !s.map.valid)) {
             s.solved = now;
             s.dirty = false;
             Solve();

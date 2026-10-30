@@ -610,7 +610,7 @@ bool CGxDeviceVulkan::SxcFogRender(const SXC::Fog::Input& in) {
 // SXC: our water (SXC/Water): the scene behind it, copied at the frame's first water draw (Vulkan/Water),
 // with the draws' viewport (where they lie on the target, its depth range) and the native projection (the
 // depth back to the view's w).
-bool CGxDeviceVulkan::SxcWaterCapture(const SXC::Water::Waves& waves) {
+bool CGxDeviceVulkan::SxcWaterCapture(const SXC::Water::Waves& waves, bool* first) {
     CGxDeviceVulkan* device = static_cast<CGxDeviceVulkan*>(g_theGxDevicePtr);
 
     if (!device || !device->m_context || !device->m_drawPath) {
@@ -645,6 +645,7 @@ bool CGxDeviceVulkan::SxcWaterCapture(const SXC::Water::Waves& waves) {
     in.looks.originX = waves.lookOriginX;
     in.looks.originY = waves.lookOriginY;
     in.shore.texels = waves.shore;
+    in.shore.cells = waves.shoreCells;
     in.shore.version = waves.shoreVersion;
     in.shore.originX = waves.shoreOriginX;
     in.shore.originY = waves.shoreOriginY;
@@ -652,7 +653,7 @@ bool CGxDeviceVulkan::SxcWaterCapture(const SXC::Water::Waves& waves) {
     in.shore.waveHeight = waves.shoreWaveHeight;
     in.shore.wavelength = waves.shoreWavelength;
     in.shore.reach = waves.shoreReach;
-    return gxvk::vk::water::Capture(in);
+    return gxvk::vk::water::Capture(in, first);
 }
 
 // A bring-up that answered Retry at DeviceSetFormat: tried again from ScenePresent while the window

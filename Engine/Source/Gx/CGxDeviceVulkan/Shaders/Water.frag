@@ -36,6 +36,7 @@ layout(location = 1) in vec4 vColor;
 layout(location = 2) in vec2 vTint;
 layout(location = 3) in float vEase;
 layout(location = 4) in vec4 vLook[5];
+layout(location = 9) in float vNear;   // the near mesh: 1 inside its cells (a triangle reaching outside them is dropped)
 
 layout(location = 0) out vec4 oC0;
 
@@ -77,23 +78,6 @@ vec2 WaveSlope(vec2 xy, float distance, out float folding)
 }
 
 const float kTau = 6.2831853;
-
-// Value noise over the world (yd), for breaking up the shore's foam; hashed without sin (precise far from the
-// origin: the world is wrapped every 1024 yd first).
-float Hash(vec2 p)
-{
-    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
-}
-
-float Noise(vec2 p)
-{
-    p = mod(p, 1024.0);
-    vec2 i = floor(p), f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    return mix(mix(Hash(i), Hash(i + vec2(1.0, 0.0)), f.x), mix(Hash(i + vec2(0.0, 1.0)), Hash(i + vec2(1.0, 1.0)), f.x), f.y);
-}
 
 // Travelling sines over the world xy (yd), their slopes summed: the surface's small movement until the FFT
 // waves come (step 3). Four long ones and four short ones (the short ones break the sun's glint into
@@ -296,6 +280,16 @@ vec4 ScreenReflection(vec3 origin, vec3 dir, float upward)
 
 void main()
 {
+    vec3 world = LightsViewToWorld(vView.xyz);
+
+    // The near mesh (v55.x 1) keeps only its own cells' triangles; the stock terrain water (p14.w 2: the near
+    // mesh drew this frame) gives way wherever the near mesh covers. First, before any other work: the near
+    // mesh spans the whole window.
+    if (regs.v[55].x > 0.5 ? vNear < 0.999 : regs.p[14].w > 1.5 && NearCovers(world.xy))
+    {
+        discard;
+    }
+
     vec4 tint = texture(s0, vTint);
 
     // The water's colour by its look (shallow and deep, the Hue and Replace weights: one of them 1 for a row,
@@ -311,7 +305,6 @@ void main()
         vec3 hued = ours * (dot(tint.rgb, kLuma) / max(dot(ours, kLuma), 1e-3));
         tint.rgb = tint.rgb * max(1.0 - hue - replace, 0.0) + hued * hue + ours * replace;
     }
-    vec3 world = LightsViewToWorld(vView.xyz);
     vec3 eye = LightsViewToWorld(vec3(0.0));
     vec3 toEye = eye - world;
     float distance = length(toEye);
@@ -336,24 +329,12 @@ void main()
     float shoreWeight;
     vec4 shore = ShoreAt(world.xy, shoreWeight);
     float shoreDist = shore.x, shoreDepth = shore.y;
-    float shoreCrest = 0.0, shoreExposure = 1.0;
+    float shoreCrest = 0.0;
     slope *= mix(1.0, mix(0.35, 1.0, smoothstep(0.5, 5.0, shoreDepth)), shoreWeight);
-    float shoreK = kTau / max(scene.shoreLook.z, 1.0);
-    float shoreOmega = max(round(shoreK * 3.0 * 600.0 / kTau), 1.0) * kTau / 600.0;   // ~3 yd/s
-    float shoreBend = 2.5 * Noise(world.xy / 24.0);
-    // The phase at the waterline: a crest arrives there when its sine peaks.
-    float arrival = shoreOmega * regs.p[6].x + shoreBend;
-
-    if (shoreWeight > 0.0)
-    {
-        vec2 wind = scene.shoreWind.xy;
-        float facing = smoothstep(-0.2, 0.6, dot(wind, shore.zw));
-        float w1, w2;
-        float up1 = ShoreAt(world.xy - wind * 20.0, w1).x;
-        float up2 = ShoreAt(world.xy - wind * 50.0, w2).x;
-        float open = 0.5 * mix(1.0, smoothstep(0.0, 15.0, up1), w1) + 0.5 * mix(1.0, smoothstep(0.0, 15.0, up2), w2);
-        shoreExposure = mix(0.1, 1.0, facing * open) * clamp(scene.shoreWind.z / 8.0, 0.25, 1.5);
-    }
+    float shoreK = ShoreK();
+    float shoreOmega = ShoreOmega();
+    float arrival = ShoreArrival(world.xy, regs.p[6].x);
+    float shoreExposure = shoreWeight > 0.0 ? ShoreExposure(world.xy, shore) : 1.0;
 
     if (shoreWeight > 0.0 && shoreDist > 0.0)
     {
@@ -473,15 +454,16 @@ void main()
         // The whitewater band at the waterline on the waves' own timing: a crest arriving pushes it out
         // (the run-up, a moment after it breaks), then it slides back. Narrower and calmer where the
         // shore is sheltered.
-        float swash = 0.5 + 0.5 * sin(arrival - 0.8);
-        float lapWidth = (0.5 + 2.2 * swash * swash) * mix(0.5, 1.0, min(shoreExposure, 1.0));
+        float lapWidth = (0.5 + 2.2 * ShoreSwash(arrival)) * mix(0.5, 1.0, min(shoreExposure, 1.0));
         float lap = (1.0 - smoothstep(0.0, lapWidth, d)) * mix(0.4, 1.0, min(shoreExposure, 1.0));
         float breaking = shoreCrest * (1.0 - smoothstep(1.5, 7.0, d)) * smoothstep(0.3, 1.2, d);
-        // The foam's pattern carried toward the beach with the waves: two copies half a cycle apart, each
-        // fading out as it starts over (a new pattern each cycle), so neither the reset nor the clock's
-        // wrap shows (600 s is a whole number of cycles).
+        // The foam's pattern carried with the wind (the waves come downwind): two copies half a cycle apart,
+        // each fading out as it starts over (a new pattern each cycle), so neither the reset nor the clock's
+        // wrap shows (600 s is a whole number of cycles). One direction everywhere: carried toward the
+        // nearest shore instead, the pattern stretched round every headland and bunched up in the bay
+        // after it, which on WoW's ragged coasts is most places (Seyri, 2026-10-30).
         const float kCycle = 4.0;   // s
-        vec2 drift = shore.zw * (shoreOmega / shoreK) * kCycle;
+        vec2 drift = scene.shoreWind.xy * (shoreOmega / shoreK) * kCycle;
         float t = regs.p[6].x / kCycle;
         float phaseA = fract(t), phaseB = fract(t + 0.5);
         vec2 seedA = vec2(37.1, 17.3) * mod(floor(t), 150.0), seedB = vec2(37.1, 17.3) * mod(floor(t + 0.5), 150.0) + vec2(11.0, 5.0);
