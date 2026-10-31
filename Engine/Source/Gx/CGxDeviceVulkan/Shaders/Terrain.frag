@@ -93,6 +93,7 @@ layout(std140, set = 1, binding = 0) uniform Regs {
 } regs;
 
 #include "TerrainCover.glsl"
+#include "TerrainShore.glsl"
 #include "Lights.glsl"
 
 // Coordinate k (the vertex shader's packing): one per varying, or two per varying with the cascades.
@@ -507,6 +508,17 @@ void main()
 
     CoverResult cov = Covers(c, weights, twice, !kUnlit);
     c = cov.c;
+
+    // SXC: the swash on the beach (TerrainShore.glsl): wet sand, the sheet's shine, foam at its front.
+    Swash swash = TerrainSwash(coverWorld.xyz);
+
+    if (swash.wet > 0.0 || swash.foam > 0.0)
+    {
+        float darkening = cover.enable.z > 0.0 ? cover.enable.z : 0.35;
+        c.rgb *= 1.0 - darkening * max(swash.wet - cov.wet, 0.0);
+        cov.wet = max(cov.wet, swash.wet);
+        c.rgb = mix(c.rgb, kUnlit ? vec3(0.8) * twice : vec3(0.8), swash.foam);
+    }
 
     // SXC: the covers' surface here into the surface grid, and this pixel's depth for the projected
     // textures (step 5e; the underlay lies below the surface).

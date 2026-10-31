@@ -653,6 +653,7 @@ bool CGxDeviceVulkan::SxcWaterCapture(const SXC::Water::Waves& waves, bool* firs
     in.shore.waveHeight = waves.shoreWaveHeight;
     in.shore.wavelength = waves.shoreWavelength;
     in.shore.reach = waves.shoreReach;
+    in.shore.swash = waves.shoreSwash;
     return gxvk::vk::water::Capture(in, first);
 }
 

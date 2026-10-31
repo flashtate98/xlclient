@@ -7,6 +7,7 @@
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Loader.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Log.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Memory.hpp"
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Water.hpp"
 
 #include "SXC/Settings/Settings.h"  // [Terrain] CoverSlots16
 
@@ -40,11 +41,11 @@ namespace
     constexpr uint32_t kSurfaceBinding = 5;
     constexpr uint32_t kDepthBinding = 6;
     constexpr uint32_t kFirstTex   = 7;
-    constexpr uint32_t kMapSamplers = 5;                         ///< bindings 1..4, and the marks (kMarksBinding)
+    constexpr uint32_t kMapSamplers = 7;                         ///< bindings 1..4, the marks (kMarksBinding), the shore field and cells
     constexpr uint32_t kMaxSurface = gxvk::vk::cover::kMaxSurface;
     constexpr VkImageUsageFlags kSurfaceUsage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     constexpr uint32_t kEntryRows  = 5;                          ///< vec4 per entry (sxc_cover_entry, 80 bytes)
-    constexpr uint32_t kMaxBindings = kFirstTex + kFallbackSlots + 1;   ///< + the marks (kMarksBinding)
+    constexpr uint32_t kMaxBindings = kFirstTex + kFallbackSlots + 3;   ///< + the marks (kMarksBinding), the shore field and cells
     constexpr uint32_t kTerrainSamplers = 13;                    ///< set 0 of the terrain modules: 4 layers, the alpha map, 4 cascades, 4 height maps
     constexpr VkFormat kMapFormat  = VK_FORMAT_R32G32B32A32_SFLOAT;
     constexpr float    kNoWater    = -100000.0f;
@@ -64,6 +65,9 @@ namespace
         float trail[4];      ///< now (s), persist (s), slur (yd per yd of depth), on
         float trail2[4];     ///< rim scale, 0, 0, 0
         float surface[4];    ///< the surface grid: cell (yd), size (0 none), first i, first j
+        float shoreGrid[4];  ///< the water's shore field (Vulkan/Water.hpp's ShoreShared): first cell x, y, 1 when there, cell (yd)
+        float shoreLook[4];  ///< foam, wave height (yd), wavelength (yd), swash run-up (yd)
+        float shoreWind[4];  ///< the waves' direction (x, y), the wind speed (yd / s), the water's clock (s)
         float texInfo[kMaxTextures / 4][4]; ///< per texture k (at [k / 4][k % 4]): its slot x 4 (0 none), + 2 gloss mask
         float entries[kMaxEntries * kEntryRows][4];
     };
@@ -470,9 +474,17 @@ namespace gxvk::vk::cover
         bindings[bindingCount].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[bindingCount].descriptorCount = 1;
         bindings[bindingCount].stageFlags      = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        // The water's shore field and its cells: the swash on the beach (the terrain's pixels).
+        for (uint32_t k = 1; k <= 2; ++k)
+        {
+            bindings[bindingCount + k].binding         = k == 1 ? gxvk::vk::cover::kShoreFieldBinding : gxvk::vk::cover::kShoreCellsBinding;
+            bindings[bindingCount + k].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[bindingCount + k].descriptorCount = 1;
+            bindings[bindingCount + k].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+        }
         VkDescriptorSetLayoutCreateInfo setLayout = {};
         setLayout.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        setLayout.bindingCount = bindingCount + 1;
+        setLayout.bindingCount = bindingCount + 3;
         setLayout.pBindings    = bindings;
         if (!Check(d.CreateDescriptorSetLayout(s.device, &setLayout, nullptr, &s.setLayout), "vkCreateDescriptorSetLayout")) return false;
 
@@ -749,6 +761,15 @@ namespace gxvk::vk::cover
         p.surface[1] = surfaceWanted && s.surface.size == f.surfaceSize && f.surfaceCell > 0.0f ? static_cast<float>(f.surfaceSize) : 0.0f;
         p.surface[2] = static_cast<float>(f.surfaceFirstI);
         p.surface[3] = static_cast<float>(f.surfaceFirstJ);
+        // The water's shore field, for the swash (none: shoreGrid[2] 0, the white image bound instead).
+        const gxvk::vk::water::ShoreShared shore = gxvk::vk::water::Shore();
+        if (shore.valid)
+        {
+            std::memcpy(p.shoreGrid, shore.grid, sizeof p.shoreGrid);
+            std::memcpy(p.shoreLook, shore.look, sizeof p.shoreLook);
+            std::memcpy(p.shoreWind, shore.wind, sizeof p.shoreWind);
+            p.shoreLook[3] = shore.swash;
+        }
         // Per texture: the slot showing it (a loaded one), and its gloss flag.
         for (uint32_t k = 0; k < kMaxTextures; ++k)
             p.texInfo[k / 4][k % 4] = on && f.textureGloss && f.textureGloss[k] ? 2.0f : 0.0f;
@@ -774,6 +795,10 @@ namespace gxvk::vk::cover
             { s.mapSampler, s.trailMaps[1].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
         };
         const VkDescriptorImageInfo marks = { s.mapSampler, s.marks.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        const VkDescriptorImageInfo shoreField = shore.valid ? VkDescriptorImageInfo{ shore.fieldSampler, shore.field, VK_IMAGE_LAYOUT_GENERAL }
+                                                             : VkDescriptorImageInfo{ s.mapSampler, s.white.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        const VkDescriptorImageInfo shoreCells = shore.valid ? VkDescriptorImageInfo{ shore.cellsSampler, shore.cells, VK_IMAGE_LAYOUT_GENERAL }
+                                                             : VkDescriptorImageInfo{ s.mapSampler, s.white.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         const VkDescriptorImageInfo surface = { VK_NULL_HANDLE, s.surface.view, VK_IMAGE_LAYOUT_GENERAL };
         const VkDescriptorImageInfo depth = { VK_NULL_HANDLE, s.depthView, VK_IMAGE_LAYOUT_GENERAL };
         static VkDescriptorImageInfo texImages[kBindlessSlots];
@@ -808,6 +833,8 @@ namespace gxvk::vk::cover
         add(kSurfaceBinding, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1).pImageInfo = &surface;
         add(kDepthBinding, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1).pImageInfo = &depth;
         add(gxvk::vk::cover::kMarksBinding, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1).pImageInfo = &marks;
+        add(gxvk::vk::cover::kShoreFieldBinding, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1).pImageInfo = &shoreField;
+        add(gxvk::vk::cover::kShoreCellsBinding, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1).pImageInfo = &shoreCells;
         if (texturesChanged)
         {
             if (s.bindless)

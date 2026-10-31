@@ -11,10 +11,17 @@
 #include "Engine/Source/Tempest/CMath.h"
 #include "SXC/Profiler/Profiler.h"
 #include "SXC/Water/Surface.h"
+#include "WoW/Source/DB/DBClient/DBClient.h"
+#include "WoW/Source/DB/Rec/LiquidTypeRec.h"
 #include "WoW/Source/WorldClient/CChunkLiquid.h"
+#include "WoW/Source/WorldClient/CMapBaseObjLink.h"
 #include "WoW/Source/WorldClient/Map.h"
 #include "WoW/Source/WorldClient/MapArea.h"
 #include "WoW/Source/WorldClient/MapChunk.h"
+#include "WoW/Source/WorldClient/MapDoodadDef.h"
+#include "WoW/Source/WorldClient/MapObj.h"
+#include "WoW/Source/WorldClient/MapObjDef.h"
+#include "WoW/Source/WorldClient/World.h"
 
 namespace SXC::Water {
     namespace {
@@ -31,6 +38,7 @@ namespace SXC::Water {
             const void* chunk = nullptr;
             const void* liquid = nullptr;
             float cornerX = 0.0f, cornerY = 0.0f;
+            uint32_t models = 0;   // ModelSignature: models load after their chunk
         };
 
         struct State {
@@ -42,6 +50,7 @@ namespace SXC::Water {
             std::vector<float> ground = std::vector<float>(kShoreSize * kShoreSize, -1e6f);
             std::vector<uint16_t> type = std::vector<uint16_t>(kShoreSize * kShoreSize, 0);
             std::vector<float> coord = std::vector<float>(kShoreSize * kShoreSize, 0.0f);   // the stock depth coordinate
+            std::vector<uint8_t> model = std::vector<uint8_t>(kShoreSize * kShoreSize, 0);  // a model stands in the water here
             int32_t chunkX = -1, chunkY = -1;   // the window's first chunk
             bool dirty = false;
             std::chrono::steady_clock::time_point solved;
@@ -72,6 +81,23 @@ namespace SXC::Water {
             }
 
             return static_cast<uint16_t>(sign | (static_cast<uint32_t>(exponent) << 10) | (mantissa >> 13));
+        }
+
+        // Lava and slime (the LiquidType's Type column 2 and 3): no wet sand at their shores. Looked up once
+        // per type.
+        bool NotWater(uint16_t type) {
+            static uint8_t s_known[4096] = {};   // 0 not looked up, 1 water, 2 not
+
+            if (type >= 4096) {
+                return false;
+            }
+
+            if (!s_known[type]) {
+                const LiquidTypeRec* rec = g_liquidTypeDB.GetRecord(static_cast<int32_t>(type));
+                s_known[type] = rec && rec->m_soundBank >= 2 ? 2 : 1;
+            }
+
+            return s_known[type] == 2;
         }
 
         int32_t Stored(int32_t g) {
@@ -114,6 +140,133 @@ namespace SXC::Water {
             return top + (d10 + (d11 - d10) * frac.x - top) * frac.y;
         }
 
+        // The models a chunk holds that can block the water (doodads placed and loaded, WMOs with their
+        // groups loaded), as a number that changes when one comes or goes: the chunk is sampled again.
+        uint32_t ModelSignature(CMapChunk* chunk) {
+            if (!chunk) {
+                return 0;
+            }
+
+            uint32_t sig = 0;
+
+            for (CMapBaseObjLink* link = chunk->m_doodadDefLinkList.Head(); link; link = chunk->m_doodadDefLinkList.Next(link)) {
+                const CMapDoodadDef* def = static_cast<const CMapDoodadDef*>(link->m_owner);
+
+                if (def && (static_cast<uint32_t>(def->m_flags) & 0x80) && def->m_model) {
+                    sig = sig * 31u + static_cast<uint32_t>(reinterpret_cast<uintptr_t>(def) >> 4);
+                }
+            }
+
+            for (CMapBaseObjLink* link = chunk->m_mapObjDefLinkList.Head(); link; link = chunk->m_mapObjDefLinkList.Next(link)) {
+                const CMapObjDef* def = static_cast<const CMapObjDef*>(link->m_owner);
+
+                if (def && def->m_owner && def->m_owner->m_isGroupLoaded) {
+                    sig = sig * 31u + static_cast<uint32_t>(reinterpret_cast<uintptr_t>(def) >> 4) + 1u;
+                }
+            }
+
+            return sig;
+        }
+
+        // Models standing in a chunk's water (Seyri, 2026-10-30: rocks, cliffs, piers and hulls had no
+        // shore): the game's own collision, as it places things on the ground (doodads, game objects,
+        // WMOs; not the terrain), through the water cells under the models that reach the water's
+        // height. Per cell, two rays: down from high above, and up from just under the surface. A
+        // model counts where the first thing above the water is within 2.5 yd of it (a low rock, a
+        // hull, a low pier) or is the top itself (the ray rose inside a solid: a tall rock); a bridge
+        // leaves a gap under it and doesn't count. Open sea has no models: no rays.
+        void SampleModels(int32_t cx, int32_t cy, CMapChunk* chunk) {
+            if (!chunk) {
+                return;
+            }
+
+            float low = 1e9f, high = -1e9f;
+
+            for (int32_t j = 0; j < 16; j++) {
+                for (int32_t i = 0; i < 16; i++) {
+                    const int32_t k = Stored(cy * 16 + j) * kShoreSize + Stored(cx * 16 + i);
+
+                    if (s.water[k] && s.type[k]) {
+                        low = s.surface[k] < low ? s.surface[k] : low;
+                        high = s.surface[k] > high ? s.surface[k] : high;
+                    }
+                }
+            }
+
+            if (low > high) {
+                return;
+            }
+
+            struct Area {
+                float x0, y0, x1, y1;
+            };
+            Area areas[64];
+            uint32_t count = 0;
+            auto consider = [&](const CAaBox& box) {
+                if (count < 64 && box.b.z < high + 0.5f && box.t.z > low - 0.5f) {
+                    areas[count++] = { box.b.x - kShoreCell, box.b.y - kShoreCell, box.t.x + kShoreCell, box.t.y + kShoreCell };
+                }
+            };
+
+            for (CMapBaseObjLink* link = chunk->m_doodadDefLinkList.Head(); link; link = chunk->m_doodadDefLinkList.Next(link)) {
+                const CMapDoodadDef* def = static_cast<const CMapDoodadDef*>(link->m_owner);
+
+                if (def && !(static_cast<uint32_t>(def->m_flags) & 0x100) && (static_cast<uint32_t>(def->m_flags) & 0x80) && def->m_model) {
+                    consider(def->m_bbox);
+                }
+            }
+
+            for (CMapBaseObjLink* link = chunk->m_mapObjDefLinkList.Head(); link; link = chunk->m_mapObjDefLinkList.Next(link)) {
+                const CMapObjDef* def = static_cast<const CMapObjDef*>(link->m_owner);
+
+                if (def && def->m_owner && def->m_owner->m_isGroupLoaded) {
+                    consider(def->m_bbox);
+                }
+            }
+
+            constexpr uint32_t kFlags = 0x100011;   // doodads, game objects, WMOs: the ground mask without the terrain
+            constexpr float kAbove = 30.0f, kGap = 2.5f;
+
+            for (int32_t j = 0; j < 16 && count; j++) {
+                for (int32_t i = 0; i < 16; i++) {
+                    const int32_t gx = cx * 16 + i, gy = cy * 16 + j;
+                    const int32_t k = Stored(gy) * kShoreSize + Stored(gx);
+
+                    if (!s.water[k] || !s.type[k]) {
+                        continue;
+                    }
+
+                    const float px = (static_cast<float>(gx) + 0.5f) * 0.5f, py = (static_cast<float>(gy) + 0.5f) * 0.5f;
+                    const float x = kHalfWorld - py / 0.24f, y = kHalfWorld - px / 0.24f;
+                    bool under = false;
+
+                    for (uint32_t a = 0; a < count && !under; a++) {
+                        under = x >= areas[a].x0 && x <= areas[a].x1 && y >= areas[a].y0 && y <= areas[a].y1;
+                    }
+
+                    if (!under) {
+                        continue;
+                    }
+
+                    const float surface = s.surface[k];
+                    C3Vector top(x, y, surface + kAbove), bottom(x, y, surface - 0.5f), hitDown, hitUp;
+                    float t = 1.0f;
+
+                    if (!::World::Intersect(top, bottom, &hitDown, &t, kFlags, nullptr)) {
+                        continue;
+                    }
+
+                    float u = 1.0f;
+                    const bool roof = ::World::Intersect(bottom, top, &hitUp, &u, kFlags, nullptr) != 0;
+                    const float firstAbove = roof ? hitUp.z : hitDown.z;
+
+                    if (firstAbove - surface < kGap || std::fabs(firstAbove - hitDown.z) < 0.05f) {
+                        s.model[k] = 1;
+                    }
+                }
+            }
+        }
+
         // A chunk's 16 x 16 cells: water where its liquid stands above the ground (a hole under the
         // surface counts as deep). A chunk not loaded (yet, or no tile there: the open sea past a map's
         // tiles) counts as open water, which the near mesh doesn't cover: as land, it drew a shore with its
@@ -129,6 +282,7 @@ namespace SXC::Water {
                     s.ground[k] = -1e6f;
                     s.type[k] = 0;
                     s.coord[k] = 0.0f;
+                    s.model[k] = 0;
 
                     if (!chunk) {
                         s.water[k] = 1;
@@ -174,6 +328,8 @@ namespace SXC::Water {
                     }
                 }
             }
+
+            SampleModels(cx, cy, chunk);
         }
 
         // Each window cell's nearest cell of the other kind (water to land, land to water), as an offset, by
@@ -184,7 +340,41 @@ namespace SXC::Water {
             const int32_t ox = s.chunkX * 16, oy = s.chunkY * 16;
             std::vector<int16_t> offX(n * n), offY(n * n);
             auto at = [&](int32_t wi, int32_t wj) { return Stored(oy + wj) * n + Stored(ox + wi); };
-            auto isWater = [&](int32_t wi, int32_t wj) { return s.water[at(wi, wj)] != 0; };
+
+            // Water, less the models standing in it; but not specks of a cell or two (a post, a buoy):
+            // a model cell counts with at least three solid neighbours, so small things foam (the
+            // pixel's own depth does that) without starting rings of shore waves.
+            std::vector<uint8_t> wet(n * n, 0);
+
+            for (int32_t wj = 0; wj < n; wj++) {
+                for (int32_t wi = 0; wi < n; wi++) {
+                    const int32_t k = at(wi, wj);
+                    wet[wj * n + wi] = s.water[k];
+
+                    if (!s.water[k] || !s.model[k]) {
+                        continue;
+                    }
+
+                    int32_t solid = 0;
+
+                    for (int32_t dj = -1; dj <= 1; dj++) {
+                        for (int32_t di = -1; di <= 1; di++) {
+                            const int32_t ni = wi + di, nj = wj + dj;
+
+                            if ((di || dj) && ni >= 0 && nj >= 0 && ni < n && nj < n) {
+                                const int32_t nk = at(ni, nj);
+                                solid += !s.water[nk] || s.model[nk];
+                            }
+                        }
+                    }
+
+                    if (solid >= 3) {
+                        wet[wj * n + wi] = 0;
+                    }
+                }
+            }
+
+            auto isWater = [&](int32_t wi, int32_t wj) { return wet[wj * n + wi] != 0; };
 
             // A cell next to the other kind sits a cell from it; the rest far.
             for (int32_t wj = 0; wj < n; wj++) {
@@ -254,6 +444,8 @@ namespace SXC::Water {
             constexpr int32_t kReachAbove = 3;    // cells onto land above the surface
             constexpr int32_t kReachBelow = 12;   // cells onto land below it (water a map cut short)
             constexpr float kAbove = 2.0f;        // yd: land higher than this above the surface: never
+            constexpr float kBelow = 1.5f;        // yd: land lower than this under it: never (the valley below a
+                                                  // raised lake or a waterfall's lip, Seyri 2026-10-31)
             constexpr float kStep = 0.4f;         // yd: neighbours further apart are two levels
             std::vector<float> surfaceOf(n * n, 0.0f);
             std::vector<uint16_t> typeOf(n * n, 0);
@@ -263,7 +455,7 @@ namespace SXC::Water {
                 for (int32_t wi = 0; wi < n; wi++) {
                     const int32_t w = wj * n + wi, k = at(wi, wj);
 
-                    if (s.water[k]) {
+                    if (wet[w]) {
                         surfaceOf[w] = s.surface[k];
                         typeOf[w] = s.type[k];
                         covered[w] = s.type[k] != 0 ? 1 : 0;   // not a chunk not loaded
@@ -285,7 +477,53 @@ namespace SXC::Water {
                     const float above = s.ground[k] - s.surface[nk];
                     surfaceOf[w] = s.surface[nk];
                     typeOf[w] = s.type[nk];
-                    covered[w] = s.type[nk] != 0 && ((above < 0.0f && reach <= kReachBelow) || (above < kAbove && reach <= kReachAbove)) ? 1 : 0;
+                    covered[w] = s.type[nk] != 0 && ((above < 0.0f && above > -kBelow && reach <= kReachBelow) || (above >= 0.0f && above < kAbove && reach <= kReachAbove)) ? 1 : 0;
+                }
+            }
+
+            // Land only where it joins its water through covered cells: past a ridge, a lake's surface isn't
+            // the dip behind it.
+            {
+                std::vector<int32_t> queue;
+                std::vector<uint8_t> joined(n * n, 0);
+                queue.reserve(n * n);
+
+                for (int32_t w = 0; w < n * n; w++) {
+                    if (covered[w] && wet[w]) {
+                        joined[w] = 1;
+                        queue.push_back(w);
+                    }
+                }
+
+                for (size_t q = 0; q < queue.size(); q++) {
+                    const int32_t w = queue[q], wi = w % n, wj = w / n;
+                    static const int32_t kNext[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
+
+                    for (const auto& d : kNext) {
+                        const int32_t ni = wi + d[0], nj = wj + d[1];
+
+                        if (ni < 0 || nj < 0 || ni >= n || nj >= n) {
+                            continue;
+                        }
+
+                        const int32_t nw = nj * n + ni;
+
+                        // Land under the surface only from water or other such land: not over a rise the mesh
+                        // runs beneath into the hollow behind it (Seyri, 2026-10-31: a path behind a lake's rim).
+                        const auto under = [&](int32_t c) {
+                            return !wet[c] && s.ground[at(c % n, c / n)] < surfaceOf[c];
+                        };
+                        const bool from = wet[w] || under(w);
+
+                        if (covered[nw] && !joined[nw] && std::fabs(surfaceOf[nw] - surfaceOf[w]) <= kStep && (from || !under(nw))) {
+                            joined[nw] = 1;
+                            queue.push_back(nw);
+                        }
+                    }
+                }
+
+                for (int32_t w = 0; w < n * n; w++) {
+                    covered[w] &= joined[w];
                 }
             }
 
@@ -337,16 +575,16 @@ namespace SXC::Water {
                     float* c = &s.map.cells[static_cast<size_t>(k) * 4];
                     c[0] = surfaceOf[w];
                     c[1] = s.ground[k] > -1e5f ? s.ground[k] : surfaceOf[w] - kMaxDepth;
-                    c[2] = static_cast<float>(typeOf[w]);
+                    c[2] = static_cast<float>(typeOf[w]) + (NotWater(typeOf[w]) ? 0.25f : 0.0f);   // + 0.25: lava, slime
                     // Covered: 1 plus the stock depth coordinate (land the mesh reaches over: 0, the waterline's).
-                    c[3] = own[w] ? 1.0f + (s.water[k] ? s.coord[k] : 0.0f) : 0.0f;
+                    c[3] = own[w] ? 1.0f + (wet[w] ? s.coord[k] : 0.0f) : 0.0f;
                 }
             }
 
             for (int32_t wj = 0; wj < n; wj++) {
                 for (int32_t wi = 0; wi < n; wi++) {
                     const int32_t w = wj * n + wi, k = at(wi, wj);
-                    const bool water = s.water[k] != 0;
+                    const bool water = wet[w] != 0;
                     float distance = kMaxDistance, dirX = 0.0f, dirY = 0.0f;
 
                     if (offX[w] != kFar) {
@@ -362,7 +600,7 @@ namespace SXC::Water {
 
                     uint16_t* t = &s.map.texels[static_cast<size_t>(k) * 4];
                     t[0] = Half(water ? distance : -distance);
-                    t[1] = Half(s.depth[k]);
+                    t[1] = Half(water ? s.depth[k] : 0.0f);
                     t[2] = Half(dirX);
                     t[3] = Half(dirY);
                 }
@@ -421,8 +659,9 @@ namespace SXC::Water {
                 CMapChunk* chunk = ChunkAt(cx, cy);
                 const void* liquid = chunk ? chunk->m_liquidChunkLinkList.Head() : nullptr;
                 const float cornerX = chunk ? chunk->m_topLeftCoords.x : 0.0f, cornerY = chunk ? chunk->m_topLeftCoords.y : 0.0f;
+                const uint32_t models = liquid ? ModelSignature(chunk) : 0;   // only water can be blocked
 
-                if (slot.cx == cx && slot.cy == cy && slot.chunk == chunk && slot.liquid == liquid && slot.cornerX == cornerX && slot.cornerY == cornerY) {
+                if (slot.cx == cx && slot.cy == cy && slot.chunk == chunk && slot.liquid == liquid && slot.cornerX == cornerX && slot.cornerY == cornerY && slot.models == models) {
                     continue;
                 }
 
@@ -432,7 +671,7 @@ namespace SXC::Water {
                 }
 
                 SampleChunk(cx, cy, chunk);
-                slot = Slot{ cx, cy, chunk, liquid, cornerX, cornerY };
+                slot = Slot{ cx, cy, chunk, liquid, cornerX, cornerY, models };
                 s.dirty = true;
                 sampled++;
             }

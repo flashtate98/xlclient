@@ -64,10 +64,12 @@ bool NearCovers(vec2 world)
     return ShoreCell(a).w > 0.5 && ShoreCell(o + ivec2(1, 0)).w > 0.5 && ShoreCell(o + ivec2(0, 1)).w > 0.5;
 }
 
-// Value noise over the world (yd); hashed without sin (precise far from the origin: the world is wrapped every
-// 1024 yd first).
+// Value noise over the world (yd); hashed without sin (precise far from the origin: the lattice points are
+// wrapped every 1024 before hashing, each on its own, so the noise repeats without a seam; wrapping the point
+// first broke it where the wrap fell, along world x = 0 and y = 0 among others: Seyri, 2026-10-31).
 float Hash(vec2 p)
 {
+    p = mod(p, 1024.0);
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
     p3 += dot(p3, p3.yzx + 33.33);
     return fract((p3.x + p3.y) * p3.z);
@@ -75,8 +77,7 @@ float Hash(vec2 p)
 
 float Noise(vec2 p)
 {
-    p = mod(p, 1024.0);
-    vec2 i = floor(p), f = fract(p);
+    vec2 i = mod(floor(p), 1024.0), f = fract(p);
     f = f * f * (3.0 - 2.0 * f);
     return mix(mix(Hash(i), Hash(i + vec2(1.0, 0.0)), f.x), mix(Hash(i + vec2(0.0, 1.0)), Hash(i + vec2(1.0, 1.0)), f.x), f.y);
 }
@@ -92,8 +93,7 @@ float TurnsPer600(float seconds)
 // unit cell, and the nearest's own random value. The points wander around their places over time.
 vec3 Cells(vec2 p, float time)
 {
-    p = mod(p, 1024.0);
-    vec2 i = floor(p), f = fract(p);
+    vec2 i = mod(floor(p), 1024.0), f = fract(p);
     float d1 = 8.0, d2 = 8.0, id = 0.0;
     float w = TurnsPer600(3.0);
 

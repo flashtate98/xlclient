@@ -64,6 +64,14 @@ namespace SXC::Water {
             s.Float("FoamThreshold").Group("Waves").Default(kDefaults.foamThreshold).Range(0, 2).Tooltip("The shared sea's: crests foam below this Jacobian.");
             s.Float("SurfaceMovement").Group("Waves").Default(kDefaults.move).Range(0, 3).Tooltip("The surface's displacement (0 flat).");
             s.Text("Comment").Tooltip("Free text for the editor; never read.");
+            // After the comment: added 2026-10-30, and older files are read by position (they lack these).
+            s.Float("ShoreFoam").Group("Shore").Default(kDefaults.shoreFoam).Range(0, 2)
+                .Tooltip("The shore's foam (the waterline, breaking crests, the swash). The row of the water the player is in.");
+            s.Float("ShoreWaveHeight").Group("Shore").Default(kDefaults.shoreWaveHeight).Range(0, 0.6).Tooltip("yd: the shore waves' height.");
+            s.Float("ShoreWavelength").Group("Shore").Default(kDefaults.shoreWavelength).Range(2, 20).Tooltip("yd between the shore waves.");
+            s.Float("ShoreReach").Group("Shore").Default(kDefaults.shoreReach).Range(4, 60).Tooltip("yd: how far out the shore waves begin.");
+            s.Float("Swash").Group("Shore").Default(kDefaults.swash).Range(0, 2)
+                .Tooltip("yd: how high the water runs up the beach as each wave arrives (a flat beach far, a steep one hardly). 0 off.");
             return s;
         }
 
@@ -290,7 +298,9 @@ namespace SXC::Water {
                       reflectivity = schema.IndexOf("Reflectivity"), reflection = schema.IndexOf("Reflection"), window = schema.IndexOf("Window"),
                       glint = schema.IndexOf("Glint"), sharpness = schema.IndexOf("GlintSharpness"), waveScale = schema.IndexOf("WaveScale"),
                       height = schema.IndexOf("WaveHeight"), chop = schema.IndexOf("Choppiness"), spread = schema.IndexOf("Spread"),
-                      foam = schema.IndexOf("Foam"), threshold = schema.IndexOf("FoamThreshold"), move = schema.IndexOf("SurfaceMovement");
+                      foam = schema.IndexOf("Foam"), threshold = schema.IndexOf("FoamThreshold"), move = schema.IndexOf("SurfaceMovement"),
+                      shoreFoam = schema.IndexOf("ShoreFoam"), shoreHeight = schema.IndexOf("ShoreWaveHeight"),
+                      shoreLength = schema.IndexOf("ShoreWavelength"), shoreReach = schema.IndexOf("ShoreReach"), swash = schema.IndexOf("Swash");
 
             for (uint32_t i = 0; i < s_table->RowCount(); i++) {
                 const Data::Row row = s_table->At(i);
@@ -317,6 +327,11 @@ namespace SXC::Water {
                 l.foam = row.Float(foam);
                 l.foamThreshold = row.Float(threshold);
                 l.move = row.Float(move);
+                l.shoreFoam = row.Float(shoreFoam);
+                l.shoreWaveHeight = row.Float(shoreHeight);
+                l.shoreWavelength = row.Float(shoreLength);
+                l.shoreReach = row.Float(shoreReach);
+                l.swash = row.Float(swash);
                 s_entries.push_back(std::move(e));
             }
         }
@@ -697,6 +712,11 @@ namespace SXC::Water {
         set("Foam", l.foam);
         set("FoamThreshold", l.foamThreshold);
         set("SurfaceMovement", l.move);
+        set("ShoreFoam", l.shoreFoam);
+        set("ShoreWaveHeight", l.shoreWaveHeight);
+        set("ShoreWavelength", l.shoreWavelength);
+        set("ShoreReach", l.shoreReach);
+        set("Swash", l.swash);
         return true;
     }
 }

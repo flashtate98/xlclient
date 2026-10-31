@@ -32,6 +32,9 @@ layout(std140, set = 2, binding = 0) uniform CoverBlock {
     vec4 trail;       // now (s), the coarse layer's persist (s), slur (yd of edge softening per yd of depth), on
     vec4 trail2;      // x the rims
     vec4 surface;     // the surface grid (step 5e): cell (yd), size (0 none), first i, first j
+    vec4 shoreGrid;   // the water's shore field (TerrainShore.glsl): first cell x, y, 1 when there, cell (yd)
+    vec4 shoreLook;   // foam, wave height (yd), wavelength (yd), swash run-up (yd)
+    vec4 shoreWind;   // the waves' direction (x, y), the wind speed (yd / s), the water's clock (s)
     vec4 texInfo[256]; // texture k + 1 at [k / 4][k % 4]: its slot x 4 (0 = none: drawn plain), + 2 its alpha is a gloss mask
     vec4 entries[127 * 5];
 } cover;

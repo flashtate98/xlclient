@@ -25,6 +25,8 @@ namespace gxvk::vk::cover
     constexpr uint32_t kMaxTrail    = 1024;   ///< trail layers: texels per side at most
     constexpr uint32_t kMaxSurface  = 1024;   ///< the surface grid's cells per side at most (step 5e)
     constexpr uint32_t kMarksBinding = 23;    ///< set 2: the ground marks (after the 16 fallback texture slots, in both modes)
+    constexpr uint32_t kShoreFieldBinding = 24;   ///< set 2: the water's shore field (Vulkan/Water.hpp's Shore(); the swash)
+    constexpr uint32_t kShoreCellsBinding = 25;   ///< set 2: its cells (the nearest water's surface)
 
     struct Frame
     {

@@ -61,7 +61,24 @@ namespace gxvk::vk::water
         float           waveHeight = 0.12f;   ///< yd
         float           wavelength = 7.0f;    ///< yd
         float           reach      = 28.0f;   ///< yd: how far out the shore waves begin
+        float           swash      = 0.5f;    ///< yd: how high the swash runs up the beach (Shaders/TerrainShore.glsl)
     };
+
+    /// The shore field as the terrain reads it (Vulkan/Cover.cpp binds it to set 2: the swash on the
+    /// beach): the images, and the values the water draws took at its last capture. `valid` while a
+    /// field was captured in the last few frames.
+    struct ShoreShared
+    {
+        bool        valid = false;
+        VkImageView field = VK_NULL_HANDLE, cells = VK_NULL_HANDLE;   ///< both in VK_IMAGE_LAYOUT_GENERAL
+        VkSampler   fieldSampler = VK_NULL_HANDLE, cellsSampler = VK_NULL_HANDLE;
+        float       grid[4] = {};   ///< as WaterScene.shoreGrid
+        float       look[4] = {};   ///< as WaterScene.shoreLook
+        float       wind[4] = {};   ///< the waves' direction (x, y), the wind speed, the water's clock (s)
+        float       swash = 0.0f;
+    };
+
+    ShoreShared Shore();
 
     struct CaptureInput
     {

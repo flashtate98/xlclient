@@ -47,6 +47,7 @@ namespace SXC::Water {
         float shoreWaveHeight = 0.12f;   // yd
         float shoreWavelength = 7.0f;    // yd
         float shoreReach = 28.0f;        // yd: how far out the shore waves begin
+        float shoreSwash = 0.5f;         // yd: how high the swash runs up the beach (the terrain draws it)
     };
 
     // The device's copy of the scene behind the water and its waves, once per frame (later calls the same

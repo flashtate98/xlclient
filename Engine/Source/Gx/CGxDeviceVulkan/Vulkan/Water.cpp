@@ -142,6 +142,8 @@ namespace
         bool           shoreFresh   = true;   ///< still undefined
         uint32_t       shoreVersion = 0;
         bool           shoreHas     = false;  ///< holds a field
+        gxvk::vk::water::ShoreShared shared;  ///< the values for the terrain (Shore()), from the last capture
+        uint64_t       sharedSerial = 0;
         uint64_t       shoreUpload  = 0;      ///< the serial of the last upload
 
         char status[160] = "not drawn yet";
@@ -790,6 +792,12 @@ namespace gxvk::vk::water
         p.shoreWind[0] = in.waves.windX;
         p.shoreWind[1] = in.waves.windY;
         p.shoreWind[2] = in.waves.speed;
+        std::memcpy(s.shared.grid, p.shoreGrid, sizeof p.shoreGrid);
+        std::memcpy(s.shared.look, p.shoreLook, sizeof p.shoreLook);
+        std::memcpy(s.shared.wind, p.shoreWind, sizeof p.shoreWind);
+        s.shared.wind[3] = in.waves.time;
+        s.shared.swash   = in.shore.swash;
+        s.sharedSerial   = serial;
         std::memcpy(slot.params.block.mapped, &p, sizeof p);
         memory::FlushHost(slot.params.block);
 
@@ -859,6 +867,19 @@ namespace gxvk::vk::water
     }
 
     const char* Status() { return s.status; }
+
+    ShoreShared Shore()
+    {
+        ShoreShared out = s.shared;
+        out.valid = s.shoreHas && !s.shoreFresh && s.shore.view != VK_NULL_HANDLE && s.shoreCells.view != VK_NULL_HANDLE
+                    && s.linearRepeat != VK_NULL_HANDLE && s.nearestClamp != VK_NULL_HANDLE
+                    && out.grid[2] > 0.5f && frame::Serial() - s.sharedSerial <= 2;
+        out.field = s.shore.view;
+        out.cells = s.shoreCells.view;
+        out.fieldSampler = s.linearRepeat;
+        out.cellsSampler = s.nearestClamp;
+        return out;
+    }
 
     void Shutdown()
     {

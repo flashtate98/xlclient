@@ -65,10 +65,6 @@ namespace {
         int debugView = 0;
         int writeScope = 0;           // SXC::Water::ScopeKind: where "Write" puts the row
         // The shore (one setting for every water for now).
-        float shoreFoam = 1.0f;
-        float shoreWaveHeight = 0.12f;   // yd
-        float shoreWavelength = 7.0f;    // yd
-        float shoreReach = 28.0f;        // yd
         bool shoreField = true;          // off: the depth byte alone, as before the shore field
         bool nearMesh = true;            // our own water mesh over the shore field (off: the stock mesh, pinned)
     };
@@ -581,10 +577,12 @@ namespace SXC::Water {
             waves.shoreOriginY = shore.originY;
         }
 
-        waves.shoreFoam = s_panel.shoreFoam;
-        waves.shoreWaveHeight = s_panel.shoreWaveHeight;
-        waves.shoreWavelength = s_panel.shoreWavelength;
-        waves.shoreReach = s_panel.shoreReach;
+        // The shore's values, like the sea's, from the row of the water the player is in.
+        waves.shoreFoam = sea.shoreFoam;
+        waves.shoreWaveHeight = sea.shoreWaveHeight;
+        waves.shoreWavelength = sea.shoreWavelength;
+        waves.shoreReach = sea.shoreReach;
+        waves.shoreSwash = sea.swash;
 
         bool first = false;
 
@@ -779,11 +777,13 @@ namespace SXC::Water {
             ImGui::Checkbox("Our water mesh near you", &s_panel.nearMesh);
             ImGui::SetItemTooltip("Over the shore field's window, our own mesh in place of the stock terrain water: the waterline is "
                                   "wherever the surface meets the ground. Off: the stock mesh, its edge held still.");
-            ImGui::SliderFloat("Shore foam", &s_panel.shoreFoam, 0.0f, 2.0f);
-            ImGui::SliderFloat("Shore wave height (yd)", &s_panel.shoreWaveHeight, 0.0f, 0.6f);
-            ImGui::SliderFloat("Shore wavelength (yd)", &s_panel.shoreWavelength, 2.0f, 20.0f);
-            ImGui::SliderFloat("Shore waves reach (yd)", &s_panel.shoreReach, 4.0f, 60.0f);
-            ImGui::TextDisabled("Every water for now; not saved.");
+            ImGui::SliderFloat("Shore foam", &l.shoreFoam, 0.0f, 2.0f);
+            ImGui::SliderFloat("Shore wave height (yd)", &l.shoreWaveHeight, 0.0f, 0.6f);
+            ImGui::SliderFloat("Shore wavelength (yd)", &l.shoreWavelength, 2.0f, 20.0f);
+            ImGui::SliderFloat("Shore waves reach (yd)", &l.shoreReach, 4.0f, 60.0f);
+            ImGui::SliderFloat("Swash run-up (yd)", &l.swash, 0.0f, 2.0f);
+            ImGui::SetItemTooltip("%s", "How high the water runs up the beach as each wave arrives (on the terrain, past the water): a flat beach far, a steep one hardly. 0 off.");
+            ImGui::TextDisabled("Test values like the rest; saved with the row (the water you're in sets them for all).");
         }
 
         if (ImGui::Button("Reset the test values")) {

@@ -40,6 +40,13 @@ namespace SXC::Water {
         float foam = 1.0f;
         float foamThreshold = 0.95f;  // the Jacobian below which crests foam
         float move = 1.0f;            // the surface's displacement (0 flat)
+        // The shore: one for every water at a time, from the row of the water the player is in (like the
+        // sea's spectrum; the shore field and its waves are shared).
+        float shoreFoam = 1.0f;
+        float shoreWaveHeight = 0.12f;   // yd
+        float shoreWavelength = 7.0f;    // yd
+        float shoreReach = 28.0f;        // yd: how far out the shore waves begin
+        float swash = 0.5f;              // yd: how high the swash runs up the beach
     };
 
     // A look as the water shaders read it: five vec4s (Water.vert's look, Water.cpp's p9..p13).
