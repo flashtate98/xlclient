@@ -443,7 +443,10 @@ namespace SXC::Water {
             // and type), then not where two levels meet.
             constexpr int32_t kReachAbove = 3;    // cells onto land above the surface
             constexpr int32_t kReachBelow = 12;   // cells onto land below it (water a map cut short)
-            constexpr float kAbove = 2.0f;        // yd: land higher than this above the surface: never
+            // yd: land higher than this above the surface: never. Cliffs too: stopped 2 yd up, the mesh ended
+            // a cell short of a cliff in whole-cell steps, and the deep water there lifted that edge out of the
+            // sea (Seyri, 2026-10-31); carried under the rock, the cliff's face cuts the waves.
+            constexpr float kAbove = 60.0f;
             constexpr float kBelow = 1.5f;        // yd: land lower than this under it: never (the valley below a
                                                   // raised lake or a waterfall's lip, Seyri 2026-10-31)
             constexpr float kStep = 0.4f;         // yd: neighbours further apart are two levels

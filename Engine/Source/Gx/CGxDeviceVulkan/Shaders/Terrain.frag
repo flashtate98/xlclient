@@ -385,6 +385,7 @@ void main()
     // The normal back to world orientation (v0..v2: world x view, a rotation).
     vec3 nv = normalize(coverNormal.xyz);
     vec3 n = normalize(vec3(dot(regs.v[0].xyz, nv), dot(regs.v[1].xyz, nv), dot(regs.v[2].xyz, nv)));
+    float groundUp = n.z;   // SXC: how level the ground is, before the bumps (the swash keeps to beaches)
 
     // SXC: how much of each layer's pattern (parallax, bumps) the covers leave showing.
     bool parallax = ParallaxOn(), bumps = BumpsOn();
@@ -510,7 +511,7 @@ void main()
     c = cov.c;
 
     // SXC: the swash on the beach (TerrainShore.glsl): wet sand, the sheet's shine, foam at its front.
-    Swash swash = TerrainSwash(coverWorld.xyz);
+    Swash swash = TerrainSwash(coverWorld.xyz, groundUp);
 
     if (swash.wet > 0.0 || swash.foam > 0.0)
     {

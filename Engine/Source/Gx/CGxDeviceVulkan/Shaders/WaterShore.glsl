@@ -11,11 +11,16 @@ layout(set = 2, binding = 6) uniform sampler2D shoreCells;
 
 const float kShoreHalfWorld = 32.0 * 533.33333;
 
+// Whether this draw is terrain water (p14.w); WaterQuery.comp asks for terrain water only and sets it to 1.
+#ifndef SHORE_TERRAIN
+#define SHORE_TERRAIN regs.p[14].w
+#endif
+
 vec4 ShoreAt(vec2 world, out float weight)
 {
     weight = 0.0;
 
-    if (scene.shoreGrid.z < 0.5 || regs.p[14].w < 0.5)
+    if (scene.shoreGrid.z < 0.5 || SHORE_TERRAIN < 0.5)
     {
         return vec4(64.0, 50.0, 0.0, 0.0);
     }

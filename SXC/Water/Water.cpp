@@ -4,6 +4,7 @@
 // its stock material asks for (the terrain's batches keep that format once built), the liquid code's
 // constants, then ours.
 #include "SXC/Water/Water.h"
+#include "SXC/Water/Ride.h"
 #include "SXC/Water/Shore.h"
 #include "SXC/Water/Surface.h"
 
@@ -584,6 +585,18 @@ namespace SXC::Water {
         waves.shoreReach = sea.shoreReach;
         waves.shoreSwash = sea.swash;
 
+        // The swimmers near the camera, to ride the waves (their answers come back a few frames on). Their
+        // movement row without the look grid is the water's the player is in, as the near mesh draws it.
+        // The terrain's waterline takes the same row and camera (its swash rises and falls with the waves).
+        float packed[SXC::Water::kPackedLook];
+        SXC::Water::PackLook(sea, packed);
+        waves.queryCamera[0] = cameraPos.x;
+        waves.queryCamera[1] = cameraPos.y;
+        waves.queryCamera[2] = cameraPos.z;
+        waves.queryCamera[3] = waves.time;
+        std::memcpy(waves.queryLook, &packed[16], sizeof waves.queryLook);
+        SXC::Water::RideAsk(waves);
+
         bool first = false;
 
         if (!s_capture(waves, &first)) {
@@ -784,6 +797,9 @@ namespace SXC::Water {
             ImGui::SliderFloat("Swash run-up (yd)", &l.swash, 0.0f, 2.0f);
             ImGui::SetItemTooltip("%s", "How high the water runs up the beach as each wave arrives (on the terrain, past the water): a flat beach far, a steep one hardly. 0 off.");
             ImGui::TextDisabled("Test values like the rest; saved with the row (the water you're in sets them for all).");
+            char ride[192];
+            SXC::Water::RideStatus(ride, sizeof ride);
+            ImGui::TextWrapped("Riding the waves: %s", ride);
         }
 
         if (ImGui::Button("Reset the test values")) {

@@ -91,6 +91,25 @@ namespace
         memory::Buffer  params;
         uint64_t        captured = 0;               ///< the serial whose scene the images hold
         bool            written  = false;           ///< drawSet points at the current images
+        // The swimmers' query (WaterQuery.comp): asked at this slot's capture, read when it comes round.
+        VkDescriptorSet querySet = VK_NULL_HANDLE;
+        memory::Buffer  query;                      ///< QueryBuffer (Readback memory)
+        uint64_t        queryTag   = 0;
+        uint32_t        queryCount = 0;             ///< asked and not read yet
+    };
+
+    /// WaterQuery.comp's buffer and push constants.
+    struct QueryBuffer
+    {
+        float points[gxvk::vk::water::kQueryPoints][4];
+        float results[gxvk::vk::water::kQueryPoints][4];
+    };
+
+    struct QueryPush
+    {
+        float    camera[4];
+        float    look[4];
+        uint32_t count[4];
     };
 
     struct State
@@ -145,6 +164,17 @@ namespace
         gxvk::vk::water::ShoreShared shared;  ///< the values for the terrain (Shore()), from the last capture
         uint64_t       sharedSerial = 0;
         uint64_t       shoreUpload  = 0;      ///< the serial of the last upload
+        VkImageView    wavesNear    = VK_NULL_HANDLE;   ///< cascade 0's displacement alone (2D), for the terrain
+
+        // The swimmers' query: made at the first capture that asks; `queryTried` once.
+        bool                  queryTried  = false;
+        bool                  queryReady  = false;
+        VkShaderModule        queryModule = VK_NULL_HANDLE;
+        VkDescriptorSetLayout queryLayout = VK_NULL_HANDLE;   ///< set 0: the buffer
+        VkDescriptorSetLayout emptyLayout = VK_NULL_HANDLE;   ///< set 1: nothing
+        VkPipelineLayout      queryPipeLayout = VK_NULL_HANDLE;
+        VkPipeline            queryPipe   = VK_NULL_HANDLE;
+        VkDescriptorPool      queryPool   = VK_NULL_HANDLE;
 
         char status[160] = "not drawn yet";
     };
@@ -290,15 +320,15 @@ namespace
         // Set 2 of the draws: 0 the scene's colour, 1 its depth (w), 2 where the draws lie on it and the
         // waves' parameters, 3 the waves' slopes (a layer per cascade), 4 their displacement (the vertex
         // stage moves the surface with it, step 3b), 5 the shore field, 6 its cells for the near mesh
-        // (both stages).
+        // (both stages). The swimmers' query (compute) reads 2 and 4..6 as the vertex stage does.
         VkDescriptorSetLayoutBinding draw[7] = {};
         for (uint32_t i = 0; i < 7; ++i)
         {
             draw[i].binding         = i;
             draw[i].descriptorType  = i == 2 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             draw[i].descriptorCount = 1;
-            draw[i].stageFlags      = i == 2 || i >= 5 ? VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
-                                    : i == 4 ? VK_SHADER_STAGE_VERTEX_BIT
+            draw[i].stageFlags      = i == 2 || i >= 5 ? VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT
+                                    : i == 4 ? VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT
                                              : VK_SHADER_STAGE_FRAGMENT_BIT;
         }
         VkDescriptorSetLayoutCreateInfo drawInfo = {};
@@ -379,6 +409,18 @@ namespace
                                                     VK_FORMAT_R16G16B16A16_SFLOAT };
         for (uint32_t i = 0; i < kWaveImages && !s.failed; ++i) CreateImage(waveFormats[i], waveExtent, s.waveImages[i], kCascades);
         if (s.failed) return false;
+        // Cascade 0's displacement as a plain 2D image, for the terrain's waterline (Shore()).
+        {
+            VkImageViewCreateInfo view = {};
+            view.sType                       = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            view.image                       = s.waveImages[5].image;
+            view.viewType                    = VK_IMAGE_VIEW_TYPE_2D;
+            view.format                      = waveFormats[5];
+            view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            view.subresourceRange.levelCount = 1;
+            view.subresourceRange.layerCount = 1;
+            if (!Check(d.CreateImageView(s.device, &view, nullptr, &s.wavesNear), "vkCreateImageView (cascade 0)")) return false;
+        }
 
         const VkExtent2D shoreExtent = { gxvk::vk::water::kShoreSize, gxvk::vk::water::kShoreSize };
         const VkDeviceSize shoreBytes = static_cast<VkDeviceSize>(gxvk::vk::water::kShoreSize) * gxvk::vk::water::kShoreSize * 8;
@@ -676,9 +718,134 @@ namespace
         step(2, 1, kWaveN);
         step(3, 1, kWaveN);
         step(4, kWaveN / 8, kWaveN / 8);
-        GlobalBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                      VK_ACCESS_SHADER_READ_BIT);
+        GlobalBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                      VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
         s.wavesRan = true;
+    }
+
+    /// The swimmers' query's pipeline and per-slot sets and buffers, once.
+    bool InitQuery()
+    {
+        if (s.queryReady) return true;
+        if (s.queryTried) return false;
+        s.queryTried = true;
+        const loader::Device& d = *s.dapi;
+
+        VkShaderModuleCreateInfo module = {};
+        module.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        module.codeSize = sizeof kWaterQueryComp;
+        module.pCode    = kWaterQueryComp;
+        if (!Check(d.CreateShaderModule(s.device, &module, nullptr, &s.queryModule), "vkCreateShaderModule (WaterQuery.comp)")) return false;
+
+        VkDescriptorSetLayoutBinding binding = {};
+        binding.binding         = 0;
+        binding.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        binding.descriptorCount = 1;
+        binding.stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+        VkDescriptorSetLayoutCreateInfo setInfo = {};
+        setInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        setInfo.bindingCount = 1;
+        setInfo.pBindings    = &binding;
+        if (!Check(d.CreateDescriptorSetLayout(s.device, &setInfo, nullptr, &s.queryLayout), "vkCreateDescriptorSetLayout (query)")) return false;
+        setInfo.bindingCount = 0;
+        setInfo.pBindings    = nullptr;
+        if (!Check(d.CreateDescriptorSetLayout(s.device, &setInfo, nullptr, &s.emptyLayout), "vkCreateDescriptorSetLayout (empty)")) return false;
+
+        // Set 0 the buffer, set 2 the water draws' own (the shaders' includes name set 2).
+        const VkDescriptorSetLayout sets[3] = { s.queryLayout, s.emptyLayout, s.drawLayout };
+        VkPushConstantRange push = {};
+        push.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        push.size       = sizeof(QueryPush);
+        VkPipelineLayoutCreateInfo layout = {};
+        layout.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        layout.setLayoutCount         = 3;
+        layout.pSetLayouts            = sets;
+        layout.pushConstantRangeCount = 1;
+        layout.pPushConstantRanges    = &push;
+        if (!Check(d.CreatePipelineLayout(s.device, &layout, nullptr, &s.queryPipeLayout), "vkCreatePipelineLayout (query)")) return false;
+
+        VkComputePipelineCreateInfo compute = {};
+        compute.sType        = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        compute.stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        compute.stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+        compute.stage.module = s.queryModule;
+        compute.stage.pName  = "main";
+        compute.layout       = s.queryPipeLayout;
+        if (!Check(d.CreateComputePipelines(s.device, VK_NULL_HANDLE, 1, &compute, nullptr, &s.queryPipe), "vkCreateComputePipelines (query)")) return false;
+
+        VkDescriptorPoolSize size = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kSlots };
+        VkDescriptorPoolCreateInfo pool = {};
+        pool.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        pool.maxSets       = kSlots;
+        pool.poolSizeCount = 1;
+        pool.pPoolSizes    = &size;
+        if (!Check(d.CreateDescriptorPool(s.device, &pool, nullptr, &s.queryPool), "vkCreateDescriptorPool (query)")) return false;
+
+        for (Slot& slot : s.slots)
+        {
+            VkDescriptorSetAllocateInfo alloc = {};
+            alloc.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            alloc.descriptorPool     = s.queryPool;
+            alloc.descriptorSetCount = 1;
+            alloc.pSetLayouts        = &s.queryLayout;
+            if (!Check(d.AllocateDescriptorSets(s.device, &alloc, &slot.querySet), "vkAllocateDescriptorSets (query)")) return false;
+            if (!memory::CreateBuffer(sizeof(QueryBuffer), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, memory::Where::Readback, slot.query) || !slot.query.block.mapped)
+            {
+                Write(Error, "vulkan: water: no buffer for the swimmers' query");
+                return false;
+            }
+            VkDescriptorBufferInfo info = { slot.query.handle, 0, sizeof(QueryBuffer) };
+            VkWriteDescriptorSet write = {};
+            write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet          = slot.querySet;
+            write.dstBinding      = 0;
+            write.descriptorCount = 1;
+            write.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            write.pBufferInfo     = &info;
+            d.UpdateDescriptorSets(s.device, 1, &write, 0, nullptr);
+        }
+
+        s.queryReady = true;
+        return true;
+    }
+
+    /// The swimmers' query at the capture (the pass ended, this slot's set 2 written): first what this slot
+    /// asked the last time round (that frame is complete), then this frame's points.
+    void RunQuery(VkCommandBuffer cmd, Slot& slot, const gxvk::vk::water::QueryInput& in)
+    {
+        if (slot.queryCount && slot.query.block.mapped)
+        {
+            memory::InvalidateHost(slot.query.block);
+            const QueryBuffer* buffer = static_cast<const QueryBuffer*>(slot.query.block.mapped);
+            if (in.sink) in.sink(slot.queryTag, buffer->results, slot.queryCount);
+            slot.queryCount = 0;
+        }
+
+        if (!in.ask || !InitQuery()) return;
+
+        QueryBuffer* buffer = static_cast<QueryBuffer*>(slot.query.block.mapped);
+        uint64_t tag = 0;
+        uint32_t count = in.ask(buffer->points, gxvk::vk::water::kQueryPoints, &tag);
+        count = count < gxvk::vk::water::kQueryPoints ? count : gxvk::vk::water::kQueryPoints;
+        if (!count) return;
+        std::memset(buffer->results, 0, sizeof buffer->results);
+        memory::FlushHost(slot.query.block);
+
+        QueryPush push = {};
+        std::memcpy(push.camera, in.camera, sizeof push.camera);
+        std::memcpy(push.look, in.look, sizeof push.look);
+        push.count[0] = count;
+
+        const loader::Device& d = *s.dapi;
+        d.CmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s.queryPipe);
+        d.CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s.queryPipeLayout, 0, 1, &slot.querySet, 0, nullptr);
+        d.CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s.queryPipeLayout, 2, 1, &slot.drawSet, 0, nullptr);
+        d.CmdPushConstants(cmd, s.queryPipeLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof push, &push);
+        d.CmdDispatch(cmd, 1, 1, 1);
+        // The answers made visible to the host before this slot's fence is waited.
+        GlobalBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
+        slot.queryTag   = tag;
+        slot.queryCount = count;
     }
 }
 
@@ -797,6 +964,10 @@ namespace gxvk::vk::water
         std::memcpy(s.shared.wind, p.shoreWind, sizeof p.shoreWind);
         s.shared.wind[3] = in.waves.time;
         s.shared.swash   = in.shore.swash;
+        s.shared.wave[0] = in.query.look[3] * in.query.look[1];   // movement x wave scale (Water.vert's)
+        s.shared.wave[1] = 1.0f / gxvk::vk::water::kWaveSizes[0];
+        s.shared.wave[2] = in.waves.on && s.wavesRan ? 1.0f : 0.0f;
+        std::memcpy(s.shared.camera, in.query.camera, sizeof s.shared.camera);
         s.sharedSerial   = serial;
         std::memcpy(slot.params.block.mapped, &p, sizeof p);
         memory::FlushHost(slot.params.block);
@@ -845,6 +1016,9 @@ namespace gxvk::vk::water
                      VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
         d.CmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 0, nullptr);
 
+        // The swimmers' query, with this frame's set 2 (the params written above).
+        RunQuery(cmd, slot, in.query);
+
         slot.captured = serial;
         s.lastUsed    = serial;
         s.lastOk      = true;
@@ -878,6 +1052,9 @@ namespace gxvk::vk::water
         out.cells = s.shoreCells.view;
         out.fieldSampler = s.linearRepeat;
         out.cellsSampler = s.nearestClamp;
+        out.waves = s.wavesNear;
+        out.wavesSampler = s.linearRepeat;
+        out.valid = out.valid && s.wavesNear != VK_NULL_HANDLE;
         return out;
     }
 
@@ -887,6 +1064,7 @@ namespace gxvk::vk::water
         const loader::Device& d = *s.dapi;
         DestroyImage(s.colour);
         DestroyImage(s.depth);
+        if (s.wavesNear != VK_NULL_HANDLE) d.DestroyImageView(s.device, s.wavesNear, nullptr);
         for (Image& img : s.waveImages) DestroyImage(img);
         DestroyImage(s.shore);
         memory::DestroyBuffer(s.shoreStaging);
@@ -901,6 +1079,13 @@ namespace gxvk::vk::water
         if (s.waveLayout != VK_NULL_HANDLE) d.DestroyDescriptorSetLayout(s.device, s.waveLayout, nullptr);
         if (s.linearRepeat != VK_NULL_HANDLE) d.DestroySampler(s.device, s.linearRepeat, nullptr);
         for (Slot& slot : s.slots) memory::DestroyBuffer(slot.params);
+        for (Slot& slot : s.slots) memory::DestroyBuffer(slot.query);
+        if (s.queryPipe != VK_NULL_HANDLE) d.DestroyPipeline(s.device, s.queryPipe, nullptr);
+        if (s.queryPipeLayout != VK_NULL_HANDLE) d.DestroyPipelineLayout(s.device, s.queryPipeLayout, nullptr);
+        if (s.queryPool != VK_NULL_HANDLE) d.DestroyDescriptorPool(s.device, s.queryPool, nullptr);
+        if (s.queryLayout != VK_NULL_HANDLE) d.DestroyDescriptorSetLayout(s.device, s.queryLayout, nullptr);
+        if (s.emptyLayout != VK_NULL_HANDLE) d.DestroyDescriptorSetLayout(s.device, s.emptyLayout, nullptr);
+        if (s.queryModule != VK_NULL_HANDLE) d.DestroyShaderModule(s.device, s.queryModule, nullptr);
         if (s.pipeline != VK_NULL_HANDLE) d.DestroyPipeline(s.device, s.pipeline, nullptr);
         if (s.pipeLayout != VK_NULL_HANDLE) d.DestroyPipelineLayout(s.device, s.pipeLayout, nullptr);
         if (s.pool != VK_NULL_HANDLE) d.DestroyDescriptorPool(s.device, s.pool, nullptr);

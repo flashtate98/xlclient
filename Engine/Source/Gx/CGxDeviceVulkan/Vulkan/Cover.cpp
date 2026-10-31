@@ -41,11 +41,11 @@ namespace
     constexpr uint32_t kSurfaceBinding = 5;
     constexpr uint32_t kDepthBinding = 6;
     constexpr uint32_t kFirstTex   = 7;
-    constexpr uint32_t kMapSamplers = 7;                         ///< bindings 1..4, the marks (kMarksBinding), the shore field and cells
+    constexpr uint32_t kMapSamplers = 8;                         ///< bindings 1..4, the marks (kMarksBinding), the shore field, cells and waves
     constexpr uint32_t kMaxSurface = gxvk::vk::cover::kMaxSurface;
     constexpr VkImageUsageFlags kSurfaceUsage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     constexpr uint32_t kEntryRows  = 5;                          ///< vec4 per entry (sxc_cover_entry, 80 bytes)
-    constexpr uint32_t kMaxBindings = kFirstTex + kFallbackSlots + 3;   ///< + the marks (kMarksBinding), the shore field and cells
+    constexpr uint32_t kMaxBindings = kFirstTex + kFallbackSlots + 4;   ///< + the marks (kMarksBinding), the shore field, cells and waves
     constexpr uint32_t kTerrainSamplers = 13;                    ///< set 0 of the terrain modules: 4 layers, the alpha map, 4 cascades, 4 height maps
     constexpr VkFormat kMapFormat  = VK_FORMAT_R32G32B32A32_SFLOAT;
     constexpr float    kNoWater    = -100000.0f;
@@ -68,6 +68,8 @@ namespace
         float shoreGrid[4];  ///< the water's shore field (Vulkan/Water.hpp's ShoreShared): first cell x, y, 1 when there, cell (yd)
         float shoreLook[4];  ///< foam, wave height (yd), wavelength (yd), swash run-up (yd)
         float shoreWind[4];  ///< the waves' direction (x, y), the wind speed (yd / s), the water's clock (s)
+        float shoreWave[4];  ///< the long waves: movement x wave scale, 1 / cascade 0's size (1 / yd), 1 when they run, 0
+        float shoreCamera[4]; ///< the camera's world position (the waves' movement fades with its distance)
         float texInfo[kMaxTextures / 4][4]; ///< per texture k (at [k / 4][k % 4]): its slot x 4 (0 none), + 2 gloss mask
         float entries[kMaxEntries * kEntryRows][4];
     };
@@ -474,17 +476,19 @@ namespace gxvk::vk::cover
         bindings[bindingCount].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[bindingCount].descriptorCount = 1;
         bindings[bindingCount].stageFlags      = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-        // The water's shore field and its cells: the swash on the beach (the terrain's pixels).
-        for (uint32_t k = 1; k <= 2; ++k)
+        // The water's shore field, its cells and its long waves: the swash on the beach (the terrain's pixels).
+        for (uint32_t k = 1; k <= 3; ++k)
         {
-            bindings[bindingCount + k].binding         = k == 1 ? gxvk::vk::cover::kShoreFieldBinding : gxvk::vk::cover::kShoreCellsBinding;
+            bindings[bindingCount + k].binding         = k == 1 ? gxvk::vk::cover::kShoreFieldBinding
+                                                       : k == 2 ? gxvk::vk::cover::kShoreCellsBinding
+                                                                : gxvk::vk::cover::kShoreWavesBinding;
             bindings[bindingCount + k].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             bindings[bindingCount + k].descriptorCount = 1;
             bindings[bindingCount + k].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
         }
         VkDescriptorSetLayoutCreateInfo setLayout = {};
         setLayout.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        setLayout.bindingCount = bindingCount + 3;
+        setLayout.bindingCount = bindingCount + 4;
         setLayout.pBindings    = bindings;
         if (!Check(d.CreateDescriptorSetLayout(s.device, &setLayout, nullptr, &s.setLayout), "vkCreateDescriptorSetLayout")) return false;
 
@@ -769,6 +773,8 @@ namespace gxvk::vk::cover
             std::memcpy(p.shoreLook, shore.look, sizeof p.shoreLook);
             std::memcpy(p.shoreWind, shore.wind, sizeof p.shoreWind);
             p.shoreLook[3] = shore.swash;
+            std::memcpy(p.shoreWave, shore.wave, sizeof p.shoreWave);
+            std::memcpy(p.shoreCamera, shore.camera, sizeof p.shoreCamera);
         }
         // Per texture: the slot showing it (a loaded one), and its gloss flag.
         for (uint32_t k = 0; k < kMaxTextures; ++k)
@@ -798,6 +804,8 @@ namespace gxvk::vk::cover
         const VkDescriptorImageInfo shoreField = shore.valid ? VkDescriptorImageInfo{ shore.fieldSampler, shore.field, VK_IMAGE_LAYOUT_GENERAL }
                                                              : VkDescriptorImageInfo{ s.mapSampler, s.white.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         const VkDescriptorImageInfo shoreCells = shore.valid ? VkDescriptorImageInfo{ shore.cellsSampler, shore.cells, VK_IMAGE_LAYOUT_GENERAL }
+                                                             : VkDescriptorImageInfo{ s.mapSampler, s.white.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        const VkDescriptorImageInfo shoreWaves = shore.valid ? VkDescriptorImageInfo{ shore.wavesSampler, shore.waves, VK_IMAGE_LAYOUT_GENERAL }
                                                              : VkDescriptorImageInfo{ s.mapSampler, s.white.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         const VkDescriptorImageInfo surface = { VK_NULL_HANDLE, s.surface.view, VK_IMAGE_LAYOUT_GENERAL };
         const VkDescriptorImageInfo depth = { VK_NULL_HANDLE, s.depthView, VK_IMAGE_LAYOUT_GENERAL };
@@ -835,6 +843,7 @@ namespace gxvk::vk::cover
         add(gxvk::vk::cover::kMarksBinding, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1).pImageInfo = &marks;
         add(gxvk::vk::cover::kShoreFieldBinding, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1).pImageInfo = &shoreField;
         add(gxvk::vk::cover::kShoreCellsBinding, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1).pImageInfo = &shoreCells;
+        add(gxvk::vk::cover::kShoreWavesBinding, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1).pImageInfo = &shoreWaves;
         if (texturesChanged)
         {
             if (s.bindless)

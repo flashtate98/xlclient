@@ -13,6 +13,7 @@
 
 layout(set = 2, binding = 24) uniform sampler2D sShoreField;   // signed distance (yd, + over water), depth, direction to the other kind
 layout(set = 2, binding = 25) uniform sampler2D sShoreCells;   // the nearest water's surface (world z), ground, LiquidType (+ 0.25 not water), covered
+layout(set = 2, binding = 26) uniform sampler2D sShoreWaves;   // the long waves' displacement (cascade 0: dx, dy, height)
 
 const float kSwashHalfWorld = 32.0 * 533.33333;
 const float kSwashTau = 6.2831853;
@@ -49,7 +50,10 @@ struct Swash
     float foam;   // 0..1
 };
 
-Swash TerrainSwash(vec3 world)
+// `up`: the ground normal's z. Swash runs up beaches; on steep rock the waves hit and fall back (spray,
+// later: water-contact) on their own timing, which the swash's (the shore waves') isn't, so it climbed a cliff
+// out of step with the waves seen there (Seyri, 2026-10-31). There only the moving waterline and its wet.
+Swash TerrainSwash(vec3 world, float up)
 {
     Swash r;
     r.wet = 0.0;
@@ -77,7 +81,33 @@ Swash TerrainSwash(vec3 world)
         return r;   // no water near, or lava and slime (no wet sand there)
     }
 
-    float h = world.z - cell.x;   // above the still water
+    // The waterline rises and falls with the long waves as the near mesh's water does (WaterMove.glsl:
+    // cascade 0 averaged as over its vertices, eased by the water's depth, fading with distance), so the
+    // swash doesn't stay at the still waterline while the waves climb and drop along a cliff (Seyri,
+    // 2026-10-31). The easing blended between the four nearest cell centres, as the mesh's triangles blend
+    // its vertices': taken from one cell, it stepped at every cell's edge and the swash broke into cells.
+    float rise = 0.0;
+
+    if (cover.shoreWave.z > 0.5)
+    {
+        vec2 u = g - 0.5;
+        ivec2 i0 = ivec2(floor(u));
+        vec2 f = u - vec2(i0);
+        vec4 c00 = texelFetch(sShoreCells, i0 & 255, 0), c10 = texelFetch(sShoreCells, (i0 + ivec2(1, 0)) & 255, 0);
+        vec4 c01 = texelFetch(sShoreCells, (i0 + ivec2(0, 1)) & 255, 0), c11 = texelFetch(sShoreCells, (i0 + ivec2(1, 1)) & 255, 0);
+        vec4 depth = vec4(c00.x - c00.y, c10.x - c10.y, c01.x - c01.y, c11.x - c11.y);
+        vec4 ease = mix(vec4(0.6), vec4(1.0), smoothstep(vec4(0.0), vec4(4.0), depth));
+        float deep = mix(mix(ease.x, ease.y, f.x), mix(ease.z, ease.w, f.x), f.y);
+        vec2 uv = world.xy * cover.shoreWave.y;
+        float s2 = 2.0 * cover.shoreWave.y;
+        float d = (textureLod(sShoreWaves, uv, 0.0).z * 2.0
+                 + textureLod(sShoreWaves, uv + vec2(s2, 0.0), 0.0).z + textureLod(sShoreWaves, uv - vec2(s2, 0.0), 0.0).z
+                 + textureLod(sShoreWaves, uv + vec2(0.0, s2), 0.0).z + textureLod(sShoreWaves, uv - vec2(0.0, s2), 0.0).z) / 6.0;
+        d = clamp(d, -1.0, 1.0) * (1.0 - smoothstep(150.0, 260.0, length(world - cover.shoreCamera.xyz)));
+        rise = d * cover.shoreWave.x * deep;
+    }
+
+    float h = world.z - (cell.x + rise);   // above the water as it stands now
 
     // Only where the water could climb to: no ground between here and the waterline higher than both. Past a
     // lake's rim, the hollow behind it and the outer face of a cliff stay dry (Seyri, 2026-10-31). Below the
@@ -119,7 +149,8 @@ Swash TerrainSwash(vec3 world)
     float lead = front - h;                       // how deep the sheet is here (yd); < 0 ahead of it
 
     // The sheet, and the sand it left: wet up to about the highest front, drying above.
-    float sheet = smoothstep(0.0, 0.02, lead);
+    float beach = smoothstep(0.45, 0.75, up);   // ~63..41 degrees: the sheet and its foam fade on steeper rock
+    float sheet = smoothstep(0.0, 0.02, lead) * beach;
     float left = 1.0 - smoothstep(0.75, 1.1, h / max(reach, 0.01));
     r.wet = max(sheet, 0.6 * left) * weight * (h > -0.3 ? 1.0 : 0.0);
 
@@ -135,6 +166,6 @@ Swash TerrainSwash(vec3 world)
     float na = SwashNoise(pa * 1.4) * 0.6 + SwashNoise(pa * 4.1) * 0.4;
     float nb = SwashNoise(pb * 1.4) * 0.6 + SwashNoise(pb * 4.1) * 0.4;
     float pattern = mix(nb, na, 1.0 - abs(2.0 * phaseA - 1.0));
-    r.foam = band * mix(0.35, 1.0, rising) * smoothstep(0.38, 0.55, pattern) * cover.shoreLook.x * weight;
+    r.foam = band * beach * mix(0.35, 1.0, rising) * smoothstep(0.38, 0.55, pattern) * cover.shoreLook.x * weight;
     return r;
 }

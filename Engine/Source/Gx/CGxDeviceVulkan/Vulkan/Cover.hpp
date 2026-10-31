@@ -27,6 +27,7 @@ namespace gxvk::vk::cover
     constexpr uint32_t kMarksBinding = 23;    ///< set 2: the ground marks (after the 16 fallback texture slots, in both modes)
     constexpr uint32_t kShoreFieldBinding = 24;   ///< set 2: the water's shore field (Vulkan/Water.hpp's Shore(); the swash)
     constexpr uint32_t kShoreCellsBinding = 25;   ///< set 2: its cells (the nearest water's surface)
+    constexpr uint32_t kShoreWavesBinding = 26;   ///< set 2: the long waves' displacement (the waterline follows them)
 
     struct Frame
     {

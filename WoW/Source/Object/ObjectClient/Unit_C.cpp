@@ -148,6 +148,7 @@
 #include "WoW/Source/WowSvcs/WowSvcsClient/ClientServices.h"
 #include "WarcraftXL/Seams.h"
 #include "SXC/Cover/Trails.h"  // SXC: footsteps carve the covers
+#include "SXC/Water/Ride.h"    // SXC: swimmers ride the waves
 
 static const float UNDERWATER_BUBBLE_THRESHOLD = 5.0f;
 static const float MOUSE_LOOK_SEND_FACING_DELTA = 0.1f;
@@ -1238,6 +1239,7 @@ int32_t CGUnit_C::Animate(float elapsed) {
             this->GetSwimMatrix(matrix);
         }
 
+        SXC::Water::RideModel(this, matrix);  // SXC: swimmers ride the waves (drawn only)
         CM2Model* model = this->GetObjectModel();
         model->m_fFlags |= 0x8000;
         model->m_worldTransform = matrix;
@@ -9213,6 +9215,7 @@ void CGUnit_C::UpdateWorldTransform(float elapsed) {
         float scale = this->GetTrueScale();
         float facing = this->GetRenderFacing();
         model->SetWorldTransform(this->GetPosition(), facing, scale, this->m_groundNormal, 0xFFFFFFFF);
+        SXC::Water::RideModel(this, model->m_worldTransform);  // SXC: swimmers ride the waves (drawn only)
     }
 }
 

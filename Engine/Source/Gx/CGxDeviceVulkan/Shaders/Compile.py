@@ -80,6 +80,7 @@ OUTPUTS = [
         ("WaterFft.comp", "kWaterFftRowsComp", ["COLUMNS=0"]),
         ("WaterFft.comp", "kWaterFftColumnsComp", ["COLUMNS=1"]),
         ("WaterDerive.comp", "kWaterDeriveComp"),
+        ("WaterQuery.comp", "kWaterQueryComp"),  # the surface under each swimmer (SXC/Water/Ride.cpp)
     ]),
 ]
 

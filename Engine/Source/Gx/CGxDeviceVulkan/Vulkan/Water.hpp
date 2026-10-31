@@ -76,9 +76,31 @@ namespace gxvk::vk::water
         float       look[4] = {};   ///< as WaterScene.shoreLook
         float       wind[4] = {};   ///< the waves' direction (x, y), the wind speed, the water's clock (s)
         float       swash = 0.0f;
+        /// The long waves' displacement (cascade 0 alone, a 2D view; GENERAL), so the terrain's waterline
+        /// rises and falls with them: (movement x wave scale of the player's water, 1 / the cascade's size
+        /// (1 / yd), 1 when the waves run, 0), and the camera (their movement fades with its distance).
+        VkImageView waves = VK_NULL_HANDLE;
+        VkSampler   wavesSampler = VK_NULL_HANDLE;
+        float       wave[4] = {};
+        float       camera[4] = {};
     };
 
     ShoreShared Shore();
+
+    /// The surface under the swimmers (Shaders/WaterQuery.comp; SXC/Water/Ride.cpp): points asked at a
+    /// capture are answered when its frame slot comes round again, through `sink` with the same `tag`.
+    constexpr uint32_t kQueryPoints = 64;
+
+    struct QueryInput
+    {
+        /// Called at the frame's first capture only: fills up to `max` points (world x, y, the still surface's
+        /// z, unused) and their tag; returns how many.
+        uint32_t (*ask)(float (*points)[4], uint32_t max, uint64_t* tag) = nullptr;
+        float       camera[4] = {};                       ///< the camera's world position, the water's clock (s)
+        float       look[4] = { 0.0f, 1.0f, 0.0f, 1.0f };  ///< the movement row without a look grid
+        /// Per point: the surface's rise (yd), its slope (x, y), 1 when answered.
+        void (*sink)(uint64_t tag, const float (*results)[4], uint32_t count) = nullptr;
+    };
 
     struct CaptureInput
     {
@@ -87,6 +109,7 @@ namespace gxvk::vk::water
         WaveInput  waves;
         LookInput  looks;
         ShoreInput shore;
+        QueryInput query;
     };
 
     /// The copy, once per frame (later calls the same frame answer as the first). False: nothing to copy

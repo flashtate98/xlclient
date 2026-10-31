@@ -35,6 +35,8 @@ layout(std140, set = 2, binding = 0) uniform CoverBlock {
     vec4 shoreGrid;   // the water's shore field (TerrainShore.glsl): first cell x, y, 1 when there, cell (yd)
     vec4 shoreLook;   // foam, wave height (yd), wavelength (yd), swash run-up (yd)
     vec4 shoreWind;   // the waves' direction (x, y), the wind speed (yd / s), the water's clock (s)
+    vec4 shoreWave;   // the long waves: movement x wave scale, 1 / cascade 0's size (1 / yd), 1 when they run, 0
+    vec4 shoreCamera; // the camera's world position (the waves' movement fades with its distance)
     vec4 texInfo[256]; // texture k + 1 at [k / 4][k % 4]: its slot x 4 (0 = none: drawn plain), + 2 its alpha is a gloss mask
     vec4 entries[127 * 5];
 } cover;

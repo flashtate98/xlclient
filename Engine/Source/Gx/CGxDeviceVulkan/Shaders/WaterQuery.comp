@@ -1,0 +1,61 @@
+// SXC: where our water's surface is under each swimmer (SXC/Water/Ride.cpp), so they ride the waves the water
+// draws. Run at the frame's first water draw after the scene's copy (Vulkan/Water.cpp), with the water draws'
+// own set 2; the CPU reads the answers when the frame slot comes round again, a couple of frames on (the long
+// waves rise at most some 0.4 yd/s, so they are off by about a hundredth of a yard).
+//
+// Per point (world x, y, the still surface's z): the surface's movement there as Water.vert moves it
+// (WaterMove.glsl), and its slope (central differences a yard apart): (height, slope x, slope y, 1).
+// Terrain water only (WMO water doesn't move).
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 64) in;
+
+#define SHORE_TERRAIN 1.0
+#include "WaterScene.glsl"
+#include "WaterShore.glsl"
+
+layout(set = 2, binding = 4) uniform sampler2DArray waveDisp;   // per cascade: dx, dy, height (yd)
+
+#include "WaterMove.glsl"
+
+const uint kQueryPoints = 64u;
+
+layout(std430, set = 0, binding = 0) buffer Query
+{
+    vec4 points[kQueryPoints];    // world x, y, the still surface's z; w unused
+    vec4 results[kQueryPoints];   // the surface's rise (yd), its slope (x, y), 1 when answered
+} q;
+
+layout(push_constant) uniform QueryPush
+{
+    vec4 camera;   // the camera's world position; w the water's clock (s)
+    vec4 look;     // the movement row without a look grid (the panel's test values)
+    uvec4 count;   // x how many points
+} pc;
+
+float RiseAt(vec3 world)
+{
+    ivec2 g = ShoreCellOf(world.xy);
+    bool near = NearCovers(world.xy);
+    vec4 cell = near ? ShoreCell(g) : vec4(0.0);
+    float depthY = near ? max(cell.w - 1.0, 0.0) : 1.0;
+    float ease;
+    return SurfaceMove(world, near, cell, depthY, LookMoveAt(world, pc.look), pc.camera.xyz, pc.camera.w, ease).z;
+}
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x;
+
+    if (i >= pc.count.x || i >= kQueryPoints)
+    {
+        return;
+    }
+
+    vec3 p = q.points[i].xyz;
+    float h = RiseAt(p);
+    float sx = (RiseAt(p + vec3(1.0, 0.0, 0.0)) - RiseAt(p - vec3(1.0, 0.0, 0.0))) * 0.5;
+    float sy = (RiseAt(p + vec3(0.0, 1.0, 0.0)) - RiseAt(p - vec3(0.0, 1.0, 0.0))) * 0.5;
+    q.results[i] = vec4(h, sx, sy, 1.0);
+}

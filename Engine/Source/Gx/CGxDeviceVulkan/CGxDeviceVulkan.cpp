@@ -654,6 +654,10 @@ bool CGxDeviceVulkan::SxcWaterCapture(const SXC::Water::Waves& waves, bool* firs
     in.shore.wavelength = waves.shoreWavelength;
     in.shore.reach = waves.shoreReach;
     in.shore.swash = waves.shoreSwash;
+    in.query.ask = waves.queryAsk;
+    std::memcpy(in.query.camera, waves.queryCamera, sizeof in.query.camera);
+    std::memcpy(in.query.look, waves.queryLook, sizeof in.query.look);
+    in.query.sink = waves.querySink;
     return gxvk::vk::water::Capture(in, first);
 }
 

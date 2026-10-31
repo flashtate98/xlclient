@@ -48,6 +48,13 @@ namespace SXC::Water {
         float shoreWavelength = 7.0f;    // yd
         float shoreReach = 28.0f;        // yd: how far out the shore waves begin
         float shoreSwash = 0.5f;         // yd: how high the swash runs up the beach (the terrain draws it)
+        // The swimmers riding the waves (SXC/Water/Ride.h): `queryAsk` fills the points where the surface is
+        // asked (called at the frame's first capture only), answered a few frames later through `querySink`
+        // with the same tag.
+        uint32_t (*queryAsk)(float (*points)[4], uint32_t max, uint64_t* tag) = nullptr;
+        float queryCamera[4] = {};                       // the camera's world position, the water's clock
+        float queryLook[4] = { 0.0f, 1.0f, 0.0f, 1.0f };  // the movement row without a look grid
+        void (*querySink)(uint64_t tag, const float (*results)[4], uint32_t count) = nullptr;
     };
 
     // The device's copy of the scene behind the water and its waves, once per frame (later calls the same

@@ -1,6 +1,7 @@
 #include "Camera.h"
 #include "Engine/Source/Base/Coordinate.h"
 #include "SXC/Cover/Cover.h"  // SXC: the camera above the raised covers
+#include "SXC/Water/Ride.h"   // SXC: the camera rides the waves with its target
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -744,7 +745,9 @@ C3Vector CGCamera::GetSafeWorldPos(CGObject_C* target) const {
         return vehicleCamera->m_safeCurWorldPos;
     }
 
-    return target->GetPosition();
+    C3Vector position = target->GetPosition();
+    position.z += SXC::Water::RideLift(target);  // SXC: the camera rides the waves with its target
+    return position;
 }
 
 // VERIFY: e4b8b4fb manual
