@@ -93,8 +93,8 @@ layout(std140, set = 1, binding = 0) uniform Regs {
 } regs;
 
 #include "TerrainCover.glsl"
-#include "TerrainShore.glsl"
 #include "Lights.glsl"
+#include "TerrainShore.glsl"
 
 // Coordinate k (the vertex shader's packing): one per varying, or two per varying with the cascades.
 vec2 Coord(int k)

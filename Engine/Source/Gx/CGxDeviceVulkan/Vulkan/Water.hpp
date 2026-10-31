@@ -67,6 +67,7 @@ namespace gxvk::vk::water
         float           causticDepth = 6.0f;  ///< yd they reach
         float           sun[3] = { 0.0f, 0.0f, 1.0f };   ///< toward the sun (world, unit)
         float           clouds = 0.0f;        ///< how cloudy (the storm blend, 0..1): the caustics fade
+        float           sunColour[3] = { 1.0f, 1.0f, 1.0f };   ///< the sun's direct light (the models' caustics)
         int             causticDebug = 0;     ///< the terrain's caustics debug view (0 off)
     };
 
@@ -91,6 +92,7 @@ namespace gxvk::vk::water
         float       camera[4] = {};
         float       caustic[4] = {};   ///< strength, yd per cell, yd they reach, 0
         float       sun[4] = {};       ///< toward the sun (world, unit), how cloudy (0..1)
+        float       sunColour[4] = {}; ///< the sun's direct light (rgb), 0
         /// The short waves' slopes (cascade 2 alone, a 2D view; GENERAL): the caustics follow them.
         VkImageView ripples = VK_NULL_HANDLE;
     };

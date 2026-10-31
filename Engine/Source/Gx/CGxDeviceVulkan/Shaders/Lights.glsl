@@ -188,6 +188,221 @@ vec3 LightsCombine(vec3 stock, vec3 lamps)
     return total * (shaped / max(top, 0.001));
 }
 
+
+// --- Caustics (docs/kb underwater) --------------------------------------------------------------------------
+// The sunlight the waves focus into a moving net of light under the water, shared by the terrain (its own set 2,
+// TerrainShore.glsl) and the lit models, WMOs and grass (set 3 below, LightsModelColor). Where the water's shore
+// field says water lies above (terrain water), from the depth under the water as it stands; bent by the short
+// waves' slopes above and brighter under crests; widening and dimming with depth, the weather and the pixel.
+
+struct CausticInput
+{
+    vec4 grid;      // the shore field's first cell (x, y; x along world -y), 1 when there, the cell (yd)
+    vec4 caustic;   // strength, yd per cell, yd they reach, the debug view
+    vec4 sun;       // toward the sun (world, unit), how cloudy (0..1)
+    vec4 wave;      // the long waves: movement x wave scale, 1 / cascade 0's size (1 / yd), 1 when they run; the clock (s)
+    vec4 camera;    // the camera (world): the waves' movement fades with its distance
+};
+
+const float kCausticHalfWorld = 32.0 * 533.33333;
+const float kCausticTau = 6.2831853;
+
+// Hashed and value noise over the world, the lattice wrapped every 1024 per point (seamless, precise far out).
+float CausticHash(vec2 p)
+{
+    p = mod(p, 1024.0);
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+float CausticNoise(vec2 p)
+{
+    vec2 i = mod(floor(p), 1024.0), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(CausticHash(i), CausticHash(i + vec2(1.0, 0.0)), f.x), mix(CausticHash(i + vec2(0.0, 1.0)), CausticHash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+
+// A whole number of turns per 600 s (the water's clock wraps there) near `seconds` per turn.
+float CausticTurns(float seconds)
+{
+    return max(round(600.0 / seconds), 1.0) * kCausticTau / 600.0;
+}
+
+// How far from the edges of a layer of cells whose points wander about their places (0 on an edge).
+float CausticEdges(vec2 p, float time, float seconds)
+{
+    vec2 i = floor(p), f = fract(p);
+    float d1 = 8.0, d2 = 8.0;
+    float w = CausticTurns(seconds);
+
+    for (int y = -1; y <= 1; y++)
+    {
+        for (int x = -1; x <= 1; x++)
+        {
+            vec2 o = vec2(float(x), float(y));
+            vec2 h = vec2(CausticHash(i + o), CausticHash(i + o + 17.0));
+            vec2 r = o + 0.5 + 0.4 * sin(w * time + kCausticTau * h) - f;
+            float d = dot(r, r);
+
+            if (d < d1)
+            {
+                d2 = d1;
+                d1 = d;
+            }
+            else if (d < d2)
+            {
+                d2 = d;
+            }
+        }
+    }
+
+    return sqrt(d2) - sqrt(d1);
+}
+
+// A world point in the shore field's global cells.
+vec2 CausticCell(CausticInput c, vec2 world)
+{
+    return vec2(kCausticHalfWorld - world.y, kCausticHalfWorld - world.x) / c.grid.w;
+}
+
+// The water's rise above its still surface (yd) as the near mesh draws it: the long waves (WaterMove.glsl: cascade
+// 0 averaged as over its vertices, eased by the water's depth, fading with distance). The easing blended between
+// the four nearest cell centres, as the mesh's triangles blend its vertices' (from one cell it stepped at every
+// cell's edge: Seyri, 2026-10-31). `g` the point in global cells.
+float CausticRise(CausticInput c, sampler2D cells, sampler2D waves, vec3 world, vec2 g)
+{
+    if (c.wave.z < 0.5)
+    {
+        return 0.0;
+    }
+
+    vec2 u = g - 0.5;
+    ivec2 i0 = ivec2(floor(u));
+    vec2 f = u - vec2(i0);
+    vec4 c00 = texelFetch(cells, i0 & 255, 0), c10 = texelFetch(cells, (i0 + ivec2(1, 0)) & 255, 0);
+    vec4 c01 = texelFetch(cells, (i0 + ivec2(0, 1)) & 255, 0), c11 = texelFetch(cells, (i0 + ivec2(1, 1)) & 255, 0);
+    vec4 depth = vec4(c00.x - c00.y, c10.x - c10.y, c01.x - c01.y, c11.x - c11.y);
+    vec4 ease = mix(vec4(0.6), vec4(1.0), smoothstep(vec4(0.0), vec4(4.0), depth));
+    float deep = mix(mix(ease.x, ease.y, f.x), mix(ease.z, ease.w, f.x), f.y);
+    vec2 uv = world.xy * c.wave.y;
+    float s2 = 2.0 * c.wave.y;
+    float d = (textureLod(waves, uv, 0.0).z * 2.0
+             + textureLod(waves, uv + vec2(s2, 0.0), 0.0).z + textureLod(waves, uv - vec2(s2, 0.0), 0.0).z
+             + textureLod(waves, uv + vec2(0.0, s2), 0.0).z + textureLod(waves, uv - vec2(0.0, s2), 0.0).z) / 6.0;
+    d = clamp(d, -1.0, 1.0) * (1.0 - smoothstep(150.0, 260.0, length(world - c.camera.xyz)));
+    return d * c.wave.x * deep;
+}
+
+// The caustics' pattern here (0 none, about 1 on a bright line), for the sun's light and our lamps' alike. `pixel`
+// yd per pixel (an even glow where a pixel covers a cell, so they don't shimmer). The samplers: the shore field
+// (signed distance, depth, direction), its cells (surface, ground, type, covered), cascade 0's displacement and
+// cascade 2's slopes, all stored toroidally.
+float CausticsAt(CausticInput c, sampler2D field, sampler2D cells, sampler2D waves, sampler2D ripples, vec3 world, float pixel)
+{
+    if (c.grid.z < 0.5 || c.caustic.x <= 0.0 || c.grid.w <= 0.0)
+    {
+        return 0.0;
+    }
+
+    vec2 g = CausticCell(c, world.xy);
+    vec2 inside = g - c.grid.xy;
+    vec2 edge = min(inside, vec2(256.0) - inside);
+    float weight = clamp((min(edge.x, edge.y) - 2.0) / 14.0, 0.0, 1.0);
+
+    if (weight <= 0.0 || textureLod(field, g / 256.0, 0.0).x < -1.0)
+    {
+        return 0.0;   // outside the field, or not under water (its distance is positive over water)
+    }
+
+    vec4 cell = texelFetch(cells, ivec2(floor(g)) & 255, 0);
+
+    if (cell.z < 0.5 || fract(cell.z) > 0.1)
+    {
+        return 0.0;   // no water, or lava and slime
+    }
+
+    float reach = max(c.caustic.z, 0.1);
+    float depth = cell.x - world.z;
+
+    if (depth > reach * 1.5 || depth < -1.0)
+    {
+        return 0.0;
+    }
+
+    depth += CausticRise(c, cells, waves, world, g);   // under the water as it stands (a trough baring the floor: none)
+
+    if (depth <= 0.02)
+    {
+        return 0.0;
+    }
+
+    // Where this light came in: up the light as the surface bent it (refracted, so steeper below); straight down
+    // for a low or missing sun (our lamps', and night's).
+    vec3 toward = c.sun.z > 0.05 ? c.sun.xyz : vec3(0.0, 0.0, 1.0);
+    vec3 down = refract(-toward, vec3(0.0, 0.0, 1.0), 1.0 / 1.33);
+    vec2 entry = world.xy + down.xy * (depth / min(down.z, -0.05));
+
+    // The short waves over the entry: their slopes bend the light (the net shifts with them, more the deeper it
+    // falls), their curvature focuses it (brighter under crests: the slopes' divergence negative), their
+    // steepness sets how lively the net is. This water's wave scale on top.
+    const float kRippleSize = 9.0;   // yd: cascade 2 (Vulkan/Water.hpp's kWaveSizes)
+    const float kStep = 0.35;        // yd
+    float waveScale = c.wave.x;
+    vec2 ruv = entry / kRippleSize;
+    float rs = kStep / kRippleSize;
+    vec2 slope = textureLod(ripples, ruv, 0.0).xy * waveScale;
+    float divergence = (textureLod(ripples, ruv + vec2(rs, 0.0), 0.0).x - textureLod(ripples, ruv - vec2(rs, 0.0), 0.0).x
+                      + textureLod(ripples, ruv + vec2(0.0, rs), 0.0).y - textureLod(ripples, ruv - vec2(0.0, rs), 0.0).y)
+                       * waveScale / (2.0 * kStep);
+    float focus = clamp(1.0 - divergence * depth * 0.6, 0.35, 2.2);
+    float lively = mix(0.35, 1.0, smoothstep(0.03, 0.25, length(slope)));
+
+    float scale = max(c.caustic.y, 0.25);
+    vec2 p = (entry + slope * depth * 1.2) / scale;
+
+    // The net churns as the waves pass: the pattern warped by noise that circles, two layers wandering at different
+    // paces; the lines widen with depth (the light spreads), with the weather and with the pixel.
+    float time = c.wave.w;
+    float churn = CausticTurns(11.0) * time;
+    vec2 circle = vec2(cos(churn), sin(churn)) * 2.0;
+    p += (vec2(CausticNoise(p * 0.35 + circle), CausticNoise(p * 0.35 - circle.yx + 9.0)) - 0.5) * 0.8;
+    float clouds = clamp(c.sun.w, 0.0, 1.0);
+    float spread = 0.05 + depth * 0.012 + clouds * 0.15;
+    float aa = pixel / scale;
+    float width = spread + aa * 1.5;
+    float a = 1.0 - smoothstep(0.0, width, CausticEdges(p, time, 2.6));
+    float b = 1.0 - smoothstep(0.0, width, CausticEdges(p * 1.37 + vec2(3.1, 7.7), time, 3.7));
+    float net = (a + b) * 0.45 + a * b * 0.9;
+    net *= 0.05 / max(spread, 0.05);                     // spread light is dimmer
+    net = mix(net, 0.3, smoothstep(0.15, 0.6, aa));      // far away: their mean, an even glow
+    net *= focus * lively;
+
+    float fade = smoothstep(0.02, 0.4, depth) * exp(-2.5 * depth / reach) * (1.0 - smoothstep(reach, reach * 1.5, depth));
+    return net * fade * c.caustic.x * weight * (1.0 - 0.9 * clouds);
+}
+
+// The water's shore for the lit models, WMOs and grass (Vulkan/Lights.cpp from the water's Shore()): its values
+// and the four images; `grid.z` 0 without them (a white image bound instead).
+layout(std140, set = 3, binding = 4) uniform LightShore {
+    vec4 grid;
+    vec4 caustic;
+    vec4 sun;
+    vec4 sunColour;   // the sun's direct light (the day's diffuse)
+    vec4 wave;
+    vec4 camera;
+} lightShore;
+layout(set = 3, binding = 5) uniform sampler2D lightShoreField;
+layout(set = 3, binding = 6) uniform sampler2D lightShoreCells;
+layout(set = 3, binding = 7) uniform sampler2D lightShoreWaves;
+layout(set = 3, binding = 8) uniform sampler2D lightShoreRipples;
+
+float LightsCaustics(vec3 world, float pixel)
+{
+    CausticInput c = CausticInput(lightShore.grid, lightShore.caustic, lightShore.sun, lightShore.wave, lightShore.camera);
+    return CausticsAt(c, lightShoreField, lightShoreCells, lightShoreWaves, lightShoreRipples, world, pixel);
+}
+
 #ifndef LIGHTS_COMPUTE // the fog's light volume (FogLights.comp): no screen-space derivatives in compute
 
 // A translated model or WMO pixel's lit colour (step 6b): `stock` is the vertex module's lit colour
@@ -199,6 +414,8 @@ vec4 LightsModelColor(vec4 stock, vec4 viewPos, vec4 viewNormal)
 {
     // The slopes first: derivatives must be taken in uniform control flow.
     vec3 faceted = cross(dFdx(viewPos.xyz), dFdy(viewPos.xyz));
+    vec3 worldPos = LightsViewToWorld(viewPos.xyz);
+    float pixel = length(fwidth(worldPos.xy));   // yd per pixel: the caustics' fine lines
 
     if (!LightsOn() || viewPos.w < 0.5)
     {
@@ -215,11 +432,23 @@ vec4 LightsModelColor(vec4 stock, vec4 viewPos, vec4 viewNormal)
     }
 
     int count;
-    vec3 lamps = LightsAt(LightsViewToWorld(viewPos.xyz), normalize(LightsViewDirToWorld(nv)), count);
+    vec3 nWorld = normalize(LightsViewDirToWorld(nv));
+    vec3 lamps = LightsAt(worldPos, nWorld, count);
 
     if (LightsDebug() == 1)
     {
         return vec4(vec3(0.15) + lamps, stock.a);
+    }
+
+    // The caustics under the water (docs/kb underwater): more of the sun's light where the waves focus it, on
+    // what faces it (rocks, wrecks, creatures' backs), and of our lamps' in their colour.
+    float caustic = LightsCaustics(worldPos, pixel);
+
+    if (caustic > 0.0)
+    {
+        vec3 sun = lightShore.sun.xyz;
+        float facing = clamp(dot(nWorld, sun), 0.0, 1.0) * smoothstep(0.05, 0.2, sun.z);
+        lamps += caustic * (lightShore.sunColour.rgb * facing + lamps * 0.8);
     }
 
     return vec4(LightsCombine(clamp(stock.rgb, 0.0, 1.0), lamps), stock.a);

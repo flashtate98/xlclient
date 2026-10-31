@@ -930,6 +930,7 @@ namespace
         s.shared.caustic[3] = static_cast<float>(in.shore.causticDebug);
         std::memcpy(s.shared.sun, in.shore.sun, 3 * sizeof(float));
         s.shared.sun[3] = in.shore.clouds;
+        std::memcpy(s.shared.sunColour, in.shore.sunColour, 3 * sizeof(float));
         s.sharedSerial   = serial;
     }
 

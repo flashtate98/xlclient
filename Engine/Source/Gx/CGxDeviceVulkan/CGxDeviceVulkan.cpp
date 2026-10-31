@@ -659,6 +659,7 @@ bool CGxDeviceVulkan::SxcWaterCapture(const SXC::Water::Waves& waves, bool* firs
     in.shore.causticDepth = waves.causticDepth;
     std::memcpy(in.shore.sun, waves.sun, sizeof in.shore.sun);
     in.shore.clouds = waves.clouds;
+    std::memcpy(in.shore.sunColour, waves.sunColour, sizeof in.shore.sunColour);
     in.shore.causticDebug = waves.causticDebug;
     in.query.ask = waves.queryAsk;
     in.prepareOnly = waves.prepareOnly;

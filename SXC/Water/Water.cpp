@@ -588,6 +588,9 @@ namespace SXC::Water {
             }
 
             waves.clouds = std::clamp(day->m_stormBlend, 0.0f, 1.0f);
+            waves.sunColour[0] = day->m_light1.m_diffuse.r / 255.0f;
+            waves.sunColour[1] = day->m_light1.m_diffuse.g / 255.0f;
+            waves.sunColour[2] = day->m_light1.m_diffuse.b / 255.0f;
         }
 
         waves.causticDebug = s_panel.causticDebug;
