@@ -386,6 +386,7 @@ void main()
     vec3 nv = normalize(coverNormal.xyz);
     vec3 n = normalize(vec3(dot(regs.v[0].xyz, nv), dot(regs.v[1].xyz, nv), dot(regs.v[2].xyz, nv)));
     float groundUp = n.z;   // SXC: how level the ground is, before the bumps (the swash keeps to beaches)
+    float groundPixel = length(fwidth(coverWorld.xy));   // SXC: yd per pixel (the caustics' fine lines)
 
     // SXC: how much of each layer's pattern (parallax, bumps) the covers leave showing.
     bool parallax = ParallaxOn(), bumps = BumpsOn();
@@ -594,6 +595,32 @@ void main()
         colour = colour + colour;
         vec3 highlight = c.www * sunHighlight + shine;
         colour = highlight * shadow + colour;
+    }
+
+    // SXC: the caustics on the floor under the water (TerrainShore.glsl): more of the sun's light where the
+    // waves focus it (none in shadow, none with the sun down), and of our lamps' in their colour. The sun's
+    // direction in the world from the CPU (cover.shoreSun): turned back from the view's, it failed with the
+    // camera looking straight down (Seyri, 2026-10-31).
+    vec3 sunWorld = cover.shoreSun.xyz;
+    float caustic = TerrainCaustics(coverWorld.xyz, sunWorld, groundPixel);
+
+    if (caustic > 0.0)
+    {
+        vec3 sunLight = (kUnlit ? vec3(0.5) : regs.v[26].xyz * 2.0) * (shadow * smoothstep(0.05, 0.2, sunWorld.z));
+        colour += c.xyz * (sunLight + lamps * 0.8) * caustic;
+    }
+
+    // SXC: the caustics' debug views (the Water panel), unlit and unfogged: 1 the pattern alone, 2 the sun's
+    // shadow term, 3 what the terrain was handed (red: the shore field, green: the sun's height, blue: on).
+    int causticDebug = int(cover.shoreCaustic.w + 0.5);
+
+    if (causticDebug > 0)
+    {
+        vec3 shown = causticDebug == 1 ? vec3(caustic)
+                   : causticDebug == 2 ? vec3(shadow)
+                                       : vec3(cover.shoreGrid.z, clamp(sunWorld.z, 0.0, 1.0), cover.shoreCaustic.x > 0.0 ? 1.0 : 0.0);
+        oC0 = vec4(shown, 1.0);
+        return;
     }
 
     // SXC: the covers' debug views, unlit and unfogged (7, the decals', leaves the terrain as it is).

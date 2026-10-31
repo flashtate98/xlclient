@@ -136,6 +136,8 @@ namespace
 
         uint64_t lastCapture = 0;    ///< the serial of the last attempt
         bool     lastOk      = false;
+        uint32_t attempts    = 0;    ///< this frame's tries (a refused copy is tried again at the next draws)
+        bool     prepared    = false;   ///< this frame's waves and shore field recorded
 
         // The waves: made at the first frame that wants them; `wavesTried` once.
         bool                  wavesTried  = false;
@@ -165,6 +167,7 @@ namespace
         uint64_t       sharedSerial = 0;
         uint64_t       shoreUpload  = 0;      ///< the serial of the last upload
         VkImageView    wavesNear    = VK_NULL_HANDLE;   ///< cascade 0's displacement alone (2D), for the terrain
+        VkImageView    ripplesNear  = VK_NULL_HANDLE;   ///< cascade 2's slopes alone (2D), for the caustics
 
         // The swimmers' query: made at the first capture that asks; `queryTried` once.
         bool                  queryTried  = false;
@@ -420,6 +423,11 @@ namespace
             view.subresourceRange.levelCount = 1;
             view.subresourceRange.layerCount = 1;
             if (!Check(d.CreateImageView(s.device, &view, nullptr, &s.wavesNear), "vkCreateImageView (cascade 0)")) return false;
+            // And cascade 2's slopes, for the caustics.
+            view.image                           = s.waveImages[6].image;
+            view.format                          = waveFormats[6];
+            view.subresourceRange.baseArrayLayer = 2;
+            if (!Check(d.CreateImageView(s.device, &view, nullptr, &s.ripplesNear), "vkCreateImageView (cascade 2)")) return false;
         }
 
         const VkExtent2D shoreExtent = { gxvk::vk::water::kShoreSize, gxvk::vk::water::kShoreSize };
@@ -488,7 +496,7 @@ namespace
         VkCommandBuffer cmd = frame::PrePass();
         if (!cmd) return;
         const loader::Device& d = *s.dapi;
-        const VkPipelineStageFlags readers = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        const VkPipelineStageFlags readers = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
 
         if (s.shoreFresh)
         {
@@ -809,8 +817,8 @@ namespace
         return true;
     }
 
-    /// The swimmers' query at the capture (the pass ended, this slot's set 2 written): first what this slot
-    /// asked the last time round (that frame is complete), then this frame's points.
+    /// The swimmers' query, into the pre-pass (outside any pass; this slot's set 2 written): first what this
+    /// slot asked the last time round (that frame is complete), then this frame's points.
     void RunQuery(VkCommandBuffer cmd, Slot& slot, const gxvk::vk::water::QueryInput& in)
     {
         if (slot.queryCount && slot.query.block.mapped)
@@ -847,6 +855,107 @@ namespace
         slot.queryTag   = tag;
         slot.queryCount = count;
     }
+
+    /// Set 2's parameters for this frame (`extent`: the scene copy's; the last one's before a copy is made).
+    Params MakeParams(const gxvk::vk::water::CaptureInput& in, VkExtent2D extent)
+    {
+        Params p = {};
+        p.viewport[0] = in.viewport.x;
+        p.viewport[1] = in.viewport.y;
+        p.viewport[2] = in.viewport.width;
+        p.viewport[3] = in.viewport.height;
+        p.extent[0]   = static_cast<float>(extent.width ? extent.width : 1);
+        p.extent[1]   = static_cast<float>(extent.height ? extent.height : 1);
+        p.extent[2]   = 1.0f / static_cast<float>(extent.width ? extent.width : 1);
+        p.extent[3]   = 1.0f / static_cast<float>(extent.height ? extent.height : 1);
+        for (uint32_t c = 0; c < kCascades; ++c) p.waveSizes[c] = gxvk::vk::water::kWaveSizes[c];
+        p.waveSizes[3] = in.waves.on && s.wavesRan ? 1.0f : 0.0f;
+        p.waveLook[0]  = 220.0f;   // cascade 1 fades out by this distance (yd), cascade 2 by the next
+        p.waveLook[1]  = 45.0f;
+        p.waveLook[2]  = in.waves.foam;
+        p.waveLook[3]  = in.waves.move;
+        p.depthProj[0] = in.proj[2 * 4 + 2];
+        p.depthProj[1] = in.proj[3 * 4 + 2];
+        p.depthProj[2] = in.proj[2 * 4 + 3];
+        p.depthProj[3] = in.proj[3 * 4 + 3];
+        p.depthRange[0] = in.viewport.minDepth;
+        p.depthRange[1] = in.viewport.maxDepth;
+        p.depthRange[3] = static_cast<float>(in.waves.bodies);
+        for (uint32_t b = 0; b < in.waves.bodies && b < 4; ++b)
+        {
+            std::memcpy(p.bodyDir[b], in.waves.body[b], 4 * sizeof(float));
+            std::memcpy(p.bodyColour[b], &in.waves.body[b][4], 3 * sizeof(float));
+        }
+        if (in.looks.index && in.looks.palette && in.looks.count)
+        {
+            const uint32_t count = in.looks.count < gxvk::vk::water::kLookPalette ? in.looks.count : gxvk::vk::water::kLookPalette;
+            p.lookGrid[0] = static_cast<float>(in.looks.originX);
+            p.lookGrid[1] = static_cast<float>(in.looks.originY);
+            p.lookGrid[2] = 1.0f;
+            std::memcpy(p.lookIndex, in.looks.index, sizeof p.lookIndex);
+            std::memcpy(p.lookPalette, in.looks.palette, count * gxvk::vk::water::kLookFloats * sizeof(float));
+        }
+        if (in.shore.texels && s.shoreHas)
+        {
+            p.shoreGrid[0] = static_cast<float>(in.shore.originX);
+            p.shoreGrid[1] = static_cast<float>(in.shore.originY);
+            p.shoreGrid[2] = 1.0f;
+            p.shoreGrid[3] = 533.33333f / static_cast<float>(gxvk::vk::water::kShoreSize);
+        }
+        p.shoreLook[0] = in.shore.foam;
+        p.shoreLook[1] = in.shore.waveHeight;
+        p.shoreLook[2] = in.shore.wavelength;
+        p.shoreLook[3] = in.shore.reach;
+        p.shoreWind[0] = in.waves.windX;
+        p.shoreWind[1] = in.waves.windY;
+        p.shoreWind[2] = in.waves.speed;
+        return p;
+    }
+
+    /// What the terrain reads of the water this frame (Shore()).
+    void Share(const gxvk::vk::water::CaptureInput& in, const Params& p, uint64_t serial)
+    {
+        std::memcpy(s.shared.grid, p.shoreGrid, sizeof p.shoreGrid);
+        std::memcpy(s.shared.look, p.shoreLook, sizeof p.shoreLook);
+        std::memcpy(s.shared.wind, p.shoreWind, sizeof p.shoreWind);
+        s.shared.wind[3] = in.waves.time;
+        s.shared.swash   = in.shore.swash;
+        s.shared.wave[0] = in.query.look[3] * in.query.look[1];   // movement x wave scale (Water.vert's)
+        s.shared.wave[1] = 1.0f / gxvk::vk::water::kWaveSizes[0];
+        s.shared.wave[2] = in.waves.on && s.wavesRan ? 1.0f : 0.0f;
+        std::memcpy(s.shared.camera, in.query.camera, sizeof s.shared.camera);
+        s.shared.caustic[0] = in.shore.caustics;
+        s.shared.caustic[1] = in.shore.causticScale;
+        s.shared.caustic[2] = in.shore.causticDepth;
+        s.shared.caustic[3] = static_cast<float>(in.shore.causticDebug);
+        std::memcpy(s.shared.sun, in.shore.sun, 3 * sizeof(float));
+        s.shared.sun[3] = in.shore.clouds;
+        s.sharedSerial   = serial;
+    }
+
+    /// The frame's water work that needs no scene copy, once a frame, whether any water is drawn or not
+    /// (Seyri, 2026-10-31: under water, looking down at the floor, no water was drawn, and the caustics, the
+    /// swash's data and the riding all stopped): the waves and the shore field into the pre-pass, the
+    /// parameters, what the terrain reads, the swimmers' query (pre-pass).
+    void Prepare(const gxvk::vk::water::CaptureInput& in, uint64_t serial)
+    {
+        RecordWaves(in.waves);
+        UploadShore(in.shore);
+        const Params p = MakeParams(in, s.extent);
+        Share(in, p, serial);
+        Slot& slot = s.slots[frame::Slot()];
+
+        if (slot.written)
+        {
+            std::memcpy(slot.params.block.mapped, &p, sizeof p);
+            memory::FlushHost(slot.params.block);
+
+            if (VkCommandBuffer pre = frame::PrePass())
+            {
+                RunQuery(pre, slot, in.query);
+            }
+        }
+    }
 }
 
 namespace gxvk::vk::water
@@ -854,11 +963,19 @@ namespace gxvk::vk::water
     bool Capture(const CaptureInput& in, bool* first)
     {
         const uint64_t serial = frame::Serial();
+        constexpr uint32_t kAttempts = 16;
 
-        if (first) *first = s.lastCapture != serial;
-        if (s.lastCapture == serial) return s.lastOk;
-        s.lastCapture = serial;
-        s.lastOk      = false;
+        // Once a frame; but a refused copy is tried again at the frame's next water draws (Seyri,
+        // 2026-10-31: at some camera angles the first draw's was refused, and the caustics, the swash and
+        // the riding all lost their frame). `first`: this call made the frame's copy.
+        if (first) *first = false;
+        if (s.lastCapture != serial)
+        {
+            s.lastCapture = serial;
+            s.lastOk      = false;
+            s.attempts    = 0;
+            s.prepared    = false;
+        }
 
         if (!Init())
         {
@@ -866,14 +983,22 @@ namespace gxvk::vk::water
             return false;
         }
 
-        // The waves first, into the pre-pass (they don't need the pass ended).
-        RecordWaves(in.waves);
-        UploadShore(in.shore);
+        // What needs no copy, once a frame (also from the liquid pass's start, `prepareOnly`).
+        if (!s.prepared)
+        {
+            Prepare(in, serial);
+            s.prepared = true;
+        }
+
+        if (in.prepareOnly || s.lastOk || s.attempts >= kAttempts) return s.lastOk;
+        ++s.attempts;
 
         frame::EffectTarget t;
         if (!frame::BeginEffect(t))
         {
-            SetStatus("skipped: nothing to copy yet");
+            char line[128];
+            std::snprintf(line, sizeof line, "skipped: %s", frame::EffectRefusal());
+            SetStatus(line);
             return false;
         }
         gxvk::vk::pipelines::ForgetBound();
@@ -909,66 +1034,7 @@ namespace gxvk::vk::water
 
         if (!slot.written) WriteDrawSet(slot);
 
-        Params p = {};
-        p.viewport[0] = in.viewport.x;
-        p.viewport[1] = in.viewport.y;
-        p.viewport[2] = in.viewport.width;
-        p.viewport[3] = in.viewport.height;
-        p.extent[0]   = static_cast<float>(t.extent.width);
-        p.extent[1]   = static_cast<float>(t.extent.height);
-        p.extent[2]   = 1.0f / static_cast<float>(t.extent.width);
-        p.extent[3]   = 1.0f / static_cast<float>(t.extent.height);
-        for (uint32_t c = 0; c < kCascades; ++c) p.waveSizes[c] = gxvk::vk::water::kWaveSizes[c];
-        p.waveSizes[3] = in.waves.on && s.wavesRan ? 1.0f : 0.0f;
-        p.waveLook[0]  = 220.0f;   // cascade 1 fades out by this distance (yd), cascade 2 by the next
-        p.waveLook[1]  = 45.0f;
-        p.waveLook[2]  = in.waves.foam;
-        p.waveLook[3]  = in.waves.move;
-        p.depthProj[0] = in.proj[2 * 4 + 2];
-        p.depthProj[1] = in.proj[3 * 4 + 2];
-        p.depthProj[2] = in.proj[2 * 4 + 3];
-        p.depthProj[3] = in.proj[3 * 4 + 3];
-        p.depthRange[0] = in.viewport.minDepth;
-        p.depthRange[1] = in.viewport.maxDepth;
-        p.depthRange[3] = static_cast<float>(in.waves.bodies);
-        for (uint32_t b = 0; b < in.waves.bodies && b < 4; ++b)
-        {
-            std::memcpy(p.bodyDir[b], in.waves.body[b], 4 * sizeof(float));
-            std::memcpy(p.bodyColour[b], &in.waves.body[b][4], 3 * sizeof(float));
-        }
-        if (in.looks.index && in.looks.palette && in.looks.count)
-        {
-            const uint32_t count = in.looks.count < kLookPalette ? in.looks.count : kLookPalette;
-            p.lookGrid[0] = static_cast<float>(in.looks.originX);
-            p.lookGrid[1] = static_cast<float>(in.looks.originY);
-            p.lookGrid[2] = 1.0f;
-            std::memcpy(p.lookIndex, in.looks.index, sizeof p.lookIndex);
-            std::memcpy(p.lookPalette, in.looks.palette, count * kLookFloats * sizeof(float));
-        }
-        if (in.shore.texels && s.shoreHas)
-        {
-            p.shoreGrid[0] = static_cast<float>(in.shore.originX);
-            p.shoreGrid[1] = static_cast<float>(in.shore.originY);
-            p.shoreGrid[2] = 1.0f;
-            p.shoreGrid[3] = 533.33333f / static_cast<float>(kShoreSize);
-        }
-        p.shoreLook[0] = in.shore.foam;
-        p.shoreLook[1] = in.shore.waveHeight;
-        p.shoreLook[2] = in.shore.wavelength;
-        p.shoreLook[3] = in.shore.reach;
-        p.shoreWind[0] = in.waves.windX;
-        p.shoreWind[1] = in.waves.windY;
-        p.shoreWind[2] = in.waves.speed;
-        std::memcpy(s.shared.grid, p.shoreGrid, sizeof p.shoreGrid);
-        std::memcpy(s.shared.look, p.shoreLook, sizeof p.shoreLook);
-        std::memcpy(s.shared.wind, p.shoreWind, sizeof p.shoreWind);
-        s.shared.wind[3] = in.waves.time;
-        s.shared.swash   = in.shore.swash;
-        s.shared.wave[0] = in.query.look[3] * in.query.look[1];   // movement x wave scale (Water.vert's)
-        s.shared.wave[1] = 1.0f / gxvk::vk::water::kWaveSizes[0];
-        s.shared.wave[2] = in.waves.on && s.wavesRan ? 1.0f : 0.0f;
-        std::memcpy(s.shared.camera, in.query.camera, sizeof s.shared.camera);
-        s.sharedSerial   = serial;
+        const Params p = MakeParams(in, t.extent);
         std::memcpy(slot.params.block.mapped, &p, sizeof p);
         memory::FlushHost(slot.params.block);
 
@@ -1016,14 +1082,16 @@ namespace gxvk::vk::water
                      VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
         d.CmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 0, nullptr);
 
-        // The swimmers' query, with this frame's set 2 (the params written above).
-        RunQuery(cmd, slot, in.query);
-
         slot.captured = serial;
         s.lastUsed    = serial;
         s.lastOk      = true;
-        char line[96];
-        std::snprintf(line, sizeof line, "drawn: the scene copied (%ux%u)", t.extent.width, t.extent.height);
+        if (first) *first = true;
+        char line[128];
+        if (s.attempts > 1)
+            std::snprintf(line, sizeof line, "drawn: the scene copied (%ux%u) at try %u (before: %s)", t.extent.width, t.extent.height, s.attempts,
+                          frame::EffectRefusal()[0] ? frame::EffectRefusal() : "refused");
+        else
+            std::snprintf(line, sizeof line, "drawn: the scene copied (%ux%u)", t.extent.width, t.extent.height);
         SetStatus(line);
         return true;
     }
@@ -1047,14 +1115,15 @@ namespace gxvk::vk::water
         ShoreShared out = s.shared;
         out.valid = s.shoreHas && !s.shoreFresh && s.shore.view != VK_NULL_HANDLE && s.shoreCells.view != VK_NULL_HANDLE
                     && s.linearRepeat != VK_NULL_HANDLE && s.nearestClamp != VK_NULL_HANDLE
-                    && out.grid[2] > 0.5f && frame::Serial() - s.sharedSerial <= 2;
+                    && out.grid[2] > 0.5f && frame::Serial() - s.sharedSerial <= 30;
         out.field = s.shore.view;
         out.cells = s.shoreCells.view;
         out.fieldSampler = s.linearRepeat;
         out.cellsSampler = s.nearestClamp;
         out.waves = s.wavesNear;
+        out.ripples = s.ripplesNear;
         out.wavesSampler = s.linearRepeat;
-        out.valid = out.valid && s.wavesNear != VK_NULL_HANDLE;
+        out.valid = out.valid && s.wavesNear != VK_NULL_HANDLE && s.ripplesNear != VK_NULL_HANDLE;
         return out;
     }
 
@@ -1065,6 +1134,7 @@ namespace gxvk::vk::water
         DestroyImage(s.colour);
         DestroyImage(s.depth);
         if (s.wavesNear != VK_NULL_HANDLE) d.DestroyImageView(s.device, s.wavesNear, nullptr);
+        if (s.ripplesNear != VK_NULL_HANDLE) d.DestroyImageView(s.device, s.ripplesNear, nullptr);
         for (Image& img : s.waveImages) DestroyImage(img);
         DestroyImage(s.shore);
         memory::DestroyBuffer(s.shoreStaging);

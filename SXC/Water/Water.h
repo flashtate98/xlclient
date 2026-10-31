@@ -48,10 +48,17 @@ namespace SXC::Water {
         float shoreWavelength = 7.0f;    // yd
         float shoreReach = 28.0f;        // yd: how far out the shore waves begin
         float shoreSwash = 0.5f;         // yd: how high the swash runs up the beach (the terrain draws it)
+        float caustics = 1.0f;           // the caustics on the floor (the terrain draws them): strength,
+        float causticScale = 2.5f;       // yd per cell,
+        float causticDepth = 6.0f;       // yd they reach
+        float sun[3] = { 0.0f, 0.0f, 1.0f };   // toward the sun (world, unit): the light's direction reversed
+        float clouds = 0.0f;             // how cloudy (DayNight's storm blend, 0..1)
+        int causticDebug = 0;            // the terrain's caustics debug view (the Water panel)
         // The swimmers riding the waves (SXC/Water/Ride.h): `queryAsk` fills the points where the surface is
         // asked (called at the frame's first capture only), answered a few frames later through `querySink`
         // with the same tag.
         uint32_t (*queryAsk)(float (*points)[4], uint32_t max, uint64_t* tag) = nullptr;
+        bool prepareOnly = false;        // the frame's water work without the scene copy (SXC::Water::Frame)
         float queryCamera[4] = {};                       // the camera's world position, the water's clock
         float queryLook[4] = { 0.0f, 1.0f, 0.0f, 1.0f };  // the movement row without a look grid
         void (*querySink)(uint64_t tag, const float (*results)[4], uint32_t count) = nullptr;
@@ -75,6 +82,11 @@ namespace SXC::Water {
     // Liquid::CRenderer::Flush, for each instance: draws it as ours when it is a stock water material
     // and we're active. False: the instance's own material draws it.
     bool Draw(Liquid::CInstance* instance, const C3Vector& cameraPos);
+
+    // Liquid::CRenderer::Flush's start (the opaque pass), every frame: the water's work that needs no water
+    // drawn (the waves, the shore for the terrain, the swimmers), so it goes on with none in view (under
+    // water, looking down at the floor).
+    void Frame(const C3Vector& cameraPos);
 
     // The overlay's Water panel: the switches, the look's live values, the debug views.
     void DrawPanel(void* user);

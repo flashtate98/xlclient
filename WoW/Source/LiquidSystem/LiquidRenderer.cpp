@@ -116,6 +116,11 @@ void Liquid::CRenderer::Flush(const C3Vector& cameraPos, uint32_t pass) {
         g_theGxDevicePtr->Light(i, lights[i]);
     }
 
+    // SXC: our water's per-frame work, whether any water is drawn or not (SXC/Water).
+    if (pass == 0) {
+        SXC::Water::Frame(cameraPos);
+    }
+
     TSGrowableArray<Liquid::CInstance*>& instances = this->m_instances[pass];
     qsort(instances.m_data, instances.Count(), sizeof(Liquid::CInstance*), Liquid::CRenderer::s_drawListSorter[pass]);
 

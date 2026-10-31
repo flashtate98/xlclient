@@ -72,6 +72,11 @@ namespace SXC::Water {
             s.Float("ShoreReach").Group("Shore").Default(kDefaults.shoreReach).Range(4, 60).Tooltip("yd: how far out the shore waves begin.");
             s.Float("Swash").Group("Shore").Default(kDefaults.swash).Range(0, 2)
                 .Tooltip("yd: how high the water runs up the beach as each wave arrives (a flat beach far, a steep one hardly). 0 off.");
+            // Added 2026-10-31, after the rest for the same reason.
+            s.Float("Caustics").Group("Underwater").Default(kDefaults.caustics).Range(0, 3)
+                .Tooltip("The sunlight's caustics on the floor under the water (0 none: murky water). The row of the water the player is in.");
+            s.Float("CausticScale").Group("Underwater").Default(kDefaults.causticScale).Range(0.5, 10).Tooltip("yd: the size of the caustics' cells.");
+            s.Float("CausticDepth").Group("Underwater").Default(kDefaults.causticDepth).Range(0.5, 40).Tooltip("yd: how deep the caustics reach before they fade out.");
             return s;
         }
 
@@ -300,7 +305,8 @@ namespace SXC::Water {
                       height = schema.IndexOf("WaveHeight"), chop = schema.IndexOf("Choppiness"), spread = schema.IndexOf("Spread"),
                       foam = schema.IndexOf("Foam"), threshold = schema.IndexOf("FoamThreshold"), move = schema.IndexOf("SurfaceMovement"),
                       shoreFoam = schema.IndexOf("ShoreFoam"), shoreHeight = schema.IndexOf("ShoreWaveHeight"),
-                      shoreLength = schema.IndexOf("ShoreWavelength"), shoreReach = schema.IndexOf("ShoreReach"), swash = schema.IndexOf("Swash");
+                      shoreLength = schema.IndexOf("ShoreWavelength"), shoreReach = schema.IndexOf("ShoreReach"), swash = schema.IndexOf("Swash"),
+                      caustics = schema.IndexOf("Caustics"), causticScale = schema.IndexOf("CausticScale"), causticDepth = schema.IndexOf("CausticDepth");
 
             for (uint32_t i = 0; i < s_table->RowCount(); i++) {
                 const Data::Row row = s_table->At(i);
@@ -332,6 +338,9 @@ namespace SXC::Water {
                 l.shoreWavelength = row.Float(shoreLength);
                 l.shoreReach = row.Float(shoreReach);
                 l.swash = row.Float(swash);
+                l.caustics = row.Float(caustics);
+                l.causticScale = row.Float(causticScale);
+                l.causticDepth = row.Float(causticDepth);
                 s_entries.push_back(std::move(e));
             }
         }
@@ -717,6 +726,9 @@ namespace SXC::Water {
         set("ShoreWavelength", l.shoreWavelength);
         set("ShoreReach", l.shoreReach);
         set("Swash", l.swash);
+        set("Caustics", l.caustics);
+        set("CausticScale", l.causticScale);
+        set("CausticDepth", l.causticDepth);
         return true;
     }
 }

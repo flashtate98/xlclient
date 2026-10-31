@@ -161,6 +161,9 @@ namespace gxvk::vk::frame
      */
     bool BeginEffect(EffectTarget& out);
 
+    /// SXC: why the last BeginEffect refused ("" when it didn't), for the effects' status lines.
+    const char* EffectRefusal();
+
     /// SXC: a framebuffer an effect made for this frame, destroyed once the frame completes.
     void RetireFramebuffer(VkFramebuffer framebuffer, uint64_t lastUsed);
 

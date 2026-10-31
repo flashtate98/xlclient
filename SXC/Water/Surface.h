@@ -47,6 +47,11 @@ namespace SXC::Water {
         float shoreWavelength = 7.0f;    // yd
         float shoreReach = 28.0f;        // yd: how far out the shore waves begin
         float swash = 0.5f;              // yd: how high the swash runs up the beach
+        // Caustics on the floor under the water (the terrain draws them), from the row of the water the
+        // player is in like the shore's.
+        float caustics = 1.0f;           // strength (0 none: murky water)
+        float causticScale = 2.5f;       // yd: the pattern's cells
+        float causticDepth = 6.0f;       // yd: how deep they reach (they fade over this)
     };
 
     // A look as the water shaders read it: five vec4s (Water.vert's look, Water.cpp's p9..p13).

@@ -62,6 +62,12 @@ namespace gxvk::vk::water
         float           wavelength = 7.0f;    ///< yd
         float           reach      = 28.0f;   ///< yd: how far out the shore waves begin
         float           swash      = 0.5f;    ///< yd: how high the swash runs up the beach (Shaders/TerrainShore.glsl)
+        float           caustics     = 1.0f;  ///< the caustics on the floor (TerrainShore.glsl): strength,
+        float           causticScale = 2.5f;  ///< yd per cell,
+        float           causticDepth = 6.0f;  ///< yd they reach
+        float           sun[3] = { 0.0f, 0.0f, 1.0f };   ///< toward the sun (world, unit)
+        float           clouds = 0.0f;        ///< how cloudy (the storm blend, 0..1): the caustics fade
+        int             causticDebug = 0;     ///< the terrain's caustics debug view (0 off)
     };
 
     /// The shore field as the terrain reads it (Vulkan/Cover.cpp binds it to set 2: the swash on the
@@ -83,6 +89,10 @@ namespace gxvk::vk::water
         VkSampler   wavesSampler = VK_NULL_HANDLE;
         float       wave[4] = {};
         float       camera[4] = {};
+        float       caustic[4] = {};   ///< strength, yd per cell, yd they reach, 0
+        float       sun[4] = {};       ///< toward the sun (world, unit), how cloudy (0..1)
+        /// The short waves' slopes (cascade 2 alone, a 2D view; GENERAL): the caustics follow them.
+        VkImageView ripples = VK_NULL_HANDLE;
     };
 
     ShoreShared Shore();
@@ -110,6 +120,7 @@ namespace gxvk::vk::water
         LookInput  looks;
         ShoreInput shore;
         QueryInput query;
+        bool       prepareOnly = false;   ///< the frame's water work without the scene copy (no water drawn yet)
     };
 
     /// The copy, once per frame (later calls the same frame answer as the first). False: nothing to copy

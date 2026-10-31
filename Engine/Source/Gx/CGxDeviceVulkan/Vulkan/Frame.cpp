@@ -361,21 +361,31 @@ namespace gxvk::vk::frame
 
     bool QueryActive() { return s.open && s.queryActive; }
 
+    const char* s_refusal = "";
+
+    const char* EffectRefusal() { return s_refusal; }
+
     bool BeginEffect(EffectTarget& out)
     {
-        if (!s.open || s.queryActive || s.clearColourPending || s.clearDepthPending) return false;
+        // SXC: each refusal says why (the water's status line: its capture failed at some camera angles).
+        const auto refuse = [](const char* why) { s_refusal = why; return false; };
+        if (!s.open) return refuse("no frame open");
+        if (s.queryActive) return refuse("an occlusion query is open");
+        if (s.clearColourPending || s.clearDepthPending) return refuse("a clear is pending");
         const texture::Image* image  = nullptr;
         VkFormat              format = VK_FORMAT_UNDEFINED;
         VkExtent2D            extent = { 0, 0 };
-        if (!TargetView(s.target, image, format, extent)) return false;
+        if (!TargetView(s.target, image, format, extent)) return refuse("no target");
         // Only over a target a pass has drawn into: the colour rests in its read layout, the depth
         // holds this frame's geometry.
-        if (image->layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) return false;
+        if (image->layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) return refuse("nothing drawn into the target yet");
         const uint32_t fbi = FramebufferFor(s.target, format, extent);
-        if (fbi == UINT32_MAX) return false;
+        if (fbi == UINT32_MAX) return refuse("no framebuffer");
         Framebuffer& fb    = s.fbs[fbi];
         DepthBuffer& depth = s.depths[fb.depth];
-        if (!depth.initialised || depth.sampleView == VK_NULL_HANDLE || depth.lastUsed != s.serial) return false;
+        if (!depth.initialised || depth.sampleView == VK_NULL_HANDLE) return refuse("no depth to read");
+        if (depth.lastUsed != s.serial) return refuse("the depth holds no geometry this frame");
+        s_refusal = "";
         EndPass();
         fb.lastUsed      = s.serial;
         out.cmd          = s.slots[s.fi].cmd;

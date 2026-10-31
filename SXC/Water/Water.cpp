@@ -64,6 +64,7 @@ namespace {
         float windSpeed = 6.0f;       // yd / s
         float windAngle = 0.0f;       // degrees, 0 = +x
         int debugView = 0;
+        int causticDebug = 0;          // the terrain's caustics debug view
         int writeScope = 0;           // SXC::Water::ScopeKind: where "Write" puts the row
         // The shore (one setting for every water for now).
         bool shoreField = true;          // off: the depth byte alone, as before the shore field
@@ -220,6 +221,19 @@ namespace SXC::Water {
 
     bool Active() {
         return s_available && OurShader().Get();
+    }
+
+    const SXC::Water::Look& FillWaves(SXC::Water::Waves& waves, const C3Vector& cameraPos);
+
+    void Frame(const C3Vector& cameraPos) {
+        if (!Active() || !s_capture || !Shaders()) {
+            return;
+        }
+
+        SXC::Water::Waves waves;
+        FillWaves(waves, cameraPos);
+        waves.prepareOnly = true;
+        s_capture(waves, nullptr);
     }
 
     bool DrawOurs(Liquid::CInstance* instance, const C3Vector& cameraPos, Reason& why);
@@ -475,37 +489,10 @@ namespace SXC::Water {
         }
     }
 
-    bool DrawOurs(Liquid::CInstance* instance, const C3Vector& cameraPos, Reason& why) {
-        if (!Active() || !instance) {
-            why = Reason::Inactive;
-            return false;
-        }
-
-        const uint32_t stockId = StockWaterId(instance->m_material);
-
-        if (!stockId || !instance->m_settings || !instance->m_geomFactory || !instance->m_environment) {
-            why = Reason::NotWater;
-            return false;
-        }
-
-        CGxTex* tint = TintTexture(instance->m_settings);
-
-        if (!tint) {
-            why = Reason::NoTint;
-            return false;
-        }
-
-        if (!Shaders()) {
-            why = Reason::Shaders;
-            return false;
-        }
-
-        why = Reason::Capture;
-
-        // The scene behind the water and the waves, before the frame's first water draw (the later ones
-        // reuse them; the device answers once per frame).
+    // The frame's water as the device takes it (the waves, the looks, the shore, the caustics, the swimmers),
+    // from any water draw and from the liquid pass's start (Frame); the sea's look (the water the player is in).
+    const SXC::Water::Look& FillWaves(SXC::Water::Waves& waves, const C3Vector& cameraPos) {
         static float s_lastTime = -1.0f;
-        SXC::Water::Waves waves;
         waves.on = WavesOn().Get();
         waves.time = RippleTime();
         float dt = s_lastTime < 0.0f ? 0.0f : waves.time - s_lastTime;
@@ -584,6 +571,26 @@ namespace SXC::Water {
         waves.shoreWavelength = sea.shoreWavelength;
         waves.shoreReach = sea.shoreReach;
         waves.shoreSwash = sea.swash;
+        waves.caustics = sea.caustics;
+        waves.causticScale = sea.causticScale;
+        waves.causticDepth = sea.causticDepth;
+
+        // The sun for the caustics, in the world (the light's direction is the way it travels), and the
+        // weather's cloud (the storm blend: the direct light goes, so do they).
+        if (const DayNight::DNInfo* day = DayNight::GetInfo()) {
+            const C3Vector& dir = day->m_light0.m_dir;
+            const float length = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+
+            if (length > 1e-4f) {
+                waves.sun[0] = -dir.x / length;
+                waves.sun[1] = -dir.y / length;
+                waves.sun[2] = -dir.z / length;
+            }
+
+            waves.clouds = std::clamp(day->m_stormBlend, 0.0f, 1.0f);
+        }
+
+        waves.causticDebug = s_panel.causticDebug;
 
         // The swimmers near the camera, to ride the waves (their answers come back a few frames on). Their
         // movement row without the look grid is the water's the player is in, as the near mesh draws it.
@@ -596,6 +603,43 @@ namespace SXC::Water {
         waves.queryCamera[3] = waves.time;
         std::memcpy(waves.queryLook, &packed[16], sizeof waves.queryLook);
         SXC::Water::RideAsk(waves);
+
+        return sea;
+    }
+
+    bool DrawOurs(Liquid::CInstance* instance, const C3Vector& cameraPos, Reason& why) {
+        if (!Active() || !instance) {
+            why = Reason::Inactive;
+            return false;
+        }
+
+        const uint32_t stockId = StockWaterId(instance->m_material);
+
+        if (!stockId || !instance->m_settings || !instance->m_geomFactory || !instance->m_environment) {
+            why = Reason::NotWater;
+            return false;
+        }
+
+        CGxTex* tint = TintTexture(instance->m_settings);
+
+        if (!tint) {
+            why = Reason::NoTint;
+            return false;
+        }
+
+        if (!Shaders()) {
+            why = Reason::Shaders;
+            return false;
+        }
+
+        why = Reason::Capture;
+
+        // The scene behind the water and the waves, before the frame's first water draw (the later ones
+        // reuse them; the device answers once per frame).
+        SXC::Water::Waves waves;
+        const SXC::Water::Look& sea = FillWaves(waves, cameraPos);
+        const SXC::Water::LookGrid& grid = SXC::Water::SurfaceGrid();
+        const SXC::Water::ShoreMap& shore = SXC::Water::ShoreField();
 
         bool first = false;
 
@@ -797,6 +841,16 @@ namespace SXC::Water {
             ImGui::SliderFloat("Swash run-up (yd)", &l.swash, 0.0f, 2.0f);
             ImGui::SetItemTooltip("%s", "How high the water runs up the beach as each wave arrives (on the terrain, past the water): a flat beach far, a steep one hardly. 0 off.");
             ImGui::TextDisabled("Test values like the rest; saved with the row (the water you're in sets them for all).");
+            ImGui::Separator();
+            ImGui::TextUnformatted("Caustics (on the floor under the water)");
+            ImGui::SliderFloat("Caustics", &l.caustics, 0.0f, 3.0f);
+            ImGui::SetItemTooltip("%s", "The sunlight focused by the waves into a moving net of light on the floor under the water. 0 none (murky water).");
+            ImGui::SliderFloat("Caustic size (yd)", &l.causticScale, 0.5f, 10.0f);
+            ImGui::SliderFloat("Caustic depth (yd)", &l.causticDepth, 0.5f, 40.0f);
+            ImGui::SetItemTooltip("%s", "How deep the caustics reach before they fade out (clear water deep, cloudy water shallow).");
+            ImGui::Combo("Caustics debug", &s_panel.causticDebug, "Off\0The pattern alone\0The sun's shadow\0What the terrain gets\0");
+            ImGui::SetItemTooltip("%s", "The terrain unlit: the caustics' pattern (white lines), the sun's shadow term (white lit, black shadowed), "
+                                        "or what it was handed (red: the shore field, green: the sun's height, blue: caustics on).");
             char ride[192];
             SXC::Water::RideStatus(ride, sizeof ride);
             ImGui::TextWrapped("Riding the waves: %s", ride);
