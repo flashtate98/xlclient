@@ -1611,8 +1611,10 @@ void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
     ApplyCollections(model);
 
     // Feet. Retail bodies have a bare foot with toes (2001) and a closed shoe (2002) as separate meshes;
-    // the 3.3.5 boot texture painted on the bare foot showed the toes. With boots on, only the shoe shows
-    // (Esteria's ApplyLegacyFootGeometry). Hoofed races (Tauren, Draenei) keep their feet.
+    // the 3.3.5 boot texture painted on the bare foot showed the toes. With boots that paint the foot, only
+    // the shoe shows (Esteria's ApplyLegacyFootGeometry); boots that paint no foot (ankle wraps, leg bands)
+    // leave the bare foot, which the shoe would have shown in plain skin. Hoofed races (Tauren, Draenei)
+    // keep their feet.
     const uint32_t race = character->m_data.m_preferences.m_raceID;
     if (race != 6 && race != 11) {
         bool hasShoe = false;
@@ -1621,7 +1623,13 @@ void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
             for (uint32_t i = 0; i < sections.m_count && !hasShoe; ++i)
                 hasShoe = (sections[i].m_skinSectionId & 0xFFFF) == 2002;
         }
-        const bool shoe = hasShoe && character->m_itemDisplayID[ITEMSLOT_BOOTS] != 0;
+        bool paintsFoot = false;
+        if (hasShoe && character->m_itemDisplayID[ITEMSLOT_BOOTS]) {
+            ItemDisplayInfoRec boots;
+            paintsFoot = g_itemDisplayInfoDB.GetRecord(character->m_itemDisplayID[ITEMSLOT_BOOTS], &boots) &&
+                boots.m_texture[SECTION_FOOT] && *boots.m_texture[SECTION_FOOT];
+        }
+        const bool shoe = hasShoe && paintsFoot;
         model->SetGeometryVisible(2001, 2099, 0);
         model->SetGeometryVisible(shoe ? 2002 : 2001, shoe ? 2002 : 2001, 1);
     }
