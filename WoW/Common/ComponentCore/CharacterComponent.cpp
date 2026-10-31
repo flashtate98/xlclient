@@ -478,11 +478,48 @@ int32_t CCharacterComponent::ComposeHelmModelFilePath(const ChrRacesRec* raceRec
         ext = &path[strlen(path)];
     }
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    *ext = '\0';
+
+    // FlashWOW: a new race's helmets may be named the classic way (Helm_X_KtM) or the Retail way (Helm_X_Kt_M);
+    // if the race has neither for this helmet it wears the one of the stock race it falls back to (Kul Tiran ->
+    // Human, by RetailCharacterStockRace). The first file that exists wins; with none, the classic name as before.
+    const char* sex = s_fileDecorations[this->m_data.m_preferences.m_sexID];
+    const char* fallbackPrefix = nullptr;
+
+    if (const uint32_t stockRace = RetailCharacterStockRace(raceRec->m_id); stockRace && stockRace != static_cast<uint32_t>(raceRec->m_id)) {
+        if (const ChrRacesRec* stockRec = g_chrRacesDB.GetRecord(stockRace); stockRec && stockRec->m_clientPrefix &&
+            _stricmp(stockRec->m_clientPrefix, raceRec->m_clientPrefix)) {
+            fallbackPrefix = stockRec->m_clientPrefix;
+        }
+    }
+
+    char candidates[3][260];
+    uint32_t count = 0;
+    SStrPrintf(candidates[count++], 260, "%s_%s%s.mdx", path, raceRec->m_clientPrefix, sex);
+    SStrPrintf(candidates[count++], 260, "%s_%s_%s.mdx", path, raceRec->m_clientPrefix, sex);
+
+    if (fallbackPrefix) {
+        SStrPrintf(candidates[count++], 260, "%s_%s%s.mdx", path, fallbackPrefix, sex);
+    }
+
+    const char* chosen = candidates[0];
+
+    for (uint32_t i = 0; i < count; i++) {
+        if (RetailCharacterHelmFileExists(candidates[i])) {
+            chosen = candidates[i];
+            break;
+        }
+    }
+
+    strcpy(buffer, chosen);
+#else
     *ext = '_';
     strcpy(ext + 1, raceRec->m_clientPrefix);
     strcat(path, s_fileDecorations[this->m_data.m_preferences.m_sexID]);
     strcat(path, ".mdx");
     strcpy(buffer, path);
+#endif
 
     return 1;
 }

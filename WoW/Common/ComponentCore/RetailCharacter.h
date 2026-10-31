@@ -89,6 +89,8 @@ void RetailCharacterSetBodyOwner(const CCharacterComponent* character, RetailBod
 // The stock client race (1-11) whose helmets a race wears: itself, or for a new race the stock race whose
 // ChrRaces client prefix it shares (Nightborne "Ni": Night Elf). 0 if none.
 uint32_t RetailCharacterStockRace(uint32_t raceId);
+// Whether a helmet model exists (an .mdx path is checked as the .m2 it loads as). Remembered per path.
+bool RetailCharacterHelmFileExists(const char* mdxPath);
 
 // The race whose HelmetGeosetVisData bit a character uses: for a Retail body of a new race the stock race above,
 // otherwise its own race.

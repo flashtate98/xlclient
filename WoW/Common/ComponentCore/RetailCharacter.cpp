@@ -1413,13 +1413,50 @@ std::string RetailCharacterTuneHelmet(CCharacterComponent* character, float scal
 // The stock client race (1-11) whose helmets a race wears: itself, or for a new race the stock race whose
 // ChrRaces client prefix it shares (Void Elf "Be": Blood Elf helmet models, Blood Elf helmet hides). 0 if none.
 uint32_t StockRaceFor(uint32_t raceId) {
+    // The stock prefixes, then the Retail prefixes of new races with their own helmets (CharacterComponent's
+    // ComposeHelmModelFilePath tries the race's own helmet first and falls back to the stock race's).
     static const std::pair<const char*, uint32_t> kByPrefix[] = {{"Hu", 1}, {"Or", 2}, {"Dw", 3}, {"Ni", 4}, {"Sc", 5},
-        {"Ta", 6}, {"Gn", 7}, {"Tr", 8}, {"Be", 10}, {"Dr", 11}};
+        {"Ta", 6}, {"Gn", 7}, {"Tr", 8}, {"Be", 10}, {"Dr", 11},
+        {"Kt", 1}, {"Mo", 2}, {"Di", 3}, {"Ed", 3}, {"Hr", 4}, {"Ht", 6}, {"Mg", 7}, {"Za", 8}};
     if (raceId >= 1 && raceId <= 11 && raceId != 9) return raceId;
     if (const ChrRacesRec* rec = g_chrRacesDB.GetRecord(raceId); rec && rec->m_clientPrefix)
         for (const auto& entry : kByPrefix)
             if (!_stricmp(rec->m_clientPrefix, entry.first)) return entry.second;
     return 0;
+}
+
+bool RetailCharacterHelmFileExists(const char* mdxPath) {
+    static std::map<std::string, bool> known;
+    std::string path = mdxPath ? mdxPath : "";
+    const size_t dot = path.find_last_of('.');
+    if (dot != std::string::npos && !_stricmp(path.c_str() + dot, ".mdx")) path.replace(dot, std::string::npos, ".m2");
+    const auto found = known.find(path);
+    if (found != known.end()) return found->second;
+    const bool exists = SFile::FileExists(path.c_str()) != 0;
+    known.emplace(path, exists);
+    return exists;
+}
+
+// Whether a helmet model is a new race's own (Helm_X_KtM or Helm_X_Kt_M for a race with a Retail prefix that falls
+// back to a stock race): it was made for that body, so it sits on the socket as it is, with no 3.3.5 donor fit.
+bool OwnRaceHelmet(uint32_t raceId, uint32_t sexId, const char* fileName) {
+    const ChrRacesRec* rec = g_chrRacesDB.GetRecord(raceId);
+    if (!rec || !rec->m_clientPrefix || !*rec->m_clientPrefix || !fileName || sexId > 1) return false;
+    if (raceId >= 1 && raceId <= 11) return false;
+    // Only races with a stock fallback (the Retail prefixes in StockRaceFor); the others (Vulpera "Vu", Pandaren
+    // "Pa", ...) keep their helmets.csv tuning.
+    if (!StockRaceFor(raceId)) return false;
+    static const char* const kStockPrefixes[] = {"Hu", "Or", "Dw", "Ni", "Sc", "Ta", "Gn", "Tr", "Be", "Dr"};
+    for (const char* stock : kStockPrefixes)
+        if (!_stricmp(rec->m_clientPrefix, stock)) return false;
+    std::string name = fileName;
+    for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    std::string prefix = rec->m_clientPrefix;
+    for (char& c : prefix) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const std::string sex = sexId ? "f" : "m";
+    for (const std::string& tail : {"_" + prefix + sex + ".m2", "_" + prefix + "_" + sex + ".m2"})
+        if (name.size() >= tail.size() && name.compare(name.size() - tail.size(), tail.size(), tail) == 0) return true;
+    return false;
 }
 
 // The head and helmet socket of the 3.3.5 body a client race had (Character\<Race>\<Sex>\<Race><Sex>.m2),
@@ -1474,6 +1511,8 @@ void RetailCharacterFitHelmet(CCharacterComponent* character) {
     const auto& attachment = data->m_attachments[socket];
 
     const auto& prefs = character->m_data.m_preferences;
+    // A new race's own helmet was made for this body: it keeps the socket as it is.
+    if (OwnRaceHelmet(prefs.m_raceID, prefs.m_sexID, helmet->m_shared->m_fileName)) return;
     const Retail::HelmetAnchor* donorAnchor = StockAnchor(prefs.m_raceID, prefs.m_sexID);
     if (!donorAnchor) {
         // A race with no 3.3.5 body to measure against (Pandaren, client prefix "Pa"): its helmets keep the
