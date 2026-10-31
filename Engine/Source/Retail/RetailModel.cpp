@@ -870,6 +870,15 @@ bool PrepareModel(const std::vector<uint8_t>& bytes, std::vector<uint8_t>& prepa
             b[m] &= 0x1f; b[m + 1] = 0;
         }
     }
+    // Some Retail models point their texture-transform lookup at transforms they do not have (the BfA druid
+    // forms: an entry of 0 with no transforms at all). Retail draws those batches unanimated; the legacy
+    // renderer reads 0xFFFF as "no transform", so such entries become that instead of failing the model.
+    if (Array(b, 0x98, 2)) {
+        for (uint32_t i = 0; i < U32(b, 0x98); ++i) {
+            const size_t p = U32(b, 0x9c) + size_t(i) * 2;
+            if (U16(b, p) != 0xffff && U16(b, p) >= U32(b, 0x60)) { b[p] = 0xff; b[p + 1] = 0xff; }
+        }
+    }
     if (!Validate(b, files, error)) return false;
     if (U32(b, 0x50) > 256 || U32(b, 0x60) > 255) return Fail(error, "Retail texture/transform count exceeds legacy renderer limits");
     // Retail split the old 32-bit blend duration into two 16-bit durations.
