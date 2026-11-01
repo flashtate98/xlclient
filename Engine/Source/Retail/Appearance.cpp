@@ -135,9 +135,10 @@ bool Unlockable(const Index& x, const Row& choice) {
 
 // Unlockable choices that do not work on the bodies they belong to, kept hidden (FlashWOW):
 // the Tauren's old horn styles (Wide, Ram, Forward Pointing; 1158-1160 on the female) draw the
-// Highmountain antlers, with the ordinary horn texture wrapped over them.
+// Highmountain antlers, with the ordinary horn texture wrapped over them, and their unlockable horn
+// colours (1103; 1164-1168 on the female) paint the antler texture onto the ordinary horns.
 bool Hidden(uint32_t choiceId) {
-    static const uint32_t kHidden[] = {1097, 1098, 1099, 1158, 1159, 1160};
+    static const uint32_t kHidden[] = {1097, 1098, 1099, 1158, 1159, 1160, 1103, 1164, 1165, 1166, 1167, 1168};
     return std::find(std::begin(kHidden), std::end(kHidden), choiceId) != std::end(kHidden);
 }
 
