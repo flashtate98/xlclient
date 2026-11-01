@@ -1620,9 +1620,17 @@ void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
     // the 3.3.5 boot texture painted on the bare foot showed the toes. With boots that paint the foot, only
     // the shoe shows (Esteria's ApplyLegacyFootGeometry); boots that paint no foot (ankle wraps, leg bands)
     // leave the bare foot, which the shoe would have shown in plain skin. Hoofed races (Tauren, Draenei)
-    // keep their feet.
+    // keep their feet. A race whose look picks its own feet (the Haranir paws, 2009, from the Feet option)
+    // keeps them, boots or not: the shoe is the plain foot's covered form.
     const uint32_t race = character->m_data.m_preferences.m_raceID;
-    if (race != 6 && race != 11) {
+    uint16_t ownFeet = 0;
+    if (const auto look = RetailLook(character))
+        for (const uint16_t geoset : look->geosets)
+            if (geoset > 2001 && geoset <= 2099) ownFeet = geoset;
+    if (ownFeet) {
+        model->SetGeometryVisible(2001, 2099, 0);
+        model->SetGeometryVisible(ownFeet, ownFeet, 1);
+    } else if (race != 6 && race != 11) {
         bool hasShoe = false;
         if ((model->m_fFlags & 1) && model->m_shared && model->m_shared->m_skinData) {
             const auto& sections = model->m_shared->m_skinData->m_skinSections;
