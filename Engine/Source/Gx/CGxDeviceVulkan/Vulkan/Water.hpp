@@ -68,6 +68,7 @@ namespace gxvk::vk::water
         float           sun[3] = { 0.0f, 0.0f, 1.0f };   ///< toward the sun (world, unit)
         float           clouds = 0.0f;        ///< how cloudy (the storm blend, 0..1): the caustics fade
         float           sunColour[3] = { 1.0f, 1.0f, 1.0f };   ///< the sun's direct light (the models' caustics)
+        float           underGlow[4] = {};   ///< the underwater medium's glow (rgb), w 1 while it draws: the deep the surface mirrors from below
         int             causticDebug = 0;     ///< the terrain's caustics debug view (0 off)
     };
 
@@ -98,6 +99,11 @@ namespace gxvk::vk::water
     };
 
     ShoreShared Shore();
+
+    /// This frame's set 2 for reading how the surface moves (the waves, the shore field, the parameters:
+    /// WaterMove.glsl), once the frame's water work ran, whether or not the scene was copied; null before the
+    /// first copy ever. `time` and `look` are WaterMove.glsl's clock and movement row without a look grid.
+    VkDescriptorSet MoveSet(uint32_t slot, uint64_t serial, float& time, float look[4]);
 
     /// The surface under the swimmers (Shaders/WaterQuery.comp; SXC/Water/Ride.cpp): points asked at a
     /// capture are answered when its frame slot comes round again, through `sink` with the same `tag`.

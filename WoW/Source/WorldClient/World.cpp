@@ -102,6 +102,7 @@
 #include "WoW/Source/Game/GameClient/ProjectTex.h"
 #include "WarcraftXL/Seams.h"
 #include "SXC/Grass/Grass.h"  // SXC: the instanced grass
+#include "SXC/Water/Medium.h"  // SXC: the underwater medium
 #include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler
 
 static const float dirLightScaleAmount = 0.5f;
@@ -1443,6 +1444,7 @@ void DayNight::Update(int32_t reset, const C3Vector* cameraPos) {
     DayNight::g_clouds.Update();
     DayNight::UpdateStars();
     DayNight::UpdateFog();
+    SXC::Water::MediumLighting();  // SXC: the underwater medium takes the fog's reach and the light under our water
     CWorld::SetShadowColor(info->m_shadowColor);
 
     uint8_t scale = CMath::fint_((1.0f - glare) * 255.0f);
@@ -1909,6 +1911,12 @@ void CWorldScene::UpdateViewerLiquid() {
         if (group && group->QueryLiquid(local, &liquidType, &level)) {
             s_viewerLiquidDepth = level - local.z;
         }
+    }
+
+    // SXC: the camera at the waterline: the client's view stays the air's, the medium draws the water's part.
+    if (liquidType && !CWorldScene::s_viewerMapObjDef && SXC::Water::WaterlineHoldsAir(CWorldScene::s_activeWorldView.z)) {
+        liquidType = 0;
+        s_viewerLiquidDepth = 0.0f;
     }
 
     int32_t leftLiquid = 0;

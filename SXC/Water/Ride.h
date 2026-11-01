@@ -30,4 +30,16 @@ namespace SXC::Water {
 
     // A line for the Water panel: how many swimmers were asked and answered, and the player's state.
     void RideStatus(char* text, size_t size);
+
+    // The terrain water's surface at the camera as it stands (its still height plus the waves there, a few
+    // frames late, smoothed like a rider's), its slopes, its LiquidType; false when the camera isn't within a
+    // few yards of terrain water (the waterline: SXC/Water/Medium.h).
+    // `still`: the still surface there; `reach`: how far the surface has lately risen or fallen from it there
+    // (the largest over the last seconds, at least a little).
+    bool CameraWater(float& height, float& slopeX, float& slopeY, uint32_t& liquidType, float* still = nullptr, float* reach = nullptr);
+
+    // The camera passes through the water's surface while our water draws ([Liquid] CameraThroughSurface): not
+    // bumped off it, the water no wall between the target and the camera (as cameraWaterCollision 0), no
+    // pitch snapped on surfacing or diving. The waterline draws it half in. False: the stock camera.
+    bool CameraPassesSurface();
 }

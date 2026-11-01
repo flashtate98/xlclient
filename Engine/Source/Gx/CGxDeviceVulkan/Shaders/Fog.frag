@@ -8,6 +8,7 @@
 
 layout(set = 0, binding = 4) uniform sampler2D sceneDepth;
 layout(set = 0, binding = 5) uniform sampler3D volume;
+layout(set = 0, binding = 12) uniform sampler2D underMask;   // the underwater medium's image: alpha 1 where the view starts in the water
 
 layout(location = 0) in vec2 vTexCoord;
 layout(location = 0) out vec4 oC0;
@@ -82,6 +83,15 @@ vec4 March(vec3 dir, vec2 uv, float distance, float surface, float jitter)
 void main()
 {
     vec2 pixel = gl_FragCoord.xy;
+
+    // No fog in the water: with the camera half in (the waterline), the pixels whose view starts under the
+    // surface are the medium's (the water fog lay over the underwater view, Seyri 2026-11-01).
+    if (fp.water.x > 0.5 && texelFetch(underMask, ivec2(pixel), 0).a > 0.5)
+    {
+        oC0 = vec4(0.0, 0.0, 0.0, 1.0);
+        return;
+    }
+
     vec2 uv = (pixel - fp.viewport.xy) / fp.viewport.zw;
     vec2 ndc = vec2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
     float d = texelFetch(sceneDepth, ivec2(pixel), 0).r;

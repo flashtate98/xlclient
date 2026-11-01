@@ -6,6 +6,7 @@
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Lights.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Loader.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Log.hpp"
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Medium.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Memory.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Pipelines.hpp"
 
@@ -31,7 +32,7 @@ namespace
     constexpr uint32_t kColumnsX = 160, kColumnsY = 90, kSlices = 128; // Fog.glsl's kSlices
     constexpr uint32_t kLightSlices = 64;                               // Fog.glsl's kLightSlices
     constexpr uint32_t kMaxField = 512, kMaxFar = 256, kMaxWake = 256; // sxc_fog.h's limits
-    constexpr uint32_t kBindings = 12;
+    constexpr uint32_t kBindings = 13;
     constexpr uint32_t kLightsSet = 3;                                  // Lights.glsl's set
     constexpr VkFormat kVolumeFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 
@@ -52,6 +53,7 @@ namespace
         float maps[4];
         float wake[4];
         float lights[4];
+        float water[4];
     };
 
     /// An image this module owns, with its memory and the layout it is in.
@@ -241,7 +243,8 @@ namespace
 
         // One set for every pipeline: 0 the parameters, 1 and 2 the near field, 3 the volume to
         // write, 4 the scene depth, 5 the volume to read, 6 the near field's colours, 7 and 8 the far
-        // map, 9 the wake, 10 the light volume to write, 11 the light volume to read.
+        // map, 9 the wake, 10 the light volume to write, 11 the light volume to read, 12 the underwater medium's
+        // image (its alpha: the pixel's view starts under the water: no fog there).
         const VkShaderStageFlags both = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         VkDescriptorSetLayoutBinding bindings[kBindings] = {};
         VkDescriptorType types[kBindings];
@@ -724,11 +727,15 @@ namespace gxvk::vk::fog
         p.lights[1]   = f.lightGlow < -0.9f ? -0.9f : (f.lightGlow > 0.9f ? 0.9f : f.lightGlow);
         p.lights[2]   = f.lightRange < 16.0f ? 16.0f : (f.lightRange > 256.0f ? 256.0f : f.lightRange);
         p.lights[3]   = lightsSet != VK_NULL_HANDLE ? 1.0f : 0.0f;
+        // The water's pixels: the underwater medium drew before us at the waterline (the camera half in).
+        VkImageView underView = VK_NULL_HANDLE;
+        p.water[0] = gxvk::vk::medium::UnderMask(t.serial, underView) ? 1.0f : 0.0f;
+        if (p.water[0] < 0.5f) underView = VK_NULL_HANDLE;
         std::memcpy(slot.params.block.mapped, &p, sizeof p);
         memory::FlushHost(slot.params.block);
 
         VkDescriptorBufferInfo params = { slot.params.handle, 0, sizeof(Params) };
-        // Per binding (1 .. 9; 0 is the parameters): the image and how it's read.
+        // Per binding (1 .. 12; 0 is the parameters): the image and how it's read.
         VkDescriptorImageInfo images[kBindings] = {};
         images[1] = { s.linearRepeat, s.fieldLight.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         images[2] = { s.linearRepeat, s.fieldPool.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
@@ -741,6 +748,8 @@ namespace gxvk::vk::fog
         images[9] = { s.linearClamp, s.wake.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         images[10] = { VK_NULL_HANDLE, s.lightVolume.view, VK_IMAGE_LAYOUT_GENERAL };
         images[11] = { s.linearClamp, s.lightVolume.view, VK_IMAGE_LAYOUT_GENERAL };
+        images[12] = { s.nearestClamp, underView != VK_NULL_HANDLE ? underView : s.fieldLight.view,
+                       underView != VK_NULL_HANDLE ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         VkWriteDescriptorSet writes[kBindings] = {};
         for (uint32_t i = 0; i < kBindings; ++i)
         {
@@ -833,6 +842,90 @@ namespace gxvk::vk::fog
                       lightsSet != VK_NULL_HANDLE ? "in" : (f.lightStrength > 0.0f ? "unavailable" : "off"));
         SetStatus(line);
         return drawn;
+    }
+
+    bool LightVolume(VkCommandBuffer cmd, uint64_t serial, VkImageView depthView, const LightVolumeInput& in, LightVolumeOutput& out)
+    {
+        out = LightVolumeOutput();
+        if (!Init()) return false;
+        out.view    = s.lightVolume.view;
+        out.sampler = s.linearClamp;
+        if (!EnsureLightsPipeline()) return false;
+
+        Params p = {};
+        if (!Invert(in.viewProj, p.invViewProj)) return false;
+
+        const VkDescriptorSet lightsSet = gxvk::vk::lights::FrameSet(frame::Slot(), serial, gxvk::vk::lights::kSurfaceAny);
+        if (lightsSet == VK_NULL_HANDLE) return false;
+
+        ReadyPlaceholders(cmd);
+        Slot& slot = s.slots[frame::Slot()];
+        p.origin[0]   = in.origin[0];
+        p.origin[1]   = in.origin[1];
+        p.origin[2]   = in.origin[2];
+        p.viewport[0] = in.viewport.x;
+        p.viewport[1] = in.viewport.y;
+        p.viewport[2] = in.viewport.width;
+        p.viewport[3] = in.viewport.height;
+        p.depth[0]    = in.viewport.minDepth;
+        p.depth[1]    = in.viewport.maxDepth;
+        p.depth[2]    = in.start > 0.05f ? in.start : 0.05f;
+        p.depth[3]    = in.range > p.depth[2] + 1.0f ? in.range : p.depth[2] + 1.0f;
+        p.field[1]    = 1.0f;
+        p.farMap[1]   = 1.0f;
+        p.lights[0]   = in.strength;
+        p.lights[1]   = in.glow < -0.9f ? -0.9f : (in.glow > 0.9f ? 0.9f : in.glow);
+        p.lights[2]   = p.depth[3];
+        p.lights[3]   = 1.0f;
+        std::memcpy(slot.params.block.mapped, &p, sizeof p);
+        memory::FlushHost(slot.params.block);
+
+        // The fog's set as Record writes it, the maps as they stand (the light pass reads none of them).
+        const VkImageView underView = VK_NULL_HANDLE;
+        VkDescriptorBufferInfo params = { slot.params.handle, 0, sizeof(Params) };
+        VkDescriptorImageInfo images[kBindings] = {};
+        images[1] = { s.linearRepeat, s.fieldLight.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        images[2] = { s.linearRepeat, s.fieldPool.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        images[3] = { VK_NULL_HANDLE, s.volume.view, VK_IMAGE_LAYOUT_GENERAL };
+        images[4] = { s.nearestClamp, depthView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
+        images[5] = { s.linearClamp, s.volume.view, VK_IMAGE_LAYOUT_GENERAL };
+        images[6] = { s.linearRepeat, s.fieldTint.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        images[7] = { s.linearRepeat, s.farLayer.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        images[8] = { s.linearRepeat, s.farTint.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        images[9] = { s.linearClamp, s.wake.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        images[10] = { VK_NULL_HANDLE, s.lightVolume.view, VK_IMAGE_LAYOUT_GENERAL };
+        images[11] = { s.linearClamp, s.lightVolume.view, VK_IMAGE_LAYOUT_GENERAL };
+        images[12] = { s.nearestClamp, underView != VK_NULL_HANDLE ? underView : s.fieldLight.view,
+                       underView != VK_NULL_HANDLE ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        VkWriteDescriptorSet writes[kBindings] = {};
+        for (uint32_t i = 0; i < kBindings; ++i)
+        {
+            writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet          = slot.set;
+            writes[i].dstBinding      = i;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[i].pImageInfo      = &images[i];
+        }
+        writes[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[0].pImageInfo      = nullptr;
+        writes[0].pBufferInfo     = &params;
+        writes[3].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[10].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        const loader::Device& d = *s.dapi;
+        d.UpdateDescriptorSets(s.device, kBindings, writes, 0, nullptr);
+
+        Barrier(cmd, s.lightVolume.image, VK_IMAGE_ASPECT_COLOR_BIT, s.lightVolume.layout, VK_IMAGE_LAYOUT_GENERAL, kReaders, VK_ACCESS_SHADER_READ_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT);
+        s.lightVolume.layout = VK_IMAGE_LAYOUT_GENERAL;
+        d.CmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s.lightsPipe);
+        d.CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s.lightsLayout, 0, 1, &slot.set, 0, nullptr);
+        d.CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, s.lightsLayout, kLightsSet, 1, &lightsSet, 0, nullptr);
+        d.CmdDispatch(cmd, (kColumnsX + 7) / 8, (kColumnsY + 7) / 8, kLightSlices);
+        Barrier(cmd, s.lightVolume.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_ACCESS_SHADER_WRITE_BIT, kReaders, VK_ACCESS_SHADER_READ_BIT);
+
+        return true;
     }
 
     const char* Status() { return s.status; }

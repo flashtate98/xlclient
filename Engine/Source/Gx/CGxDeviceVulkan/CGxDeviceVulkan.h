@@ -14,7 +14,7 @@
 #include "SXC/Grass/Grass.h"  // SXC: the instanced grass
 
 namespace SXC::Cover { struct Decal; }  // SXC: projected textures on the raised covers
-namespace SXC::Water { struct Waves; }  // SXC: our water's waves
+namespace SXC::Water { struct Waves; struct MediumFrame; }  // SXC: our water's waves, the underwater medium
 
 // Not in the original: the Vulkan backend, a CGxDevice beside the D3D9 / D3D9Ex / OpenGL ones,
 // selected with the gxApi CVar ("Vulkan") or "-vulkan" on the command line. The engine above the
@@ -184,6 +184,8 @@ class CGxDeviceVulkan : public CGxDevice {
     // SXC: the instanced grass (SXC/Grass -> Vulkan/Grass): a texture's runs with the client's grass state.
     static bool SxcGrassDraw(CGxTex* texture, const SXC::Grass::Run* runs, uint32_t count);
     static bool SxcWaterCapture(const SXC::Water::Waves& waves, bool* first);  // SXC: our water: the scene behind it and the waves, once per frame
+    // SXC: the underwater medium (SXC/Water/Medium.h -> Vulkan/Medium) with this device's view of the draws.
+    static bool SxcMediumRender(const SXC::Water::MediumFrame& in);
 };
 
 CGxDevice* CreateCGxDeviceVulkan();

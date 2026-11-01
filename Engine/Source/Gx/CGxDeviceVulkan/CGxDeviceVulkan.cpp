@@ -23,6 +23,8 @@
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Texture.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Timings.hpp"  // SXC: the frame profiler's GPU times
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Water.hpp"  // SXC: our water
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Medium.hpp"  // SXC: the underwater medium
+#include "SXC/Water/Medium.h"  // SXC: the underwater medium
 #include "Engine/Source/Gx/CGxPool.h"
 #include "Engine/Source/Gx/Gx.h"
 #include "Engine/Source/Os/Error.h"
@@ -267,6 +269,7 @@ void CGxDeviceVulkan::ICreateDrawPath() {
         SXC::Lights::SetShadowDevice(gxvk::vk::shadows::Ready() ? gxvk::vk::shadows::Slots() : 0, gxvk::vk::shadows::kMaxVertices);
         SXC::Water::SetDevice(gxvk::vk::lights::Ready(), &CGxDeviceVulkan::SxcWaterCapture,  // SXC: our water reads the lights' set
                               &gxvk::vk::water::Status);
+        SXC::Water::SetMediumRenderer(&CGxDeviceVulkan::SxcMediumRender, &gxvk::vk::medium::Status);  // SXC: the underwater medium
         // SXC: the instanced grass.
         static const SXC::Grass::Device s_grass = { gxvk::vk::grass::Mesh, gxvk::vk::grass::Allocate, gxvk::vk::grass::Write, gxvk::vk::grass::Release,
                                                     &CGxDeviceVulkan::SxcGrassDraw, gxvk::vk::grass::PlantsInUse };
@@ -607,6 +610,40 @@ bool CGxDeviceVulkan::SxcFogRender(const SXC::Fog::Input& in) {
     return gxvk::vk::fog::Record(f);
 }
 
+// SXC: the underwater medium (SXC/Water/Medium.h) over the current target, with the draws' view and viewport
+// (as the fog's).
+bool CGxDeviceVulkan::SxcMediumRender(const SXC::Water::MediumFrame& in) {
+    CGxDeviceVulkan* device = static_cast<CGxDeviceVulkan*>(g_theGxDevicePtr);
+
+    if (!device || !device->m_drawPath) {
+        return false;
+    }
+
+    gxvk::vk::medium::Frame f;
+    VkRect2D scissor = {};
+
+    if (!device->IPlaceD3d(f.viewport, scissor)) {
+        return false;
+    }
+
+    const CGxMatrixStack& view = device->m_xforms[GxXform_View];
+    const C44Matrix viewProj = view.m_mtx[view.m_level] * device->m_projNative;
+    std::memcpy(f.viewProj, &viewProj, sizeof f.viewProj);
+    std::memcpy(f.loss, in.loss, sizeof f.loss);
+    std::memcpy(f.glow, in.glow, sizeof f.glow);
+    f.desaturate = in.desaturate;
+    f.fade = in.fade;
+    f.debug = in.debug;
+    std::memcpy(f.origin, in.origin, sizeof f.origin);
+    f.halo = in.halo;
+    f.haloRange = in.haloRange;
+    f.haloGlow = in.haloGlow;
+    std::memcpy(f.line, in.line, sizeof f.line);
+    std::memcpy(f.lens, in.lens, sizeof f.lens);
+    f.still = in.still;
+    return gxvk::vk::medium::Record(f);
+}
+
 // SXC: our water (SXC/Water): the scene behind it, copied at the frame's first water draw (Vulkan/Water),
 // with the draws' viewport (where they lie on the target, its depth range) and the native projection (the
 // depth back to the view's w).
@@ -660,6 +697,7 @@ bool CGxDeviceVulkan::SxcWaterCapture(const SXC::Water::Waves& waves, bool* firs
     std::memcpy(in.shore.sun, waves.sun, sizeof in.shore.sun);
     in.shore.clouds = waves.clouds;
     std::memcpy(in.shore.sunColour, waves.sunColour, sizeof in.shore.sunColour);
+    std::memcpy(in.shore.underGlow, waves.underGlow, sizeof in.shore.underGlow);
     in.shore.causticDebug = waves.causticDebug;
     in.query.ask = waves.queryAsk;
     in.prepareOnly = waves.prepareOnly;
@@ -713,6 +751,7 @@ void CGxDeviceVulkan::IDestroyVulkan() {
     SXC::Cover::SetDevice(false, 0, nullptr); // SXC: surface covers
     SXC::Grass::SetDevice(nullptr);           // SXC: the instanced grass (its buffers go below)
     SXC::Water::SetDevice(false, nullptr, nullptr); // SXC: our water (the stock materials draw until the path is back)
+    SXC::Water::SetMediumRenderer(nullptr, nullptr);  // SXC: the underwater medium
     SXC::Profiler::SetGpu(nullptr);           // SXC: the frame profiler's GPU times (the pools go below)
     frame::ReleaseSwapchain();
     this->IReleasePools();
@@ -720,6 +759,7 @@ void CGxDeviceVulkan::IDestroyVulkan() {
     gxvk::vk::fog::Shutdown();  // SXC: the device is idle (ReleaseSwapchain waited)
     gxvk::vk::grass::Shutdown();
     gxvk::vk::water::Shutdown();  // SXC:
+    gxvk::vk::medium::Shutdown();  // SXC:
     frame::Destroy();
     pipelines::Shutdown();
     present::Shutdown();

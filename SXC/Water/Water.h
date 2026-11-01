@@ -54,6 +54,7 @@ namespace SXC::Water {
         float sun[3] = { 0.0f, 0.0f, 1.0f };   // toward the sun (world, unit): the light's direction reversed
         float clouds = 0.0f;             // how cloudy (DayNight's storm blend, 0..1)
         float sunColour[3] = { 1.0f, 1.0f, 1.0f };   // the sun's direct light (the day's diffuse), for the models' caustics
+        float underGlow[4] = {};         // the underwater medium's glow (rgb), w 1 while it draws (SXC/Water/Medium.h)
         int causticDebug = 0;            // the terrain's caustics debug view (the Water panel)
         // The swimmers riding the waves (SXC/Water/Ride.h): `queryAsk` fills the points where the surface is
         // asked (called at the frame's first capture only), answered a few frames later through `querySink`

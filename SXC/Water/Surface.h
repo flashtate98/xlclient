@@ -93,6 +93,10 @@ namespace SXC::Water {
     // The Scope text for a kind of place here ("" when there is none, e.g. no sub-area), and a label for it.
     bool ScopeHere(ScopeKind kind, std::string& scope, std::string& label);
 
+    // How specific a Scope (the rules above) is where the player is, higher wins: a tile over an area (a
+    // sub-area over its zone) over a map over everywhere (0); -1 when it doesn't apply there.
+    int32_t ScopeRankHere(const std::string& scope);
+
     // The Water panel's buttons: the row for a LiquidType and Scope, made if missing, set from `look`;
     // false when the table isn't there. Saving is the Data view's.
     bool WriteSurfaceRow(uint32_t liquidType, const std::string& scope, const Look& look);

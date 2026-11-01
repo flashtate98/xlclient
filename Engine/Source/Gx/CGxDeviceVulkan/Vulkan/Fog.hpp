@@ -74,6 +74,27 @@ namespace gxvk::vk::fog
     /// Records the fog over the current target. False when nothing was drawn; Status() says why.
     bool Record(const Frame& frame);
 
+    /// Our lamps' light volume for another effect in a frame the fog doesn't draw (the underwater medium):
+    /// FogLights.comp over the camera's view, into `cmd` (outside a pass), ready for compute and fragment
+    /// reads. The volume's slices run from `start` out to `range` as Fog.glsl's LightSliceEdge. `out` holds the
+    /// volume whenever the fog is up (to bind); true when it was filled this call (our lights on).
+    struct LightVolumeInput
+    {
+        float      viewProj[16] = {};  ///< view x the native projection (row vectors), relative to `origin`
+        float      origin[3]    = {};
+        VkViewport viewport     = {};
+        float      start        = 0.5f;   ///< yd: the first slice's distance
+        float      range        = 96.0f;  ///< yd
+        float      glow         = 0.5f;   ///< forward scattering (Henyey-Greenstein g)
+        float      strength     = 1.0f;
+    };
+    struct LightVolumeOutput
+    {
+        VkImageView view    = VK_NULL_HANDLE;  ///< 3D, GENERAL
+        VkSampler   sampler = VK_NULL_HANDLE;  ///< linear, clamped
+    };
+    bool LightVolume(VkCommandBuffer cmd, uint64_t serial, VkImageView depthView, const LightVolumeInput& in, LightVolumeOutput& out);
+
     /// One line: what the fog did last, or why it didn't.
     const char* Status();
 

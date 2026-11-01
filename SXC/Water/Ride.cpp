@@ -16,6 +16,7 @@
 #include "WoW/Source/Object/Types.h"
 #include "WoW/Source/ObjectMgrClient/ObjectMgrClient.h"
 #include "WoW/Source/WorldClient/Map.h"
+#include "WoW/Source/WorldClient/World.h"
 
 namespace {
     SXC::Settings::Bool& RideOn() {
@@ -34,6 +35,13 @@ namespace {
     SXC::Settings::Float& CameraFollows() {
         static SXC::Settings::Float s_setting("Liquid", "RideCamera", 1.0f, 0.0f, 1.0f, "The camera rides the waves",
                                               "How much of your own rise and fall on the waves the camera follows (0 it stays still).");
+        return s_setting;
+    }
+
+    SXC::Settings::Bool& ThroughSurface() {
+        static SXC::Settings::Bool s_setting("Liquid", "CameraThroughSurface", true, "The camera passes the surface",
+                                             "The camera moves through the water's surface freely (our water draws it half in): no bump off "
+                                             "the surface, the water no wall between you and the camera. Off: the stock camera.");
         return s_setting;
     }
 
@@ -57,6 +65,7 @@ namespace {
         uint32_t count = 0;
         uint64_t guids[kPoints] = {};
         float weights[kPoints] = {};
+        float lowest[kPoints] = {};   // the least rise: the floor under the swimmer (it stands there, no lower)
     };
     Asked s_asked[8];
     uint64_t s_tag = 0;
@@ -72,6 +81,7 @@ namespace {
 
     struct Rider {
         float rise = 0.0f, slopeX = 0.0f, slopeY = 0.0f;    // the last answer, weighted
+        float lowest = -1000.0f;                              // no lower than the floor under it
         float shownRise = 0.0f, shownX = 0.0f, shownY = 0.0f;   // what's drawn, following it
         double answered = 0.0;
         double drawn = -1.0;
@@ -94,7 +104,8 @@ namespace {
 
                 s_status.answered++;
                 Rider& r = s_riders[asked.guids[i]];
-                r.rise = results[i][0] * asked.weights[i];
+                r.lowest = asked.lowest[i];
+                r.rise = std::max(results[i][0] * asked.weights[i], r.lowest);
                 r.slopeX = results[i][1] * asked.weights[i];
                 r.slopeY = results[i][2] * asked.weights[i];
                 r.answered = now;
@@ -107,7 +118,24 @@ namespace {
     struct Swimmer {
         uint64_t guid;
         float x, y, surface, weight, distance;
+        float lowest = -1000.0f;   // the least rise (yd): down to the floor under it
     };
+
+    // How far a unit at `p` may sink with a trough before it would be in the ground: the floor (terrain, WMOs,
+    // models) straight below, from a little above it. In the shallows a trough pulled swimmers, and the camera
+    // following them, down through the sea floor (Seyri, 2026-11-01).
+    float LowestRise(const C3Vector& p) {
+        const C3Vector start(p.x, p.y, p.z + 0.5f);
+        const C3Vector end(p.x, p.y, p.z - kDiveDepth - 2.0f);
+        C3Vector hit;
+        float distance = 1.0f;
+
+        if (!World::Intersect(start, end, &hit, &distance, 0x100171, nullptr)) {
+            return -1000.0f;
+        }
+
+        return std::min(hit.z - p.z, 0.0f);
+    }
 
     struct Collect {
         C3Vector camera;
@@ -155,7 +183,7 @@ namespace {
         }
 
         const float t = std::clamp((depth - kRideDepth) / (kDiveDepth - kRideDepth), 0.0f, 1.0f);
-        c.found->push_back(Swimmer{ guid.m_guid, p.x, p.y, surface, 1.0f - t * t * (3.0f - 2.0f * t), distance });
+        c.found->push_back(Swimmer{ guid.m_guid, p.x, p.y, surface, 1.0f - t * t * (3.0f - 2.0f * t), distance, LowestRise(p) });
         return 1;
     }
 
@@ -227,6 +255,13 @@ namespace {
 
     C3Vector s_camera;
 
+    // The camera as one more point (guid 0: no unit has it), while it is near terrain water.
+    constexpr uint64_t kCameraGuid = 0;
+    constexpr float kCameraNear = 3.0f;   // yd from the still surface
+    bool s_cameraWet = false;
+    float s_cameraSurface = 0.0f;
+    uint32_t s_cameraType = 0;
+
     // The device's call at the frame's first capture (once a frame: the water's set-up runs for every water
     // draw, and asking each time overwrote what was asked before the answers came back).
     uint32_t Ask(float (*points)[4], uint32_t max, uint64_t* tag) {
@@ -252,6 +287,22 @@ namespace {
         ClntObjMgrEnumVisibleObjects(&CollectSwimmer, &collect);
         s_status.found = static_cast<uint32_t>(s_found.size());
 
+        // The camera first (it is never dropped for the nearest swimmers).
+        s_cameraWet = false;
+        {
+            C3Vector p = s_camera;
+            int32_t type = 0;
+            float surface = 0.0f;
+
+            if (!CMap::QueryLiquidStatusMapObjsExt(&p, &type, &surface) && CMap::QueryLiquidTerrain(&p, &type, &surface, 0)
+                && std::fabs(surface - p.z) < kCameraNear) {
+                s_cameraWet = true;
+                s_cameraSurface = surface;
+                s_cameraType = static_cast<uint32_t>(type);
+                s_found.insert(s_found.begin(), Swimmer{ kCameraGuid, p.x, p.y, surface, 1.0f, -1.0f });
+            }
+        }
+
         if (s_found.empty()) {
             return 0;
         }
@@ -269,6 +320,7 @@ namespace {
             points[i][3] = 0.0f;
             asked.guids[i] = sw.guid;
             asked.weights[i] = sw.weight;
+            asked.lowest[i] = sw.lowest;
         }
 
         *tag = asked.tag;
@@ -316,9 +368,43 @@ namespace SXC::Water {
             rise = riding ? found->second.shownRise : 0.0f;
         }
 
-        std::snprintf(text, size, "%s: %u asked, %u answered. You: %s, %.2f yd under the surface, %s (%+.2f yd).",
-                      RideOn().Get() ? "on" : "off", s_status.found, s_status.answered, s_status.playerSwimming ? "swimming" : "not swimming",
+        std::snprintf(text, size, "%s, the camera %s the surface: %u asked, %u answered. You: %s, %.2f yd under the surface, %s (%+.2f yd).",
+                      RideOn().Get() ? "on" : "off", CameraPassesSurface() ? "passes" : "stops at", s_status.found, s_status.answered, s_status.playerSwimming ? "swimming" : "not swimming",
                       s_status.playerDepth, riding ? "riding" : "not riding", rise);
+    }
+
+    bool CameraWater(float& height, float& slopeX, float& slopeY, uint32_t& liquidType, float* still, float* reach) {
+        if (!s_cameraWet) {
+            return false;
+        }
+
+        const Rider* r = Follow(kCameraGuid);
+        height = s_cameraSurface + (r ? r->shownRise : 0.0f);
+        slopeX = r ? r->shownX : 0.0f;
+        slopeY = r ? r->shownY : 0.0f;
+        liquidType = s_cameraType;
+
+        // The reach: the largest rise or fall lately, decaying over ~10 s.
+        static double s_reachAt = 0.0;
+        static float s_reach = 0.3f;
+        const double now = Now();
+        const float dt = static_cast<float>(std::min(now - s_reachAt, 1.0));
+        s_reachAt = now;
+        s_reach = std::max({ std::fabs(r ? r->rise : 0.0f), s_reach * std::exp(-dt / 10.0f), 0.3f });
+
+        if (still) {
+            *still = s_cameraSurface;
+        }
+
+        if (reach) {
+            *reach = s_reach;
+        }
+
+        return true;
+    }
+
+    bool CameraPassesSurface() {
+        return ThroughSurface().Get() && SXC::Water::Active();
     }
 
     float RideLift(CGObject_C* target) {

@@ -49,6 +49,7 @@ namespace
         float shoreGrid[4];    ///< the shore field's first cell (x, y), 1 when it holds a field, the cell (yd)
         float shoreLook[4];    ///< the shore's foam, wave height (yd), wavelength (yd), reach (yd)
         float shoreWind[4];    ///< the waves' direction (unit x, y), the wind speed (yd / s), 0
+        float underGlow[4];    ///< the underwater medium's glow (rgb), w 1 while it draws
     };
 
     // The waves (Shaders/WaterWaves.glsl): N x N per cascade, three cascades.
@@ -131,6 +132,9 @@ namespace
         // One pair for every frame: the queue runs the frames in order, and each copy waits for the
         // previous frames' reads (its barrier). Remade when the target's size changes.
         Image      colour, depth;
+        uint64_t   movedSerial = 0;       ///< the frame Prepare last wrote the parameters for (set 2 readable for the movement)
+        float      moveTime = 0.0f;       ///< that frame's water clock and movement row without a look grid (WaterMove.glsl's inputs)
+        float      moveLook[4] = {};
         VkExtent2D extent = { 0, 0 };
         uint64_t   lastUsed = 0;
 
@@ -323,14 +327,15 @@ namespace
         // Set 2 of the draws: 0 the scene's colour, 1 its depth (w), 2 where the draws lie on it and the
         // waves' parameters, 3 the waves' slopes (a layer per cascade), 4 their displacement (the vertex
         // stage moves the surface with it, step 3b), 5 the shore field, 6 its cells for the near mesh
-        // (both stages). The swimmers' query (compute) reads 2 and 4..6 as the vertex stage does.
+        // (both stages; the fragment stage reads 4 too: which side of the surface a pixel starts on). The
+        // swimmers' query and the underwater medium (compute) read 2 and 4..6 as the vertex stage does.
         VkDescriptorSetLayoutBinding draw[7] = {};
         for (uint32_t i = 0; i < 7; ++i)
         {
             draw[i].binding         = i;
             draw[i].descriptorType  = i == 2 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             draw[i].descriptorCount = 1;
-            draw[i].stageFlags      = i == 2 || i >= 5 ? VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT
+            draw[i].stageFlags      = i == 2 || i >= 4 ? VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT
                                     : i == 4 ? VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT
                                              : VK_SHADER_STAGE_FRAGMENT_BIT;
         }
@@ -906,6 +911,7 @@ namespace
         p.shoreLook[1] = in.shore.waveHeight;
         p.shoreLook[2] = in.shore.wavelength;
         p.shoreLook[3] = in.shore.reach;
+        std::memcpy(p.underGlow, in.shore.underGlow, sizeof p.underGlow);
         p.shoreWind[0] = in.waves.windX;
         p.shoreWind[1] = in.waves.windY;
         p.shoreWind[2] = in.waves.speed;
@@ -950,6 +956,9 @@ namespace
         {
             std::memcpy(slot.params.block.mapped, &p, sizeof p);
             memory::FlushHost(slot.params.block);
+            s.movedSerial = serial;
+            s.moveTime    = in.query.camera[3];
+            std::memcpy(s.moveLook, in.query.look, sizeof s.moveLook);
 
             if (VkCommandBuffer pre = frame::PrePass())
             {
@@ -1052,6 +1061,7 @@ namespace gxvk::vk::water
                      VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT);
         s.colour.layout = VK_IMAGE_LAYOUT_GENERAL;
         s.depth.layout  = VK_IMAGE_LAYOUT_GENERAL;
+
         ImageBarrier(cmd, t.depth, t.depthAspects, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
                      VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
@@ -1110,6 +1120,14 @@ namespace gxvk::vk::water
     }
 
     const char* Status() { return s.status; }
+
+    VkDescriptorSet MoveSet(uint32_t slotIndex, uint64_t serial, float& time, float look[4])
+    {
+        if (!s.ready || slotIndex >= kSlots || s.movedSerial != serial || !s.slots[slotIndex].written) return VK_NULL_HANDLE;
+        time = s.moveTime;
+        std::memcpy(look, s.moveLook, sizeof s.moveLook);
+        return s.slots[slotIndex].drawSet;
+    }
 
     ShoreShared Shore()
     {

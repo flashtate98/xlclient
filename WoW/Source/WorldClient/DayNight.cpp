@@ -33,6 +33,7 @@
 #include "Engine/Source/Gxu/Gxu.h"
 #include "WoW/Source/Ui/WorldFrame.h"
 #include "SXC/Sky/Sky.h"  // SXC:
+#include "SXC/Water/Medium.h"  // SXC: the underwater medium
 #include "Engine/Source/ShaderEffect/Types.h"
 
 static const float SUNRISE = 0.22916667f;
@@ -2715,7 +2716,8 @@ void DayNight::SetColors() {
 
     DayNight::SetLightColors();
 
-    if (liquidStatus && liquid && liquid->m_maxDarkenDepth > 0.0f) {
+    // SXC: under our water the medium dims the light by its own curve (SXC/Water/Medium.h).
+    if (liquidStatus && liquid && liquid->m_maxDarkenDepth > 0.0f && !SXC::Water::MediumTakesLight()) {
         float maxDepth = -liquid->m_maxDarkenDepth;
         float depth = liquidDepth <= 0.0f ? liquidDepth : 0.0f;
 

@@ -51,6 +51,8 @@ layout(set = 2, binding = 1) uniform sampler2D sceneW;
 // The waves (step 3, WaterWaves.glsl): per cascade the height's slopes, the Jacobian (below 1 the crest
 // folds), the height.
 layout(set = 2, binding = 3) uniform sampler2DArray waveSlopes;
+layout(set = 2, binding = 4) uniform sampler2DArray waveDisp;   // per cascade: dx, dy, height (yd): how the surface moves
+#include "WaterMove.glsl"
 
 // The waves at a world point: the slopes summed over the cascades (the finer ones fading with distance),
 // and how much the crests fold there (0 none .. 1 breaking).
@@ -278,6 +280,17 @@ vec4 ScreenReflection(vec3 origin, vec3 dir, float upward)
     return vec4(0.0);
 }
 
+// The surface's rise at a world point (its still height in z) as Water.vert moves it (WaterQuery.comp's).
+float RiseHere(vec3 p)
+{
+    ivec2 g = ShoreCellOf(p.xy);
+    bool near = NearCovers(p.xy);
+    vec4 cell = near ? ShoreCell(g) : vec4(0.0);
+    float depthY = near ? max(cell.w - 1.0, 0.0) : 1.0;
+    float ease;
+    return SurfaceMove(p, near, cell, depthY, LookMoveAt(p, vLook[4]), regs.p[5].xyz, regs.p[6].x, ease).z;
+}
+
 void main()
 {
     vec3 world = LightsViewToWorld(vView.xyz);
@@ -309,7 +322,27 @@ void main()
     vec3 toEye = eye - world;
     float distance = length(toEye);
     vec3 V = toEye / max(distance, 1e-4);
-    bool below = V.z < 0.0;
+    // Which side of the surface the camera sees this point from. The surface is a height field, so the side
+    // its ray starts on: the pixel's point on the near plane against the surface there, as the water moves
+    // it (WaterMove.glsl; the underwater medium decides the same way). Not the camera's height against the
+    // point's (with the camera at the surface every crest above its eye was shaded as the underside, cut
+    // level through the waves), nor the drawn triangle's side (noisy at grazing angles: stripes; Seyri
+    // 2026-11-01).
+    bool below;
+    {
+        float zNear = -regs.v[3].z / regs.v[2].z;
+        vec3 nearWorld = LightsViewToWorld(vView.xyz * (zNear / vView.z));
+
+        if (regs.p[14].w > 0.5)
+        {
+            float still = world.z - RiseHere(world);
+            below = nearWorld.z < still + RiseHere(nearWorld);
+        }
+        else
+        {
+            below = nearWorld.z < world.z;   // WMO water doesn't move
+        }
+    }
     float pixel = length(fwidth(world.xy));   // yd per pixel on the surface (the foam's detail fades by it)
 
     // The FFT waves when the device runs them, else the small ripples.
@@ -415,6 +448,16 @@ void main()
         ssr = ScreenReflection(vView.xyz, normalize(WorldDirToView(R)), R.z);
         reflected = mix(sky, ssr.rgb, ssr.a);
     }
+    else if (below && regs.p[14].x > 0.5)
+    {
+        // From below, outside the window: the surface mirrors the water and what stands in it (the floor, rocks,
+        // swimmers), the deep's own colour where the search finds nothing. The mirrored path is longer than the
+        // surface's own: a little of the water's colour over it.
+        // Where the search finds nothing, the deep as the underwater medium sees it far off (its glow); the
+        // water's own shallow colour was a near, bright layer along the surface (Seyri, 2026-11-01).
+        ssr = ScreenReflection(vView.xyz, normalize(WorldDirToView(R)), -1.0);
+        reflected = mix(scene.underGlow.w > 0.5 ? scene.underGlow.rgb : scatter, ssr.rgb, ssr.a * 0.75);
+    }
 
     vec3 toSun = normalize(LightsViewDirToWorld(-regs.v[33].xyz));
     // The sun's own glint only while it stands clearly above the horizon: the light's direction doesn't set
@@ -442,7 +485,35 @@ void main()
 
     float sun = below || bodies > 0 ? 0.0 : pow(max(dot(R, toSun), 0.0), vLook[4].x) * smoothstep(0.1, 0.3, toSun.z);
     shine += regs.v[36].rgb * sun;
-    vec3 highlight = below ? vec3(0.0) : shine * vLook[1].w * (1.0 - ssr.a) + LampsReflected(world, N, V);
+    // From below, inside the window: the sky's bodies through the surface, along the view refracted out of the
+    // water (water to air, 1.33), so the sun stands where it would, wobbling with the waves.
+    vec3 through_ = vec3(0.0);
+
+    if (below)
+    {
+        vec3 T = refract(-V, N, 1.333);
+
+        if (dot(T, T) > 0.0)
+        {
+            for (int b = 0; b < 4 && b < bodies; b++)
+            {
+                vec3 d = scene.bodyDir[b].xyz;
+                float r = max(scene.bodyDir[b].w, 0.002);
+                float c = dot(T, d);
+                float disc = smoothstep(cos(r * 1.3 + 0.004), cos(r * 0.7), c);
+                float glow = pow(max(c, 0.0), vLook[4].x);
+                vec3 colour = scene.bodyColour[b].rgb;
+                through_ += colour * (disc * 1.5 + glow * max(colour.r, max(colour.g, colour.b))) * smoothstep(-r, r, d.z);
+            }
+
+            if (bodies == 0)
+            {
+                through_ += regs.v[36].rgb * pow(max(dot(T, toSun), 0.0), vLook[4].x) * smoothstep(0.1, 0.3, toSun.z);
+            }
+        }
+    }
+
+    vec3 highlight = below ? through_ * vLook[1].w * window : shine * vLook[1].w * (1.0 - ssr.a) + LampsReflected(world, N, V);
 
     // Foam where the crests fold: white, lit by the sun and the ambient, over the rest. At the shore: a band
     // at the waterline, widening and narrowing with the waves, and the crests where they break, both torn by

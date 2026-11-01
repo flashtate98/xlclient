@@ -9,6 +9,7 @@
 #include "SXC/Grass/Grass.h"
 #include "SXC/Log.h"
 #include "SXC/Profiler/Profiler.h"
+#include "SXC/Water/Medium.h"  // the Underwater panel
 #include "SXC/Water/Water.h"  // the Water panel
 #include "SXC/Settings/Settings.h"
 #include "SXC/ThirdParty/imgui/imgui.h"
@@ -177,6 +178,7 @@ namespace {
         SXC::Ui::AddQuick(client, "Frame rate", DrawClientQuick);
         const int water = SXC::Ui::AddModule("Water", "Our water (kb: water-shader): the look's live values and debug views.");
         SXC::Ui::AddPanel(water, "Look", SXC::Water::DrawPanel);
+        SXC::Ui::AddPanel(water, "Underwater", SXC::Water::DrawMediumPanel);
     }
 
     PFN_vkVoidFunction LoadVulkan(const char* name, void* user) {

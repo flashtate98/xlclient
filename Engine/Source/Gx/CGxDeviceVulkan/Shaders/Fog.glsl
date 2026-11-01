@@ -25,6 +25,7 @@ layout(std140, set = 0, binding = 0) uniform FogParams
     vec4 maps;         // x the far map present (1/0), y its colours present (1/0), z the wake present (1/0), w the hand-over band (yd)
     vec4 wake;         // the wake map: world x, y of its corner, 1 / its extent (yd)
     vec4 lights;       // our lights in the fog: x strength (0 off), y forward glow (Henyey-Greenstein g), z the light volume's reach (yd), w the volume filled (1/0)
+    vec4 water;        // x 1 = the underwater medium drew this frame (underMask: its alpha says which pixels' views start in the water)
 } fp;
 
 layout(set = 0, binding = 1) uniform sampler2D fieldLight; // per cell: density (1/yd), layer floor (world z), thickness (yd; < 0 not ready), patchiness

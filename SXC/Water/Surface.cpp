@@ -677,6 +677,11 @@ namespace SXC::Water {
         return false;
     }
 
+    int32_t ScopeRankHere(const std::string& scope) {
+        UpdatePlace();
+        return Rank(ParseScope(scope), AreaChain(s_area), s_tileX, s_tileY);
+    }
+
     bool WriteSurfaceRow(uint32_t liquidType, const std::string& place, const Look& l) {
         if (!s_table) {
             return false;

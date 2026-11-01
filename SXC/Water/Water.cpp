@@ -4,6 +4,7 @@
 // its stock material asks for (the terrain's batches keep that format once built), the liquid code's
 // constants, then ours.
 #include "SXC/Water/Water.h"
+#include "SXC/Water/Medium.h"
 #include "SXC/Water/Ride.h"
 #include "SXC/Water/Shore.h"
 #include "SXC/Water/Surface.h"
@@ -594,6 +595,7 @@ namespace SXC::Water {
         }
 
         waves.causticDebug = s_panel.causticDebug;
+        SXC::Water::MediumGlow(waves.underGlow);   // the deep the surface mirrors from below
 
         // The swimmers near the camera, to ride the waves (their answers come back a few frames on). Their
         // movement row without the look grid is the water's the player is in, as the near mesh draws it.

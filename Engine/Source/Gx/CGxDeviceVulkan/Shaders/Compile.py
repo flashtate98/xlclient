@@ -38,6 +38,11 @@ OUTPUTS = [
         ("Fog.frag", "kFogFrag"),
         ("FogLights.comp", "kFogLightsComp"),  # our lights in the fog: the light volume
     ]),
+    ("MediumSpirv.inc", [
+        ("Medium.comp", "kMediumComp", ["WAVES=0"]),  # the underwater medium (Vulkan/Medium.cpp)
+        ("Medium.comp", "kMediumWavesComp", ["WAVES=1"]),  # with the water's set 2: the surface as it moves
+        ("MediumCopy.frag", "kMediumCopyFrag"),
+    ]),
     # SXC: the lights' cube shadow maps (Vulkan/Shadows.cpp), depth only; alpha-keyed parts discard.
     ("ShadowSpirv.inc", [
         ("LightShadow.vert", "kLightShadowVert"),

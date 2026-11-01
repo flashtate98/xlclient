@@ -1,5 +1,6 @@
 #include "WorldFrame.h"
 #include "SXC/Fog/Fog.h"  // SXC:
+#include "SXC/Water/Medium.h"  // SXC: the underwater medium
 #include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler
 #include "Engine/Source/Base/ConvertUTF.h"
 #include <cstring>
@@ -1781,9 +1782,11 @@ void CGWorldFrame::OnWorldRender() {
         { prof::Scope p(prof::kWeather); CWorldScene::RenderWeather(); }
         { prof::Scope p(prof::kLiquids); CWorldScene::RenderLiquidPass(); }
         { prof::Scope p(prof::kModels); scene->Draw(M2PASS_2); }
+        { prof::Scope p(prof::kLiquids); SXC::Water::MediumComposite(); }  // SXC: the underwater medium, over the world and the surface
     } else {
         { prof::Scope p(prof::kModels); scene->Draw(M2PASS_2); }
         { prof::Scope p(prof::kLiquids); CWorldScene::RenderLiquidPass(); }
+        { prof::Scope p(prof::kLiquids); SXC::Water::MediumComposite(); }  // SXC: the waterline: a crest over the lens, the wet lens
         { prof::Scope p(prof::kFog); SXC::Fog::Composite(); }  // SXC: volumetric fog, over the opaque world and the water
         { prof::Scope p(prof::kWeather); CWorldScene::RenderWeather(); }
         { prof::Scope p(prof::kWeather); CWorldScene::RenderBarriers(this->m_elapsedSec); }

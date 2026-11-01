@@ -4,6 +4,7 @@
 #include "SXC/Data/Data.h"
 #include "SXC/Settings/Settings.h"
 #include "SXC/Terrain/TextureParams.h"
+#include "SXC/Water/Medium.h"
 #include "SXC/Water/Surface.h"
 
 namespace SXC::Api {
@@ -32,6 +33,7 @@ namespace SXC {
         Api::Keep();
         Terrain::Register();
         Water::RegisterSurface();  // the LiquidSurface table
+        Water::RegisterMedium();   // the UnderwaterMedium table
         Data::Start();
         EventRegister(EVENT_ID_IDLE, Idle);
     }

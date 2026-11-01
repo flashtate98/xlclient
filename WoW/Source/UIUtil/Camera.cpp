@@ -1476,7 +1476,7 @@ int32_t CGCamera::CCommand_PitchLimit(const char* command, const char* arguments
 // VERIFY: 4129fc26 auto
 // OFFSET: 0x005FEC50
 uint32_t CGCamera::GetCollisionQueryFlags() {
-    return s_cameraWaterCollision->m_intValue ? 0x120171 : 0x100171;
+    return s_cameraWaterCollision->m_intValue && !SXC::Water::CameraPassesSurface() ? 0x120171 : 0x100171;  // SXC: the camera passes the surface
 }
 
 // VERIFY: cf6cb77a auto
@@ -2468,7 +2468,7 @@ void CGCamera::CalcTargetCamera(CGObject_C* target, uint32_t time) {
         }
     }
 
-    if (s_cameraWaterCollision->m_intValue) {
+    if (s_cameraWaterCollision->m_intValue && !SXC::Water::CameraPassesSurface()) {  // SXC: no pitch snapped at the surface
         float finalPitch;
         bool haveFinalPitch = false;
 
@@ -2523,7 +2523,9 @@ void CGCamera::CalcTargetCamera(CGObject_C* target, uint32_t time) {
 
     C3Vector noOffset = C3Vector(0.0f, 0.0f, 0.0f);
     this->m_position = this->GetCameraPosition(cameraTarget, distance, noOffset);
-    this->m_position = this->BumpCameraPositionFromLiquid(cameraTarget, distance, this->m_position);
+    if (!SXC::Water::CameraPassesSurface()) {  // SXC: not bumped off the surface (the waterline draws it half in)
+        this->m_position = this->BumpCameraPositionFromLiquid(cameraTarget, distance, this->m_position);
+    }
     SXC::Cover::KeepCameraAbove(this->m_position);  // SXC: not inside the raised covers (step 5e)
 
     if (!this->m_relativeTo && !s_cameraWaterCollision->m_intValue && 0.0f == this->m_vehicleYawOffset && (!unit || !unit->GetCanFly())) {
@@ -3649,7 +3651,7 @@ uint32_t CGCamera::CollideCameraWithWorld(const C3Vector& target, float& distanc
         return 0;
     }
 
-    uint32_t flags = s_cameraWaterCollision->m_intValue ? 0x120171 : 0x100171;
+    uint32_t flags = s_cameraWaterCollision->m_intValue && !SXC::Water::CameraPassesSurface() ? 0x120171 : 0x100171;  // SXC: the water no wall
     float minHeight = 0.83333331f;
     float maxHeight = this->m_height;
 
