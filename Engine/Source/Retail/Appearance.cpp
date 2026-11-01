@@ -133,9 +133,17 @@ bool Unlockable(const Index& x, const Row& choice) {
     return requirement && x.requirement->Value(*requirement, "ReqType") == kReqUnlock;
 }
 
+// Unlockable choices that do not work on the bodies they belong to, kept hidden (FlashWOW):
+// the Tauren's old horn styles (Wide, Ram, Forward Pointing; 1158-1160 on the female) draw the
+// Highmountain antlers, with the ordinary horn texture wrapped over them.
+bool Hidden(uint32_t choiceId) {
+    static const uint32_t kHidden[] = {1097, 1098, 1099, 1158, 1159, 1160};
+    return std::find(std::begin(kHidden), std::end(kHidden), choiceId) != std::end(kHidden);
+}
+
 bool CreationAllowed(const Index& x, const Row& choice, uint32_t classId) {
     const uint32_t id = x.choice->Value(choice, "ChrCustomizationReqID");
-    if (id == 10 || x.choice->Text(choice, "Name_lang") == "Transmog") return false;
+    if (id == 10 || x.choice->Text(choice, "Name_lang") == "Transmog" || Hidden(choice.id)) return false;
     if (!id || !x.requirement) return true;
     const Row* requirement = x.requirement->Find(id);
     if (!requirement) return true;
