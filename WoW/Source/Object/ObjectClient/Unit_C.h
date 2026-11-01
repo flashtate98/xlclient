@@ -545,6 +545,10 @@ class CGUnit_C : public CGObject_C, public CGUnit {
     int32_t IsSplashing(const C3Vector& position) const;
     int32_t HasBakedNpcTexture() const;
     uint32_t GetDisplayRace() const;
+    // Not in the original: FlashWOW Two Forms (AlteredForm.h).
+    bool InAlteredForm() const;
+    uint32_t GetAppearanceRace() const;
+    int32_t GetBaseFormDisplayId(int32_t displayId) const;
     uint32_t GetDisplaySex() const;
     uint32_t GetShapeshiftForm() const;
     int32_t IsInMelee() const;

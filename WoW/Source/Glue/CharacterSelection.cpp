@@ -15,6 +15,7 @@
 #include "WoW/Common/ComponentCore/CharacterComponent.h"
 #include "WoW/Source/Client.h"
 #include "WoW/Source/DB/DBClient/DBClient.h"
+#include "WoW/Source/DB/Rec/ChrRacesRec.h"
 #include "WoW/Source/DB/Rec/CreatureDisplayInfoRec.h"
 #include "WoW/Source/DB/Rec/CreatureFamilyRec.h"
 #include "WoW/Source/DB/Rec/CreatureModelDataRec.h"
@@ -36,6 +37,7 @@
 #include "WoW/Source/WowSvcs/WowSvcsClient/ClientServices.h"
 #if defined(WOWDECOMP_RETAIL_MODELS)
 #include "WoW/Source/RetailCustomizationNet.h"
+#include "WoW/Source/Object/ObjectClient/AlteredForm.h"
 #endif
 
 // STATIC: 0x009F3CD0
@@ -64,6 +66,20 @@ uint32_t CCharacterSelection::s_raceRestrictions[10];
 
 // STATIC: 0x00B6B238
 TSGrowableArray<CharacterSelectionDisplay> CCharacterSelection::s_characterList;
+
+// Not in the original: FlashWOW Two Forms. The race a listed character's body is drawn as: its altered form's
+// race when the server reported that form (RetailCustomizationNet), else its own.
+static uint32_t SelectionBodyRace(const CHARACTER_INFO& info) {
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    if (RetailCustomizationSavedForm(info.m_guid.m_guid) == 1) {
+        const uint32_t form = AlteredFormRace(info.m_raceID);
+        if (form && g_chrRacesDB.GetRecord(form)) {
+            return form;
+        }
+    }
+#endif
+    return info.m_raceID;
+}
 
 // VERIFY: ef583a6e manual
 // OFFSET: 0x005EEB70
@@ -99,7 +115,7 @@ void CCharacterSelection::Shutdown() {
         CCharacterComponent::RemoveVisuals(model);
         model->AttachToSceneRecursive(World::s_m2Scene);
         CCharacterComponent::m_activePlayerComponent = CCharacterSelection::s_characterList[i].m_component;
-        CGPlayer_C::s_displayId = GetDisplayIdFromRaceAndGender(CCharacterSelection::s_characterList[i].m_characterInfo.m_raceID, CCharacterSelection::s_characterList[i].m_characterInfo.m_sexID);
+        CGPlayer_C::s_displayId = GetDisplayIdFromRaceAndGender(SelectionBodyRace(CCharacterSelection::s_characterList[i].m_characterInfo), CCharacterSelection::s_characterList[i].m_characterInfo.m_sexID);
         CCharacterSelection::s_characterList[i].m_component = nullptr;
     }
 
@@ -437,7 +453,7 @@ void CCharacterSelection::ShowCharacter() {
     if (!CCharacterSelection::s_characterList[CCharacterSelection::s_selectionIndex].m_component) {
         newComponent = 1;
 
-        CreatureModelDataRec* playerRec = GetModelDataRec(CCharacterSelection::s_characterList[CCharacterSelection::s_selectionIndex].m_characterInfo.m_raceID, CCharacterSelection::s_characterList[CCharacterSelection::s_selectionIndex].m_characterInfo.m_sexID);
+        CreatureModelDataRec* playerRec = GetModelDataRec(SelectionBodyRace(CCharacterSelection::s_characterList[CCharacterSelection::s_selectionIndex].m_characterInfo), CCharacterSelection::s_characterList[CCharacterSelection::s_selectionIndex].m_characterInfo.m_sexID);
 
         if (!playerRec || !playerRec->m_modelName) {
             return;
@@ -450,7 +466,7 @@ void CCharacterSelection::ShowCharacter() {
         // Not in the original: the character's stored Retail choices came with the character list.
         RetailCustomizationNetBind(CCharacterSelection::s_characterList[CCharacterSelection::s_selectionIndex].m_component, info.m_guid.m_guid, false);
 #endif
-        data.m_preferences.m_raceID = info.m_raceID;
+        data.m_preferences.m_raceID = SelectionBodyRace(info);     // Not in the original: FlashWOW Two Forms
         data.m_preferences.m_sexID = info.m_sexID;
         data.m_preferences.m_classId = info.m_classID;
         data.m_preferences.m_skinID = info.m_skinColorID;

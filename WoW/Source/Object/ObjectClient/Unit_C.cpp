@@ -1,4 +1,5 @@
 #include "Unit_C.h"
+#include "AlteredForm.h"
 #include <cmath>
 #include <new>
 #include <typeinfo>
@@ -1029,6 +1030,8 @@ int32_t CGUnit_C::DisplayInfoNeedsUpdate() {
     if (!displayId || this->m_unit->m_unitFieldNativedisplayid != this->m_unit->m_unitFieldDisplayid) {
         displayId = this->m_unit->m_unitFieldDisplayid;
     }
+
+    displayId = this->GetBaseFormDisplayId(displayId);     // Not in the original: FlashWOW Two Forms
 
     CreatureDisplayInfoRec* displayInfo = g_creatureDisplayInfoDB.GetRecord(displayId);
 
@@ -6513,7 +6516,32 @@ uint32_t CGUnit_C::GetDisplayRace() const {
         return this->m_displayInfoExtra->m_displayRaceID;
     }
 
-    return this->m_unit->m_unitFieldBytes0[0];
+    return this->GetAppearanceRace();
+}
+
+// Not in the original: FlashWOW Two Forms (AlteredForm.h). A player of a race with an altered form whose
+// server has set the form flag.
+bool CGUnit_C::InAlteredForm() const {
+    return (this->m_obj->m_type & TYPEMASK_PLAYER) && (this->m_unit->m_unitFieldFlags2 & kAlteredFormFlag2) &&
+        AlteredFormRace(this->m_unit->m_unitFieldBytes0[0]) && g_chrRacesDB.GetRecord(AlteredFormRace(this->m_unit->m_unitFieldBytes0[0]));
+}
+
+// The race whose model and customization tables the unit's own body uses: the altered form's race while in
+// that form, else the unit's race.
+uint32_t CGUnit_C::GetAppearanceRace() const {
+    return this->InAlteredForm() ? AlteredFormRace(this->m_unit->m_unitFieldBytes0[0]) : this->m_unit->m_unitFieldBytes0[0];
+}
+
+// The display drawn for `displayId`: the native display becomes the altered form race's display while in that
+// form (Cataclysm's CGUnit_C::UpdateAlteredForm); any other display (druid form, morph) is kept.
+int32_t CGUnit_C::GetBaseFormDisplayId(int32_t displayId) const {
+    if (displayId != static_cast<int32_t>(this->m_unit->m_unitFieldNativedisplayid) || !this->InAlteredForm()) {
+        return displayId;
+    }
+
+    const ChrRacesRec* race = g_chrRacesDB.GetRecord(AlteredFormRace(this->m_unit->m_unitFieldBytes0[0]));
+    const int32_t form = this->m_unit->m_unitFieldBytes0[2] ? race->m_femaleDisplayID : race->m_maleDisplayID;
+    return form && g_creatureDisplayInfoDB.GetRecord(form) ? form : displayId;
 }
 
 // VERIFY: f436709c auto
@@ -6994,6 +7022,8 @@ CreatureModelDataRec* CGUnit_C::GetModelData() const {
     if (!displayId || this->m_unit->m_unitFieldNativedisplayid != this->m_unit->m_unitFieldDisplayid) {
         displayId = this->m_unit->m_unitFieldDisplayid;
     }
+
+    displayId = this->GetBaseFormDisplayId(displayId);     // Not in the original: FlashWOW Two Forms
 
     CreatureDisplayInfoRec* displayInfo = g_creatureDisplayInfoDB.GetRecord(displayId);
 
@@ -9741,6 +9771,8 @@ void CGUnit_C::RefreshDataPointers() {
     if (!displayId || this->m_unit->m_unitFieldNativedisplayid != this->m_unit->m_unitFieldDisplayid) {
         displayId = this->m_unit->m_unitFieldDisplayid;
     }
+
+    displayId = this->GetBaseFormDisplayId(displayId);     // Not in the original: FlashWOW Two Forms
 
     this->m_displayInfo = g_creatureDisplayInfoDB.GetRecord(displayId);
 
@@ -13855,7 +13887,8 @@ int32_t CGUnit_C::InitializeExtendedDisplay(CGPlayer_C* player, int32_t hasDispl
         data.m_preferences.m_raceID = this->m_displayInfoExtra->m_displayRaceID;
         data.m_preferences.m_sexID = this->m_displayInfoExtra->m_displaySexID;
     } else {
-        data.m_preferences.m_raceID = this->m_unit->m_unitFieldBytes0[0];
+        // Not in the original: FlashWOW Two Forms; the altered form's race draws its own body.
+        data.m_preferences.m_raceID = this->GetAppearanceRace();
         data.m_preferences.m_sexID = this->m_unit->m_unitFieldBytes0[2];
     }
 
@@ -19605,10 +19638,10 @@ uint32_t CGUnit_C::GetPortraitDisplayId() {
     uint32_t displayId = this->m_displayId;
 
     if (!displayId || this->m_unit->m_unitFieldNativedisplayid != this->m_unit->m_unitFieldDisplayid) {
-        return this->m_unit->m_unitFieldDisplayid;
+        return this->GetBaseFormDisplayId(this->m_unit->m_unitFieldDisplayid);     // Not in the original: Two Forms
     }
 
-    return displayId;
+    return this->GetBaseFormDisplayId(displayId);
 }
 
 // VERIFY: 74cc072f auto
@@ -23885,6 +23918,13 @@ int32_t Packet_SMSG_MIRRORIMAGE_DATA(void* param, NETMESSAGE msgId, uint32_t tim
 void CGUnit_C::OnFlag2Changed(uint32_t oldFlags) {
     uint32_t flags = this->m_unit->m_unitFieldFlags2;
     uint32_t changed = oldFlags ^ flags;
+
+    // Not in the original: FlashWOW Two Forms. The form changed: redraw the body (only when it shows the
+    // native display; a druid form or morph keeps its model and the form shows when it ends).
+    if ((changed & kAlteredFormFlag2) && (this->m_obj->m_type & TYPEMASK_PLAYER) &&
+        AlteredFormRace(this->m_unit->m_unitFieldBytes0[0]) && this->m_worldModel) {
+        this->UpdateDisplayInfo(0);
+    }
 
     if (changed & 0x1) {
         if (flags & 0x1) {

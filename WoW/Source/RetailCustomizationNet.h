@@ -16,6 +16,8 @@ class CCharacterComponent;
 //   0x4B9 (CMSG_UNUSED6's number, which the server never receives) answers, and also arrives with
 //   the character list and after barber shop visits:
 //       u16 entries, entries x (u64 guid, u8 count, count x (u32 optionId, u32 choiceId))
+//     Option 0xFFFFFF01 is not a Retail option: its choice is the character's Two Forms form (0 the
+//     race's own, 1 its altered form; FlashWOW, AlteredForm.h). The character list uses it.
 //
 // A server without the module ignores the trailing block; it logs the query opcode as unhandled.
 
@@ -28,6 +30,9 @@ void RetailCustomizationNetAppendCreate(CDataStore& msg);
 
 // Appends a component's block to a CMSG_ALTER_APPEARANCE (or any message the server reads it from).
 void RetailCustomizationNetAppendChoices(CDataStore& msg, const CCharacterComponent* character);
+
+// The Two Forms form the server reported for a character (0 the race's own form, 1 its altered form).
+uint32_t RetailCustomizationSavedForm(uint64_t guid);
 
 // Binds a component to the character it shows and, when `ask` is set and its choices are not known,
 // asks the server for them.

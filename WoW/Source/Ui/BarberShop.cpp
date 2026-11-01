@@ -40,6 +40,9 @@ float CGBarberShop::m_minCameraDistance = 1.0f;
 // STATIC: 0x00BD19BA
 uint8_t CGBarberShop::m_initialized;
 
+// Not in the original: the race m_useableStyles was collected for (FlashWOW Two Forms).
+static uint32_t s_stylesRace;
+
 // STATIC: 0x00BD19BB
 uint8_t CGBarberShop::m_resetPortrait;
 
@@ -227,9 +230,15 @@ int32_t Packet_SMSG_ENABLE_BARBER_SHOP(void* param, NETMESSAGE msgId, uint32_t t
     }
 
     component->AddItemBySlot(INVSLOT_TABARD, 54559, 0);
-    CGBarberShop::m_currentHairStyle = CGBarberShop::GetStyle(0, player->m_unit->m_unitFieldBytes0[0], player->m_player->m_playerBytes3[0], player->m_player->m_playerBytes[2]);
-    CGBarberShop::m_currentFacialHair = CGBarberShop::GetStyle(2, player->m_unit->m_unitFieldBytes0[0], player->m_player->m_playerBytes3[0], player->m_player->m_playerBytes2[0]);
-    CGBarberShop::m_currentSkinColor = CGBarberShop::GetStyle(3, player->m_unit->m_unitFieldBytes0[0], player->m_player->m_playerBytes3[0], component->m_data.m_preferences.m_skinID);
+    // Not in the original: FlashWOW Two Forms. The styles were collected for the race the character entered the
+    // world as; a form change since then (Worgen / Gilnean) needs the other race's styles.
+    if (s_stylesRace != player->GetAppearanceRace()) {
+        CGBarberShop::m_useableStyles.InternalClear(0);
+        CGBarberShop::EnterWorld();
+    }
+    CGBarberShop::m_currentHairStyle = CGBarberShop::GetStyle(0, player->GetAppearanceRace(), player->m_player->m_playerBytes3[0], player->m_player->m_playerBytes[2]);
+    CGBarberShop::m_currentFacialHair = CGBarberShop::GetStyle(2, player->GetAppearanceRace(), player->m_player->m_playerBytes3[0], player->m_player->m_playerBytes2[0]);
+    CGBarberShop::m_currentSkinColor = CGBarberShop::GetStyle(3, player->GetAppearanceRace(), player->m_player->m_playerBytes3[0], component->m_data.m_preferences.m_skinID);
     CGBarberShop::m_barberShopEnabled = 1;
     FrameScript_SignalEvent(SCRIPT_EVENT_BARBER_SHOP_OPEN, nullptr);
     CGBarberShop::m_minCameraDistance = 1.0f;
@@ -251,7 +260,7 @@ int32_t Packet_SMSG_ENABLE_BARBER_SHOP(void* param, NETMESSAGE msgId, uint32_t t
         CGBarberShop::m_prevView = camera->m_viewIndex;
         float distance;
 
-        if (player->m_unit->m_unitFieldBytes0[0] == 7) {
+        if (player->GetAppearanceRace() == 7) {
             distance = CGBarberShop::m_minCameraDistance * 3.0f;
         } else {
             distance = CGBarberShop::m_minCameraDistance + CGBarberShop::m_minCameraDistance;
@@ -290,7 +299,7 @@ void CGBarberShop::SetNextBarberShopStyle(int32_t type, bool backward) {
                 component->SetPrevHairStyle(COMPONENT_CONTEXT_1);
             }
 
-            CGBarberShop::m_currentHairStyle = CGBarberShop::GetStyle(0, player->m_unit->m_unitFieldBytes0[0], player->m_unit->m_unitFieldBytes0[2], component->m_data.m_preferences.m_hairStyleId);
+            CGBarberShop::m_currentHairStyle = CGBarberShop::GetStyle(0, player->GetAppearanceRace(), player->m_unit->m_unitFieldBytes0[2], component->m_data.m_preferences.m_hairStyleId);
             break;
         case 1:
             if (!backward) {
@@ -307,7 +316,7 @@ void CGBarberShop::SetNextBarberShopStyle(int32_t type, bool backward) {
                 component->SetPrevFacialFeature(COMPONENT_CONTEXT_1);
             }
 
-            CGBarberShop::m_currentFacialHair = CGBarberShop::GetStyle(2, player->m_unit->m_unitFieldBytes0[0], player->m_unit->m_unitFieldBytes0[2], component->m_data.m_preferences.m_facialHairId);
+            CGBarberShop::m_currentFacialHair = CGBarberShop::GetStyle(2, player->GetAppearanceRace(), player->m_unit->m_unitFieldBytes0[2], component->m_data.m_preferences.m_facialHairId);
             break;
         case 3:
             if (!backward) {
@@ -316,7 +325,7 @@ void CGBarberShop::SetNextBarberShopStyle(int32_t type, bool backward) {
                 component->SetPrevSkin(COMPONENT_CONTEXT_1);
             }
 
-            CGBarberShop::m_currentSkinColor = CGBarberShop::GetStyle(3, player->m_unit->m_unitFieldBytes0[0], player->m_unit->m_unitFieldBytes0[2], component->m_data.m_preferences.m_skinID);
+            CGBarberShop::m_currentSkinColor = CGBarberShop::GetStyle(3, player->GetAppearanceRace(), player->m_unit->m_unitFieldBytes0[2], component->m_data.m_preferences.m_skinID);
             break;
         default:
             break;
@@ -363,7 +372,8 @@ void CGBarberShop::EnterWorld() {
     }
 
     CGPlayer_C* player = static_cast<CGPlayer_C*>(ClntObjMgrObjectPtr(ClntObjMgrGetActivePlayer(), TYPEMASK_PLAYER, __FILE__, __LINE__));
-    int32_t race = player->m_unit->m_unitFieldBytes0[0];
+    int32_t race = player->GetAppearanceRace();
+    s_stylesRace = race;
     int32_t sex = player->m_player->m_playerBytes3[0];
 
     for (int32_t i = 0; i < g_barberShopStyleDB.m_numRecords; i++) {
@@ -384,9 +394,9 @@ void CGBarberShop::EnterWorld() {
         style->m_rec = rec;
     }
 
-    CGBarberShop::m_currentHairStyle = CGBarberShop::GetStyle(0, player->m_unit->m_unitFieldBytes0[0], player->m_player->m_playerBytes3[0], player->m_player->m_playerBytes[2]);
-    CGBarberShop::m_currentFacialHair = CGBarberShop::GetStyle(2, player->m_unit->m_unitFieldBytes0[0], player->m_player->m_playerBytes3[0], player->m_player->m_playerBytes2[0]);
-    CGBarberShop::m_currentSkinColor = CGBarberShop::GetStyle(3, player->m_unit->m_unitFieldBytes0[0], player->m_player->m_playerBytes3[0], player->m_player->m_playerBytes[0]);
+    CGBarberShop::m_currentHairStyle = CGBarberShop::GetStyle(0, player->GetAppearanceRace(), player->m_player->m_playerBytes3[0], player->m_player->m_playerBytes[2]);
+    CGBarberShop::m_currentFacialHair = CGBarberShop::GetStyle(2, player->GetAppearanceRace(), player->m_player->m_playerBytes3[0], player->m_player->m_playerBytes2[0]);
+    CGBarberShop::m_currentSkinColor = CGBarberShop::GetStyle(3, player->GetAppearanceRace(), player->m_player->m_playerBytes3[0], player->m_player->m_playerBytes[0]);
 }
 
 // VERIFY: 066af30d manual
@@ -575,7 +585,7 @@ void CGBarberShop::ApplyAppearanceChange() {
     if (!CGBarberShop::m_currentHairStyle || !CGBarberShop::m_currentFacialHair) {
         Blizzard::Log::Printf(1, "Logs/RetailCharacter.log",
             "Barber shop: no BarberShopStyle row for race %u sex %u %s %u; the visit cannot be saved\n",
-            static_cast<unsigned>(player->m_unit->m_unitFieldBytes0[0]), static_cast<unsigned>(player->m_player->m_playerBytes3[0]),
+            static_cast<unsigned>(player->GetAppearanceRace()), static_cast<unsigned>(player->m_player->m_playerBytes3[0]),
             !CGBarberShop::m_currentHairStyle ? "hair style" : "facial hair",
             static_cast<unsigned>(!CGBarberShop::m_currentHairStyle ? component->m_data.m_preferences.m_hairStyleId : component->m_data.m_preferences.m_facialHairId));
         return;

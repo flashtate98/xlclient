@@ -4,6 +4,7 @@
 #include "Engine/Source/Base/CDataStore.h"
 #include "Engine/Source/BlizzardCore/Source/System/Log/Log.h"
 #include <string>
+#include <unordered_map>
 #include "WoW/Common/ComponentCore/RetailCharacter.h"
 #include "WoW/Source/Glue/CharacterCreation.h"
 #include "WoW/Source/WowSvcs/WowSvcsClient/ClientServices.h"
@@ -12,6 +13,9 @@ namespace {
 
 constexpr uint32_t kMagic = 0x434C5452;      // "RTLC"
 constexpr uint8_t kMaxChoices = 64;
+constexpr uint32_t kSavedFormOption = 0xFFFFFF01;  // not a Retail option: the character's Two Forms form
+
+std::unordered_map<uint64_t, uint32_t> s_savedForms;
 
 uint32_t Remaining(const CDataStore* msg) {
     return msg->m_size > msg->m_read ? msg->m_size - msg->m_read : 0;
@@ -34,6 +38,10 @@ int32_t OnChoices(void* param, NETMESSAGE msgId, uint32_t time, CDataStore* msg)
             uint32_t option = 0, choice = 0;
             msg->Get(option);
             msg->Get(choice);
+            if (option == kSavedFormOption) {
+                s_savedForms[guid] = choice;
+                continue;
+            }
             choices.emplace_back(option, choice);
         }
         RetailCustomizationStore(guid, choices);
@@ -64,6 +72,11 @@ void RetailCustomizationNetAppendChoices(CDataStore& msg, const CCharacterCompon
         msg.Put(choice.first);
         msg.Put(choice.second);
     }
+}
+
+uint32_t RetailCustomizationSavedForm(uint64_t guid) {
+    const auto found = s_savedForms.find(guid);
+    return found != s_savedForms.end() ? found->second : 0;
 }
 
 void RetailCustomizationNetBind(const CCharacterComponent* character, uint64_t guid, bool ask) {
