@@ -1640,8 +1640,19 @@ void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
         bool paintsFoot = false;
         if (hasShoe && character->m_itemDisplayID[ITEMSLOT_BOOTS]) {
             ItemDisplayInfoRec boots;
-            paintsFoot = g_itemDisplayInfoDB.GetRecord(character->m_itemDisplayID[ITEMSLOT_BOOTS], &boots) &&
-                boots.m_texture[SECTION_FOOT] && *boots.m_texture[SECTION_FOOT];
+            // A foot texture only counts when its file is there (as LoadItemComponentTexture finds it: the
+            // unisex _U, else the wearer's sex): some starting boots name one that does not exist, and the
+            // shoe then showed in plain skin.
+            if (g_itemDisplayInfoDB.GetRecord(character->m_itemDisplayID[ITEMSLOT_BOOTS], &boots) &&
+                boots.m_texture[SECTION_FOOT] && *boots.m_texture[SECTION_FOOT]) {
+                const char* sexes[] = {"U", character->m_data.m_preferences.m_sexID ? "F" : "M"};
+                for (const char* sex : sexes) {
+                    char path[260];
+                    std::snprintf(path, sizeof(path), "Item\\TextureComponents\\FootTexture\\%s_%s.blp",
+                        boots.m_texture[SECTION_FOOT], sex);
+                    if (SFile::FileExists(path)) { paintsFoot = true; break; }
+                }
+            }
         }
         const bool shoe = hasShoe && paintsFoot;
         model->SetGeometryVisible(2001, 2099, 0);
