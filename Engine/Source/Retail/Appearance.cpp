@@ -123,13 +123,26 @@ static bool IsEyeColor(const Index& x, uint32_t choiceId) {
     return option && x.option->Text(*option, "Name_lang") == "Eye Color";
 }
 
+// ReqType 2 marks the choices Retail unlocks in play (achievements, quests, the Earthen horns and glowing
+// hands). FlashWOW opens them all; Options lists them after the rest so saved selections keep their places.
+constexpr uint32_t kReqClass = 3, kReqUnlock = 2;
+
+bool Unlockable(const Index& x, const Row& choice) {
+    const uint32_t id = x.choice->Value(choice, "ChrCustomizationReqID");
+    const Row* requirement = id && x.requirement ? x.requirement->Find(id) : nullptr;
+    return requirement && x.requirement->Value(*requirement, "ReqType") == kReqUnlock;
+}
+
 bool CreationAllowed(const Index& x, const Row& choice, uint32_t classId) {
     const uint32_t id = x.choice->Value(choice, "ChrCustomizationReqID");
     if (id == 10 || x.choice->Text(choice, "Name_lang") == "Transmog") return false;
     if (!id || !x.requirement) return true;
     const Row* requirement = x.requirement->Find(id);
     if (!requirement) return true;
-    if (x.requirement->Value(*requirement, "ReqType") != 3) return false;
+    const uint32_t type = x.requirement->Value(*requirement, "ReqType");
+    if (type != kReqClass && type != kReqUnlock) return false;
+    // Death Knights keep only their glowing eyes, unlocked eye colours included.
+    if (type == kReqUnlock && classId == 6 && IsEyeColor(x, choice.id)) return false;
     const uint32_t classes = x.requirement->Value(*requirement, "ClassMask");
     if (!classes || classes == 0xFFFFFFFFu || !classId || classId > 32) return true;
     // FlashWOW has no Demon Hunter class (12): its choices (horns, blindfolds, fel eyes, the extra
@@ -241,15 +254,18 @@ void Options(uint32_t chrModel, uint32_t classId, std::vector<Option>& options) 
         option.id = row->id;
         option.name = x.option->Text(*row, "Name_lang");
         const auto list = x.choicesByOption.find(row->id);
+        std::vector<uint32_t> unlocked;
         if (list != x.choicesByOption.end())
             for (const Row* choice : list->second) {
                 if (!CreationAllowed(x, *choice, classId)) continue;
+                if (Unlockable(x, *choice)) { unlocked.push_back(choice->id); continue; }
                 option.choices.push_back(choice->id);
                 // FlashWOW: the Death Knight eye choice's other colours follow it.
                 if (classId == 6 && option.name == "Eye Color" && DeathKnightOnly(x, *choice) && choice->id < (1u << 20) &&
                     ShowsEyeGlow(chrModel, choice->id))
                     for (uint32_t tint = 0; tint < kEyeTintCount; ++tint) option.choices.push_back(EyeTintId(choice->id, tint));
             }
+        option.choices.insert(option.choices.end(), unlocked.begin(), unlocked.end());
         if (!option.choices.empty()) options.push_back(std::move(option));
     }
 }
