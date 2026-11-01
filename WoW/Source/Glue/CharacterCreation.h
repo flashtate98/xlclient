@@ -58,6 +58,15 @@ bool IsRaceClassValid(int32_t raceID, int32_t classID);
 void CharacterCreateRegisterScriptFunctions();
 void CharacterCreateUnregisterScriptFunctions();
 #if defined(WOWDECOMP_RETAIL_MODELS)
+#include <utility>
+#include <vector>
+// Not in the original: FlashWOW Two Forms on the create screen (CharacterCreation.cpp).
+bool CharacterCreationHasAlteredForm();
+bool CharacterCreationViewingAlteredForm();
+void CharacterCreationSetViewingAlteredForm(bool altered);
+// The altered form's look (skin, face, hair style, hair colour, facial hair) and Retail rows for the character
+// about to be created; false when it has none (the player never showed that form).
+bool CharacterCreationAlteredFormLook(uint8_t look[5], std::vector<std::pair<uint32_t, uint32_t>>& extras);
 // Not in the original: console command "retailCustomize" (lists or steps the Retail customization rows).
 int32_t CCommand_RetailCustomize(const char* command, const char* arguments);
 #endif

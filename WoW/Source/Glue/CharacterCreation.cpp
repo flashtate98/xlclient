@@ -29,6 +29,10 @@
 #include "WoW/Source/WowServices/Types.h"
 #include "WoW/Source/WowSvcs/WowSvcsClient/ClientServices.h"
 #include "WoW/Source/WowSvcs/WowSvcsClient/Types.h"
+#if defined(WOWDECOMP_RETAIL_MODELS)
+#include <map>
+#include "WoW/Source/Object/ObjectClient/AlteredForm.h"
+#endif
 
 // STATIC: 0x00AC4220
 int32_t CCharacterCreation::m_selectedClassID = 1;
@@ -74,6 +78,121 @@ TSGrowableArray<int32_t> CCharacterCreation::m_races;
 
 // STATIC: 0x00B6B1DC
 CNameGen CCharacterCreation::m_nameGen;
+
+#if defined(WOWDECOMP_RETAIL_MODELS)
+// Not in the original: FlashWOW Two Forms on the create screen (Cataclysm's SetViewingAlteredForm). A race with
+// an altered form (AlteredForm.h) is edited in both forms: one component shows the form being edited, and the
+// other form's look waits here, per race and sex, until the player switches back or creates the character.
+// The selected race stays the race's own; the character is always created from its own form, and the
+// altered form's look goes along with the create packet (RetailCustomizationNet.cpp).
+namespace {
+
+struct ParkedForm {
+    bool valid = false;
+    CharacterPreferences preferences = {};
+    RetailCustomizationExtras extras;
+};
+
+bool s_viewingAlteredForm = false;
+std::map<int32_t, ParkedForm[2]> s_parkedForms;     // by the race's own ID, then sex
+
+int32_t SelectedBaseRace() {
+    if (CCharacterCreation::m_raceIndex < CCharacterCreation::m_races.Count()) {
+        return CCharacterCreation::m_races.m_data[CCharacterCreation::m_raceIndex];
+    }
+
+    return CCharacterCreation::m_character ? CCharacterCreation::m_character->m_data.m_preferences.m_raceID : 0;
+}
+
+// Shows the race's own form (false) or its altered form (true), parking the form shown until now.
+void ShowForm(bool altered) {
+    CCharacterComponent* character = CCharacterCreation::m_character;
+    const int32_t race = SelectedBaseRace();
+    const uint32_t form = AlteredFormRace(race);
+
+    if (!character || !form || altered == s_viewingAlteredForm) {
+        return;
+    }
+
+    const uint32_t sex = character->m_data.m_preferences.m_sexID & 1;
+    ParkedForm& parked = s_parkedForms[race][sex];
+
+    ParkedForm shown;
+    shown.valid = true;
+    character->GetPreferences(&shown.preferences);
+    RetailCustomizationTakeExtras(character, shown.extras);
+
+    ComponentData data;
+    const bool randomize = !parked.valid;
+
+    if (parked.valid) {
+        data.SetPreferences(&parked.preferences);
+    }
+
+    data.m_preferences.m_raceID = altered ? form : race;
+    data.m_preferences.m_sexID = character->m_data.m_preferences.m_sexID;
+    data.m_preferences.m_classId = CCharacterCreation::m_selectedClassID;
+
+    if (parked.valid) {
+        CCharacterComponent::ValidateComponentData(&data, COMPONENT_CONTEXT_0);
+    }
+
+    // InitCharacterComponents carries the shown component's Retail rows over; hand it the other form's.
+    RetailCustomizationDiscard(character);
+    RetailCustomizationGiveExtras(character, parked.extras);
+    parked = shown;
+    s_viewingAlteredForm = altered;
+    CCharacterCreation::InitCharacterComponents(&data, randomize);
+    CCharacterCreation::Dress();
+    CGlueLoading::StartLoad(CCharacterCreation::m_character, 1);
+}
+
+}
+
+bool CharacterCreationHasAlteredForm() {
+    const uint32_t form = AlteredFormRace(SelectedBaseRace());
+    return CCharacterCreation::m_existingCharacterIndex < 0 && CCharacterCreation::m_character && form && g_chrRacesDB.GetRecord(form);
+}
+
+bool CharacterCreationViewingAlteredForm() {
+    return s_viewingAlteredForm;
+}
+
+void CharacterCreationSetViewingAlteredForm(bool altered) {
+    if (!altered || CharacterCreationHasAlteredForm()) {
+        ShowForm(altered);
+    }
+}
+
+bool CharacterCreationAlteredFormLook(uint8_t look[5], RetailCustomizationExtras& extras) {
+    extras.clear();
+    const int32_t race = SelectedBaseRace();
+
+    if (!CCharacterCreation::m_character || !AlteredFormRace(race) || s_viewingAlteredForm) {
+        return false;
+    }
+
+    const auto found = s_parkedForms.find(race);
+
+    if (found == s_parkedForms.end()) {
+        return false;
+    }
+
+    const ParkedForm& parked = found->second[CCharacterCreation::m_character->m_data.m_preferences.m_sexID & 1];
+
+    if (!parked.valid) {
+        return false;
+    }
+
+    look[0] = static_cast<uint8_t>(parked.preferences.m_skinID);
+    look[1] = static_cast<uint8_t>(parked.preferences.m_faceId);
+    look[2] = static_cast<uint8_t>(parked.preferences.m_hairStyleId);
+    look[3] = static_cast<uint8_t>(parked.preferences.m_hairColorId);
+    look[4] = static_cast<uint8_t>(parked.preferences.m_facialHairId);
+    extras = parked.extras;
+    return true;
+}
+#endif
 
 // VERIFY: cbaddeb2 manual
 // OFFSET: 0x004E1C20
@@ -333,6 +452,10 @@ void CCharacterCreation::CreateCharacter(const char* name) {
         }
     }
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: FlashWOW Two Forms; the character is made from its own form.
+    ShowForm(false);
+#endif
     CHARACTER_CREATE_INFO info;
     SStrCopy(info.m_name, name, sizeof(info.m_name));
     info.m_raceID = static_cast<uint8_t>(CCharacterCreation::m_character->m_data.m_preferences.m_raceID);
@@ -488,7 +611,13 @@ void CCharacterCreation::Dress() {
     for (int32_t i = 0; i < g_charStartOutfitDB.m_numRecords; i++) {
         CharStartOutfitRec* outfit = i >= 0 && i < g_charStartOutfitDB.m_numRecords ? &g_charStartOutfitDB.m_records[i] : nullptr;
 
-        if (static_cast<uint8_t>(outfit->m_raceID) != CCharacterCreation::m_character->m_data.m_preferences.m_raceID || static_cast<uint8_t>(outfit->m_classID) != CCharacterCreation::m_selectedClassID || static_cast<uint8_t>(outfit->m_sexID) != CCharacterCreation::m_character->m_data.m_preferences.m_sexID) {
+#if defined(WOWDECOMP_RETAIL_MODELS)
+        // Not in the original: FlashWOW Two Forms; the altered form wears its own race's starting outfit.
+        const uint32_t outfitRace = SelectedBaseRace();
+#else
+        const uint32_t outfitRace = CCharacterCreation::m_character->m_data.m_preferences.m_raceID;
+#endif
+        if (static_cast<uint8_t>(outfit->m_raceID) != outfitRace || static_cast<uint8_t>(outfit->m_classID) != CCharacterCreation::m_selectedClassID || static_cast<uint8_t>(outfit->m_sexID) != CCharacterCreation::m_character->m_data.m_preferences.m_sexID) {
             continue;
         }
 
@@ -626,6 +755,10 @@ void CCharacterCreation::SetSelectedSex(uint32_t sexID) {
         return;
     }
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    ShowForm(false);    // Not in the original: FlashWOW Two Forms; sexes are switched in the race's own form
+#endif
+
     CharacterPreferences* preferences = CCharacterCreation::m_charPreferences[CCharacterCreation::m_races.m_data[CCharacterCreation::m_raceIndex]][CCharacterCreation::m_character->m_data.m_preferences.m_sexID];
 
     if (!preferences) {
@@ -758,6 +891,11 @@ void CCharacterCreation::ResetCharCustomizeInfo() {
     }
 
     CCharacterCreation::m_existingCharacterIndex = -1;
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: FlashWOW Two Forms; a new character starts in its own form with no other look.
+    s_viewingAlteredForm = false;
+    s_parkedForms.clear();
+#endif
 
     if (CCharacterCreation::m_charCustomizeFrame->m_model) {
         CCharacterCreation::m_charCustomizeFrame->m_model->DetachAllChildrenById(0);
@@ -789,6 +927,10 @@ void CCharacterCreation::SetSelectedRace(uint32_t raceIndex) {
     if (raceIndex >= CCharacterCreation::m_races.Count() || raceIndex == CCharacterCreation::m_raceIndex) {
         return;
     }
+
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    ShowForm(false);    // Not in the original: FlashWOW Two Forms; the race's own look is the one saved for it
+#endif
 
     CharacterPreferences* preferences = CCharacterCreation::m_charPreferences[CCharacterCreation::m_races.m_data[CCharacterCreation::m_raceIndex]][CCharacterCreation::m_character->m_data.m_preferences.m_sexID];
 
@@ -863,6 +1005,9 @@ void CCharacterCreation::SetToExistingCharacter(uint32_t index) {
         return;
     }
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    ShowForm(false);    // Not in the original: FlashWOW Two Forms; paid changes edit the race's own form
+#endif
     CCharacterCreation::m_existingCharacterIndex = index;
 
     ComponentData data;

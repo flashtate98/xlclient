@@ -11,6 +11,7 @@
 #include "WoW/Common/ComponentCore/CharacterComponent.h"
 #if defined(WOWDECOMP_RETAIL_MODELS)
 #include "WoW/Common/ComponentCore/RetailCharacter.h"
+#include "WoW/Source/Object/ObjectClient/AlteredForm.h"
 #include "Engine/Source/ConsoleBase/IConsole.h"
 #include "WoW/Source/Glue/CGlueLoading.h"
 #include <cstdlib>
@@ -567,7 +568,44 @@ static int32_t Script_CycleRetailCustomization(lua_State* L) {
     return 0;
 }
 
+// FlashWOW Two Forms, Cataclysm's names. HasAlteredForm() -> whether the selected race has a second form;
+// IsViewingAlteredForm() -> whether it is shown; SetViewingAlteredForm(bool) shows it or the race's own form.
+// GetAlteredFormNames() -> the own form's and the altered form's names, for the selected sex.
+static int32_t Script_HasAlteredForm(lua_State* L) {
+    lua_pushboolean(L, CharacterCreationHasAlteredForm());
+    return 1;
+}
+
+static int32_t Script_IsViewingAlteredForm(lua_State* L) {
+    lua_pushboolean(L, CharacterCreationViewingAlteredForm());
+    return 1;
+}
+
+static int32_t Script_SetViewingAlteredForm(lua_State* L) {
+    CharacterCreationSetViewingAlteredForm(lua_toboolean(L, 1) != 0);
+    return 0;
+}
+
+static int32_t Script_GetAlteredFormNames(lua_State* L) {
+    const int32_t race = CCharacterCreation::m_raceIndex < CCharacterCreation::m_races.Count() ? CCharacterCreation::m_races.m_data[CCharacterCreation::m_raceIndex] : 0;
+    const ChrRacesRec* own = g_chrRacesDB.GetRecord(race);
+    const ChrRacesRec* altered = g_chrRacesDB.GetRecord(AlteredFormRace(race));
+
+    if (!own || !altered || !CCharacterCreation::m_character) {
+        return 0;
+    }
+
+    const int32_t sex = CCharacterCreation::m_character->m_data.m_preferences.m_sexID;
+    lua_pushstring(L, CGUnit_C::GetDisplayRaceNameFromRecord(own, sex, nullptr));
+    lua_pushstring(L, CGUnit_C::GetDisplayRaceNameFromRecord(altered, sex, nullptr));
+    return 2;
+}
+
 static FrameScript_Method s_retailScriptFunctions[] = {
+    { "HasAlteredForm", &Script_HasAlteredForm },
+    { "IsViewingAlteredForm", &Script_IsViewingAlteredForm },
+    { "SetViewingAlteredForm", &Script_SetViewingAlteredForm },
+    { "GetAlteredFormNames", &Script_GetAlteredFormNames },
     { "GetRetailCustomizationCount", &Script_GetRetailCustomizationCount },
     { "GetRetailCustomizationInfo", &Script_GetRetailCustomizationInfo },
     { "CycleRetailCustomization", &Script_CycleRetailCustomization },

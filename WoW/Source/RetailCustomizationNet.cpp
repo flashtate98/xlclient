@@ -12,6 +12,7 @@
 namespace {
 
 constexpr uint32_t kMagic = 0x434C5452;      // "RTLC"
+constexpr uint32_t kFormMagic = 0x464F5754;  // "TWOF"
 constexpr uint8_t kMaxChoices = 64;
 constexpr uint32_t kSavedFormOption = 0xFFFFFF01;  // not a Retail option: the character's Two Forms form
 
@@ -58,6 +59,21 @@ void RetailCustomizationNetInitialize() {
 
 void RetailCustomizationNetAppendCreate(CDataStore& msg) {
     RetailCustomizationNetAppendChoices(msg, CCharacterCreation::m_character);
+
+    // FlashWOW Two Forms: the altered form's look, when the player edited it.
+    uint8_t look[5] = {};
+    RetailCustomizationExtras extras;
+    if (!CharacterCreationAlteredFormLook(look, extras)) return;
+    if (extras.size() > kMaxChoices) extras.resize(kMaxChoices);
+    Blizzard::Log::Printf(1, "Logs/RetailCharacter.log", "Sending the altered form: %u %u %u %u %u, %u choices\n",
+        look[0], look[1], look[2], look[3], look[4], static_cast<unsigned>(extras.size()));
+    msg.Put(kFormMagic);
+    for (uint8_t value : look) msg.Put(value);
+    msg.Put(static_cast<uint8_t>(extras.size()));
+    for (const auto& choice : extras) {
+        msg.Put(choice.first);
+        msg.Put(choice.second);
+    }
 }
 
 void RetailCustomizationNetAppendChoices(CDataStore& msg, const CCharacterComponent* character) {

@@ -11,6 +11,9 @@ class CCharacterComponent;
 //
 //   CMSG_CHAR_CREATE and CMSG_ALTER_APPEARANCE get a block after the stock fields:
 //       u32 'RTLC' (0x434C5452), u8 count, count x (u32 optionId, u32 choiceId)
+//   CMSG_CHAR_CREATE may then carry a FlashWOW Two Forms block, the altered form's look (AlteredForm.h):
+//       u32 'TWOF' (0x464F5754), u8 skin, face, hair style, hair colour, facial hair, u8 count,
+//       count x (u32 optionId, u32 choiceId)
 //   CMSG_UNUSED5 (0x4B8) asks for characters' choices, in world:
 //       u8 count, count x u64 guid
 //   0x4B9 (CMSG_UNUSED6's number, which the server never receives) answers, and also arrives with
