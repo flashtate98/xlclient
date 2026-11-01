@@ -187,7 +187,8 @@ CM2Model* CGDressUpModelFrame::GetDuplicateUnitCharacterModel(CGUnit_C* unit) {
         return nullptr;
     }
 
-    CreatureDisplayInfoRec* display = g_creatureDisplayInfoDB.GetRecord(unit->m_unit->m_unitFieldNativedisplayid);
+    // Not in the original: FlashWOW Two Forms; in the altered form the native display is that form's.
+    CreatureDisplayInfoRec* display = g_creatureDisplayInfoDB.GetRecord(unit->GetBaseFormDisplayId(unit->m_unit->m_unitFieldNativedisplayid));
 
     if (!display) {
         return nullptr;

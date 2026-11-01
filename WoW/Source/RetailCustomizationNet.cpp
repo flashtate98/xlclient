@@ -34,6 +34,7 @@ int32_t OnChoices(void* param, NETMESSAGE msgId, uint32_t time, CDataStore* msg)
         msg->Get(count);
         if (Remaining(msg) < static_cast<uint32_t>(count) * 8) break;
         choices.clear();
+        s_savedForms.erase(guid);     // only the character list names the form; anything else means none known
         for (uint8_t i = 0; i < count; ++i) {
             uint32_t option = 0, choice = 0;
             msg->Get(option);
