@@ -518,6 +518,9 @@ struct Collection {
     std::string lastDescribed;
 };
 std::unordered_map<CM2Model*, Collection> s_collections;    // by collection model
+// Geoset ranges the worn helmet hides on a body (hair, facial hair, ...), by body model. Collections on
+// that body hide the same ranges: some races keep their hair and beards there (Earthen).
+std::unordered_map<CM2Model*, std::vector<std::pair<uint16_t, uint16_t>>> s_helmetHides;
 
 // Model names compare without regard to case or slash direction (the cache may normalise them).
 std::string NameKey(const char* name) {
@@ -631,6 +634,8 @@ void ApplyCollection(CM2Model* child) {
     }
     child->SetGeometryVisible(0, 65535, 0);
     for (const uint16_t geoset : state.geosets) child->SetGeometryVisible(geoset, geoset, 1);
+    if (const auto hides = s_helmetHides.find(parent); hides != s_helmetHides.end())
+        for (const auto& range : hides->second) child->SetGeometryVisible(range.first, range.second, 0);
 
     // The collection's replaceable textures take the body's of the same type (the body's slots hold
     // the composed hair, skin, blindfold (9), ... textures).
@@ -1600,6 +1605,7 @@ void RetailCharacterFitHelmet(CCharacterComponent* character) {
 void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
     CM2Model* model = character->m_data.m_model;
     if (!model) return;
+    s_helmetHides.erase(model);
     model->SetGeometryVisible(1701, 1799, 0);
     // The stock pass above shows its own eye glow (1703, from the 3.3.5 values); the Retail look's own
     // group 17 piece comes back: the Death Knight eye-glow wisps (1701), which the line above hid too.
@@ -1645,6 +1651,16 @@ void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
     // not read, so the chosen hair and beard showed through. HelmetGeosetVisData slots 0-6 cover geoset
     // groups 0 (hair), 1-3 (facial hair), 7 (ears), 16 and 17, per race bit, as in the stock AddHelm. On
     // Retail bodies group 0's 1-99 are the hairstyles (0 itself is the scalp), so those go.
+    // Every range hidden here is kept for the body's collections (ApplyCollection), which are applied again below.
+    std::vector<std::pair<uint16_t, uint16_t>> hidden;
+    const auto hide = [&](uint32_t from, uint32_t to) {
+        model->SetGeometryVisible(from, to, 0);
+        hidden.emplace_back(static_cast<uint16_t>(from), static_cast<uint16_t>(to));
+    };
+    struct Rebind {
+        CM2Model* model; std::vector<std::pair<uint16_t, uint16_t>>& hidden;
+        ~Rebind() { if (!hidden.empty()) { s_helmetHides[model] = hidden; ApplyCollections(model); } }
+    } rebind{model, hidden};
     const auto& prefs = character->m_data.m_preferences;
     const uint32_t displayId = character->m_itemDisplayID[ITEMSLOT_HEAD];
     // The race whose HelmetGeosetVisData bit applies: a new race's stock race, an NPC copy's stock race (34-43),
@@ -1670,28 +1686,28 @@ void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
         if (!hides(slot) || (slot >= 1 && slot <= 3 && !wholeFace)) continue;
         if (slot == 2 && (retailRace == 35 || retailRace == 22)) continue;    // Vulpera and Worgen ears, below
         const uint32_t group = kGroups[slot];
-        model->SetGeometryVisible(group ? group * 100 : 1, group * 100 + 99, 0);
+        hide(group ? group * 100 : 1, group * 100 + 99);
     }
     // Retail head gear has no 3.3.5 slot: group 37 is the headdress or circlet on every race that has one
     // (Draenei Circlet, Tauren and Dwarf female Headdress). It goes with the hair, under the same helmets.
-    if (hides(0)) model->SetGeometryVisible(3701, 3799, 0);
+    if (hides(0)) hide(3701, 3799);
     // Earrings (group 35) hang from the ears: when a helmet hides the ears (slot 4, group 7) they go too,
     // instead of floating beside the head.
-    if (hides(4)) model->SetGeometryVisible(3501, 3599, 0);
+    if (hides(4)) hide(3501, 3599);
     // Some races keep hair, not facial hair, in group 2: the Tauren long Hair and the Void Elf Tentacles,
     // which hang from the scalp. They go with the hair rather than waiting for a full-face helmet.
     if (hides(0) && (retailRace == 6 || retailRace == 29))
-        model->SetGeometryVisible(201, 299, 0);
+        hide(201, 299);
     // The Lightforged forehead Rune (group 25) is a glowing mesh standing off the brow; 3.3.5 hats, made for
     // the old heads, do not cover it, so it shines through their crowns. It goes with the hair.
-    if (hides(0) && retailRace == 30) model->SetGeometryVisible(2501, 2599, 0);
+    if (hides(0) && retailRace == 30) hide(2501, 2599);
     // The Vulpera and Worgen Ears (group 2) are the ears, not facial hair: they go with the 3.3.5 ears slot only,
     // full-face helmets included, so each helmet's HelmetGeosetVisData ears bit decides whether they stick out.
     if (hides(4) && (retailRace == 35 || retailRace == 22))
-        model->SetGeometryVisible(201, 299, 0);
+        hide(201, 299);
     // The Pandaren Eyebrows (group 34) are tufts standing off the brow, above the head's front; hat brims
     // and helmet rims cut through them, so they go with the hair.
-    if (hides(0) && retailRace >= 24 && retailRace <= 26) model->SetGeometryVisible(3401, 3499, 0);
+    if (hides(0) && retailRace >= 24 && retailRace <= 26) hide(3401, 3499);
 }
 
 #endif
