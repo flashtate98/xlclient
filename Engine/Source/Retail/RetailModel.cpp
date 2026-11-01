@@ -1200,6 +1200,11 @@ bool PrepareSkin(std::vector<uint8_t>& b, const std::vector<uint8_t>& m, std::st
         } else if (shader == 0x4014) {
             shader = 0x8011;
             b[p] = uint8_t(shader); b[p + 1] = uint8_t(shader >> 8);
+        } else if (shader == 0x8021 && U16(b, U32(b, 40) + size_t(i) * 24 + 14) == 2) {
+            // Retail index 33, a two-texture edge-fade combiner (the Haranir fire totem's flame: a fire
+            // gradient times a scrolling flame mask). Without the fade it still needs both layers, or the
+            // mesh draws as a solid sphere of the first texture: use the two-texture Mod_Mod pair.
+            b[p] = 0x12; b[p + 1] = 0x80;
         } else if (shader == 0x8015) {
             // Diffuse_EdgeFade_T1_T2 / Combiners_Mod_Mod: the 3.3.5 client has no edge-fade vertex shader, so draw it without the fade.
             b[p] = 0x12; b[p + 1] = 0x80;
