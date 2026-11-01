@@ -1602,6 +1602,32 @@ void RetailCharacterFitHelmet(CCharacterComponent* character) {
     }
 }
 
+// Whether a 3.3.5 foot texture covers most of the foot: at least half its pixels mostly opaque.
+// Remembered per file.
+bool FootTextureCovers(const char* path) {
+    static std::map<std::string, bool> known;
+    const auto found = known.find(path);
+    if (found != known.end()) return found->second;
+    bool covers = true;    // unreadable: keep the old behaviour (a named foot texture means a shoe)
+    void* bytes = nullptr;
+    uint32_t size = 0;
+    if (SFile::LoadFile(path, &bytes, &size, 0, nullptr)) {
+        const auto* begin = static_cast<const uint8_t*>(bytes);
+        Retail::Image image;
+        std::string error;
+        if (Retail::DecodeBlp(std::vector<uint8_t>(begin, begin + size), image, error) && image.width && image.height) {
+            size_t opaque = 0;
+            const size_t pixels = size_t(image.width) * image.height;
+            for (size_t i = 0; i < pixels; ++i)
+                if (image.rgba[i * 4 + 3] >= 128) ++opaque;
+            covers = opaque * 2 >= pixels;
+        }
+        SFile::Unload(bytes);
+    }
+    known.emplace(path, covers);
+    return covers;
+}
+
 void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
     CM2Model* model = character->m_data.m_model;
     if (!model) return;
@@ -1641,8 +1667,8 @@ void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
         if (hasShoe && character->m_itemDisplayID[ITEMSLOT_BOOTS]) {
             ItemDisplayInfoRec boots;
             // A foot texture only counts when its file is there (as LoadItemComponentTexture finds it: the
-            // unisex _U, else the wearer's sex): some starting boots name one that does not exist, and the
-            // shoe then showed in plain skin.
+            // unisex _U, else the wearer's sex) and it covers most of the foot. Wraps and sandals paint a
+            // mostly see-through foot (the rogue's Thug Boots), and the shoe then showed in plain skin.
             if (g_itemDisplayInfoDB.GetRecord(character->m_itemDisplayID[ITEMSLOT_BOOTS], &boots) &&
                 boots.m_texture[SECTION_FOOT] && *boots.m_texture[SECTION_FOOT]) {
                 const char* sexes[] = {"U", character->m_data.m_preferences.m_sexID ? "F" : "M"};
@@ -1650,7 +1676,9 @@ void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
                     char path[260];
                     std::snprintf(path, sizeof(path), "Item\\TextureComponents\\FootTexture\\%s_%s.blp",
                         boots.m_texture[SECTION_FOOT], sex);
-                    if (SFile::FileExists(path)) { paintsFoot = true; break; }
+                    if (!SFile::FileExists(path)) continue;
+                    paintsFoot = FootTextureCovers(path);
+                    break;
                 }
             }
         }
