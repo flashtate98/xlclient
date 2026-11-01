@@ -8,6 +8,7 @@
 #include "WoW/Source/WorldClient/Types.h"
 #include "WoW/Source/WorldClient/DayNight.h"
 #include "Engine/Source/Services/AsyncFile.h"
+#include "SXC/Log.h"  // SXC: retail shaders mapped to ours
 #include "Engine/Source/BlizzardCore/SFile2-Core.h"
 #include "WoW/Source/WorldClient/Map.h"
 #include "WoW/Source/WorldClient/MapObj.h"
@@ -171,6 +172,34 @@ void CMapObj::CreateMaterial(uint8_t texture) {
 
     if (!CShaderEffect::s_enableShaders) {
         texture2 = "";
+    }
+
+    // SXC: retail WMOs (Cataclysm on) use shaders past 3.3.5's seven (CMapObj::s_unifiedShaders), which the draw
+    // indexed unchecked: a garbage effect and a crash (Seyri, 2026-10-31, the Abyssal Breach). Each takes the
+    // nearest of ours: two-layer ones the composite (6), env-metal ones env-metal (5), the rest diffuse.
+    if (material.m_shader >= 7) {
+        static const uint8_t kRetail[] = {
+            5,  // 7 TwoLayerEnvMetal
+            6,  // 8 TwoLayerTerrain
+            0,  // 9 DiffuseEmissive
+            0,  // 10 waterWindow
+            5,  // 11 MaskedEnvMetal
+            5,  // 12 EnvMetalEmissive
+            6,  // 13 TwoLayerDiffuseOpaque
+            0,  // 14 submarineWindow
+            6,  // 15 TwoLayerDiffuseEmissive
+            0,  // 16 DiffuseTerrain
+            5,  // 17 AdditiveMaskedEnvMetal
+            6,  // 18 TwoLayerDiffuseMod2x
+            6,  // 19 TwoLayerDiffuseMod2xNA
+            6,  // 20 TwoLayerDiffuseAlpha
+        };
+        const uint32_t retail = material.m_shader - 7;
+        const uint32_t ours = retail < sizeof kRetail ? kRetail[retail] : 0;
+        char key[300];
+        SStrPrintf(key, sizeof key, "wmo-shader %s %u", this->m_wmoName, material.m_shader);
+        SXC::LogOnce(key, "WMO %s: material shader %u (retail) drawn as %u; we don't have it yet", this->m_wmoName, material.m_shader, ours);
+        material.m_shader = ours;
     }
 
     switch (material.m_shader) {
