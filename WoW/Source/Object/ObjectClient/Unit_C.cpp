@@ -149,6 +149,7 @@
 #include "WarcraftXL/Seams.h"
 #include "SXC/Cover/Trails.h"  // SXC: footsteps carve the covers
 #include "SXC/Water/Ride.h"    // SXC: swimmers ride the waves
+#include "SXC/Water/Ripples.h" // SXC: units ripple our water
 
 static const float UNDERWATER_BUBBLE_THRESHOLD = 5.0f;
 static const float MOUSE_LOOK_SEND_FACING_DELTA = 0.1f;
@@ -2012,6 +2013,12 @@ void CGUnit_C::CreateRipple(uint32_t a2) {
     float depth = liquidHeight - this->GetPosition().z;
 
     if (!(depth < maxDepth)) {
+        return;
+    }
+
+    // SXC: our ripple field follows the unit's body through the surface every frame (SXC/Water/Ripples.h):
+    // no ripple events of the client's then (entering the water still makes one).
+    if (!a2 && SXC::Water::UnitInWater(this, liquidHeight)) {
         return;
     }
 

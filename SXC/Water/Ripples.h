@@ -7,6 +7,7 @@
 #include <cstdint>
 
 class C3Vector;
+class CGUnit_C;
 
 namespace SXC::Water {
     struct Waves;
@@ -15,6 +16,12 @@ namespace SXC::Water {
     // chose them; `moving` the client's directional ripple, else a unit standing in the water). True: ours took
     // it (the stock ring isn't made).
     bool RippleFromUnit(const C3Vector& position, float size, float strength, bool moving);
+
+    // CGUnit_C::CreateRipple, every frame a unit is in the water (not deeper than twice its height), with the
+    // surface's height there: its body parts (SXC/Bones) ripple the water where they move through the
+    // surface. True: ours took the unit (the client makes no ripple events for it then); false when ripples
+    // by body part are off or its body isn't known yet.
+    bool UnitInWater(CGUnit_C* unit, float surface);
 
     // FillWaves: the settings; with `frame` (SXC::Water::Frame, once a frame: the device steps the field with
     // that call's input) also this frame's stamps (the units', the rain's) and the time.

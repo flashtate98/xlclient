@@ -13,12 +13,9 @@ class CM2Model;
 // 1e6 untouched) and when, the rim's strength (0..1) and when. The terrain's tessellation reads them
 // and lets the ceiling rise back over time (Shaders/TerrainCover.glsl), so nothing here relaxes cells.
 //
-// Feet are found from the units' own footstep events (the client's footprints use them). An event's own
-// bone is a marker (player models: one per animation under the root, where a step lands; it doesn't move
-// with the leg), so at a unit's first step with a foot the skeleton's joint nearest the landing point is
-// taken as that foot and followed every frame from then on (its height above the sole at that step taken
-// off); the event itself then only tells when the foot is down. Where the foot carves: sxc_cover.h's
-// SXC_COVER_CARVE_*.
+// The feet and body parts are the units' bodies (SXC/Bones/Bodies.h: feet from their footstep events, body
+// parts from attachment points), followed every frame; a footstep then only tells when the foot is down.
+// Where the foot carves: sxc_cover.h's SXC_COVER_CARVE_*.
 namespace SXC::Cover::Trails {
     constexpr float kUntouched = 1.0e6f;
 

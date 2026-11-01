@@ -12,7 +12,7 @@ namespace gxvk::vk::ripples
 {
     constexpr uint32_t kSize   = 512;     ///< cells per side
     constexpr float    kCell   = 0.125f;  ///< yd
-    constexpr uint32_t kStamps = 64;      ///< per frame (RippleStep.comp's kStamps)
+    constexpr uint32_t kStamps = 256;     ///< per frame (RippleStep.comp's kStamps)
 
     struct Input
     {

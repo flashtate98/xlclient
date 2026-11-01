@@ -28,7 +28,7 @@ namespace
 
     constexpr uint32_t kSlots      = frame::kFramesInFlight;
     constexpr uint32_t kDispatches = 6;      // a clear and up to four steps per frame, one spare
-    constexpr uint32_t kRegion     = 1280;   // bytes per dispatch's parameters (a multiple of 256)
+    constexpr uint32_t kRegion     = 4352;   // bytes per dispatch's parameters (a multiple of 256)
     constexpr float    kStepRate   = 60.0f;  // Hz
 
     /// Shaders/RippleStep.comp's RippleStep (std140).
