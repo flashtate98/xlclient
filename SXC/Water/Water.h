@@ -64,6 +64,15 @@ namespace SXC::Water {
         float queryCamera[4] = {};                       // the camera's world position, the water's clock
         float queryLook[4] = { 0.0f, 1.0f, 0.0f, 1.0f };  // the movement row without a look grid
         void (*querySink)(uint64_t tag, const float (*results)[4], uint32_t count) = nullptr;
+        // The ripple field (SXC/Water/Ripples.h -> Vulkan/Ripples): this frame's stamps (world x, y, radius, depth),
+        // the time since the last frame, how fast ripples spread (yd / s) and fade (s to a tenth), x their slopes.
+        bool ripplesOn = false;
+        float rippleElapsed = 0.0f;
+        float rippleSpeed = 1.5f;
+        float rippleLife = 2.0f;
+        float rippleStrength = 1.0f;
+        uint32_t rippleStamps = 0;
+        const float (*rippleStamp)[4] = nullptr;
     };
 
     // The device's copy of the scene behind the water and its waves, once per frame (later calls the same

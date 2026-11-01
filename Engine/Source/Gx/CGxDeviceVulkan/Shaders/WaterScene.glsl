@@ -20,4 +20,6 @@ layout(std140, set = 2, binding = 2) uniform WaterScene {
     vec4 shoreLook;   // the shore's foam, wave height (yd), wavelength (yd), how far out the shore waves begin (yd)
     vec4 shoreWind;   // the waves' direction (unit x, y), the wind speed (yd / s), 0
     vec4 underGlow;   // the underwater medium's glow (rgb; SXC/Water/Medium.h), w 1 while it draws
+    vec4 rippleGrid;  // the ripple field (Vulkan/Ripples.cpp): its window's first cell x, y, cells per side, the cell (yd)
+    vec4 rippleLook;  // its current layer, 1 when stepped this frame, the strength, 0
 } scene;

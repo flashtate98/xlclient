@@ -86,6 +86,7 @@ OUTPUTS = [
         ("WaterFft.comp", "kWaterFftColumnsComp", ["COLUMNS=1"]),
         ("WaterDerive.comp", "kWaterDeriveComp"),
         ("WaterQuery.comp", "kWaterQueryComp"),  # the surface under each swimmer (SXC/Water/Ride.cpp)
+        ("RippleStep.comp", "kRippleStepComp"),  # the ripple field (Vulkan/Ripples.cpp)
     ]),
 ]
 

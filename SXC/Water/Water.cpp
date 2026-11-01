@@ -6,6 +6,7 @@
 #include "SXC/Water/Water.h"
 #include "SXC/Water/Medium.h"
 #include "SXC/Water/Ride.h"
+#include "SXC/Water/Ripples.h"
 #include "SXC/Water/Shore.h"
 #include "SXC/Water/Surface.h"
 
@@ -233,6 +234,7 @@ namespace SXC::Water {
 
         SXC::Water::Waves waves;
         FillWaves(waves, cameraPos);
+        SXC::Water::FillRipples(waves, cameraPos, true);   // the frame's stamps: the device steps the field with this call
         waves.prepareOnly = true;
         s_capture(waves, nullptr);
     }
@@ -608,6 +610,7 @@ namespace SXC::Water {
         waves.queryCamera[3] = waves.time;
         std::memcpy(waves.queryLook, &packed[16], sizeof waves.queryLook);
         SXC::Water::RideAsk(waves);
+        SXC::Water::FillRipples(waves, cameraPos, false);
 
         return sea;
     }
@@ -859,6 +862,10 @@ namespace SXC::Water {
             char ride[192];
             SXC::Water::RideStatus(ride, sizeof ride);
             ImGui::TextWrapped("Riding the waves: %s", ride);
+        }
+
+        if (ImGui::CollapsingHeader("Ripples", ImGuiTreeNodeFlags_DefaultOpen)) {
+            SXC::Water::DrawRipplePanel();
         }
 
         if (ImGui::Button("Reset the test values")) {

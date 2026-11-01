@@ -6,6 +6,7 @@
 #pragma once
 
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Vk.hpp"
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Ripples.hpp"
 
 #include <cstdint>
 
@@ -128,6 +129,8 @@ namespace gxvk::vk::water
         LookInput  looks;
         ShoreInput shore;
         QueryInput query;
+        ripples::Input ripples;            ///< the ripple field's step this frame (Vulkan/Ripples.hpp)
+        float      rippleStrength = 1.0f;  ///< x the field's slopes on the water
         bool       prepareOnly = false;   ///< the frame's water work without the scene copy (no water drawn yet)
     };
 

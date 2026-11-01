@@ -86,6 +86,7 @@
 #include "Engine/Source/ConsoleBase/ConsoleVar.h"
 #include "WoW/Source/Game/GameClient/ProjectTex.h"
 #include "WoW/Source/DB/Rec/TerrainTypeRec.h"
+#include "SXC/Water/Ripples.h"  // SXC: our water ripples itself
 
 static const int32_t MAXALPHA = 127;
 static const float FOOTPRINT_FADEOUT_RATE = 0.00016666666f;
@@ -5978,6 +5979,11 @@ void CMap::Unload() {
 // VERIFY: 6b4c3b7f auto
 // OFFSET: 0x0079D460
 void CMap::CreateWaterRipple(const C3Vector& pos, float a2, float a3, float a4, float a5, float a6, int32_t a7, int32_t a8) {
+    // SXC: our water ripples itself (SXC/Water/Ripples.h): the unit's ripple is a stamp in our field, no ring.
+    if (SXC::Water::RippleFromUnit(pos, a3, a4, a7 != 0)) {
+        return;
+    }
+
     if (CWorld::s_waterRipples && !World::s_waterLOD) {
         float alpha = 1.0f;
 

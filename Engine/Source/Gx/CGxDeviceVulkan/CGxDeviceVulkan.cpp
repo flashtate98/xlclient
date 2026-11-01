@@ -704,6 +704,15 @@ bool CGxDeviceVulkan::SxcWaterCapture(const SXC::Water::Waves& waves, bool* firs
     std::memcpy(in.query.camera, waves.queryCamera, sizeof in.query.camera);
     std::memcpy(in.query.look, waves.queryLook, sizeof in.query.look);
     in.query.sink = waves.querySink;
+    in.ripples.on = waves.ripplesOn;   // SXC: the ripple field
+    in.ripples.camera[0] = waves.queryCamera[0];
+    in.ripples.camera[1] = waves.queryCamera[1];
+    in.ripples.elapsed = waves.rippleElapsed;
+    in.ripples.speed = waves.rippleSpeed;
+    in.ripples.life = waves.rippleLife;
+    in.ripples.stamps = waves.rippleStamp && waves.rippleStamps < gxvk::vk::ripples::kStamps ? waves.rippleStamps : (waves.rippleStamp ? gxvk::vk::ripples::kStamps : 0);
+    if (in.ripples.stamps) std::memcpy(in.ripples.stamp, waves.rippleStamp, in.ripples.stamps * sizeof in.ripples.stamp[0]);
+    in.rippleStrength = waves.rippleStrength;
     return gxvk::vk::water::Capture(in, first);
 }
 
@@ -760,6 +769,7 @@ void CGxDeviceVulkan::IDestroyVulkan() {
     gxvk::vk::grass::Shutdown();
     gxvk::vk::water::Shutdown();  // SXC:
     gxvk::vk::medium::Shutdown();  // SXC:
+    gxvk::vk::ripples::Shutdown();  // SXC:
     frame::Destroy();
     pipelines::Shutdown();
     present::Shutdown();

@@ -52,6 +52,7 @@ layout(set = 2, binding = 1) uniform sampler2D sceneW;
 // folds), the height.
 layout(set = 2, binding = 3) uniform sampler2DArray waveSlopes;
 layout(set = 2, binding = 4) uniform sampler2DArray waveDisp;   // per cascade: dx, dy, height (yd): how the surface moves
+layout(set = 2, binding = 7) uniform sampler2DArray rippleField;  // the ripple field's heights (yd), three layers in turn
 #include "WaterMove.glsl"
 
 // The waves at a world point: the slopes summed over the cascades (the finer ones fading with distance),
@@ -291,6 +292,34 @@ float RiseHere(vec3 p)
     return SurfaceMove(p, near, cell, depthY, LookMoveAt(p, vLook[4]), regs.p[5].xyz, regs.p[6].x, ease).z;
 }
 
+// The ripple field's slope at a world point (units wading, raindrops: Vulkan/Ripples.cpp), fading out towards
+// its window's edge and with the distance from the camera; zero when it wasn't stepped this frame.
+vec2 RippleFieldSlope(vec2 xy, float distance)
+{
+    if (scene.rippleLook.y < 0.5)
+    {
+        return vec2(0.0);
+    }
+
+    float cell = scene.rippleGrid.w, n = scene.rippleGrid.z;
+    vec2 c = xy / cell;
+    vec2 centre = scene.rippleGrid.xy + 0.5 * n;
+    vec2 off = abs(c - centre) / (0.5 * n);
+    float fade = (1.0 - smoothstep(0.75, 0.95, max(off.x, off.y))) * (1.0 - smoothstep(20.0, 30.0, distance));
+
+    if (fade <= 0.0)
+    {
+        return vec2(0.0);
+    }
+
+    float layer = scene.rippleLook.x;
+    vec2 uv = c / n;   // cell i's texel (i mod n) has its centre at i + 0.5; repeating, as the window wraps
+    float du = 1.0 / n;
+    float hx = texture(rippleField, vec3(uv + vec2(du, 0.0), layer)).r - texture(rippleField, vec3(uv - vec2(du, 0.0), layer)).r;
+    float hy = texture(rippleField, vec3(uv + vec2(0.0, du), layer)).r - texture(rippleField, vec3(uv - vec2(0.0, du), layer)).r;
+    return vec2(hx, hy) / (2.0 * cell) * scene.rippleLook.z * fade;
+}
+
 void main()
 {
     vec3 world = LightsViewToWorld(vView.xyz);
@@ -384,6 +413,7 @@ void main()
         slope -= shore.zw * dh * shoreWeight;
         shoreCrest = pow(rise, 6.0) * smoothstep(0.02, 0.1, amp);
     }
+    slope += RippleFieldSlope(world.xy, distance);
     vec3 N = normalize(vec3(-slope, 1.0));
 
     if (below)
