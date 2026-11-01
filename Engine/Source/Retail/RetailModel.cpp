@@ -870,6 +870,16 @@ bool PrepareModel(const std::vector<uint8_t>& bytes, std::vector<uint8_t>& prepa
             b[m] &= 0x1f; b[m + 1] = 0;
         }
     }
+    // Retail ribbons may layer several textures and scroll them with a texture transform (byte 175; the
+    // Earthen totems' swirls). The legacy ribbon draws one texture without a transform: keep the first.
+    if (Array(b, 0x120, 176)) {
+        for (uint32_t i = 0; i < U32(b, 0x120); ++i) {
+            const size_t p = U32(b, 0x124) + size_t(i) * 176;
+            if (U32(b, p + 20) > 1) Put(b, p + 20, uint32_t(1));
+            if (U32(b, p + 28) > 1) Put(b, p + 28, uint32_t(1));
+            b[p + 175] = 0;
+        }
+    }
     // Some Retail models point their texture-transform lookup at transforms they do not have (the BfA druid
     // forms: an entry of 0 with no transforms at all). Retail draws those batches unanimated; the legacy
     // renderer reads 0xFFFF as "no transform", so such entries become that instead of failing the model.
