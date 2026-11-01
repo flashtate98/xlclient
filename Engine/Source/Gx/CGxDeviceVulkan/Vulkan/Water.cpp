@@ -52,7 +52,7 @@ namespace
         float shoreWind[4];    ///< the waves' direction (unit x, y), the wind speed (yd / s), 0
         float underGlow[4];    ///< the underwater medium's glow (rgb), w 1 while it draws
         float rippleGrid[4];   ///< the ripple field's window: first cell x, y, cells per side, the cell (yd)
-        float rippleLook[4];   ///< its current layer, 1 when stepped this frame, the strength, 0
+        float rippleLook[4];   ///< its current layer, 1 when stepped this frame, the strength, how far it shows (yd)
     };
 
     // The waves (Shaders/WaterWaves.glsl): N x N per cascade, three cascades.
@@ -925,6 +925,7 @@ namespace
         std::memcpy(p.underGlow, in.shore.underGlow, sizeof p.underGlow);
         gxvk::vk::ripples::Look(p.rippleGrid, p.rippleLook);
         p.rippleLook[2] = in.rippleStrength;
+        p.rippleLook[3] = in.rippleDistance;
         p.shoreWind[0] = in.waves.windX;
         p.shoreWind[1] = in.waves.windY;
         p.shoreWind[2] = in.waves.speed;

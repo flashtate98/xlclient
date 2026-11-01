@@ -1,5 +1,5 @@
 // SXC: the ripple field (kb: water-contact). A height field of the water's small ripples around the camera
-// (512 x 512 cells of 0.125 yd, world aligned, toroidal), stepped on the GPU by the wave equation at a fixed
+// (1024 x 1024 cells of 0.125 yd, world aligned, toroidal), stepped on the GPU by the wave equation at a fixed
 // 60 Hz in the frame's pre-pass, stamped by what touches the water (units wading and swimming, raindrops);
 // our water's pixels read its slopes (Water.frag, set 2 binding 7). Not in the original.
 #pragma once
@@ -10,7 +10,7 @@
 
 namespace gxvk::vk::ripples
 {
-    constexpr uint32_t kSize   = 512;     ///< cells per side
+    constexpr uint32_t kSize   = 1024;    ///< cells per side (128 yd)
     constexpr float    kCell   = 0.125f;  ///< yd
     constexpr uint32_t kStamps = 256;     ///< per frame (RippleStep.comp's kStamps)
 

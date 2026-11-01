@@ -22,9 +22,9 @@
 
 namespace {
     constexpr uint32_t kStamps = 256;     // gxvk::vk::ripples::kStamps
-    constexpr float kRainReach = 25.0f;   // yd around the camera the rain stamps
+    constexpr float kRainDensityReach = 25.0f;   // yd: RainRipplesPerSecond falls within this; farther the same per yd²
     constexpr float kWeatherKnee = 0.25f; // the engine's dead zone (SXC/World)
-    constexpr float kBodyReach = 40.0f;   // yd from the camera: units farther ripple nothing (the field shows 30)
+    constexpr float kFieldReach = 60.0f;  // yd from the camera the field holds (128 yd across, faded at its edge)
     constexpr float kBodyStep = 0.06f;    // yd a body part moves through the surface between its stamps
     constexpr uint32_t kForget = 600;     // frames out of the water before a unit's traces are forgotten
 
@@ -74,6 +74,12 @@ namespace {
         return s_setting;
     }
 
+    SXC::Settings::Float& Distance() {
+        static SXC::Settings::Float s_setting("Liquid", "RippleDistance", 45.0f, 10.0f, 60.0f, "Ripple distance",
+                                              "yd from the camera the ripples show (fading over the last 30%); units, rain and impacts beyond make none.");
+        return s_setting;
+    }
+
     SXC::Settings::Float& Standing() {
         static SXC::Settings::Float s_setting("Liquid", "RippleStanding", 0.35f, 0.0f, 1.0f, "Standing ripples",
                                               "x a unit's ripple while it stands or treads water (moving: 1).");
@@ -97,6 +103,7 @@ namespace {
     uint32_t s_shownUnits = 0, s_shownRain = 0, s_dropped = 0;   // counting this second
     uint32_t s_secondUnits = 0, s_secondRain = 0, s_secondDropped = 0;   // the last second's
     float s_rainCarry = 0.0f;
+    uint32_t s_shownImpacts = 0, s_secondImpacts = 0;   // mods' stamps (sxc.water: impact emitters)
     uint32_t s_shownBody = 0, s_secondBody = 0, s_secondSwimmers = 0, s_swimmersShown = 0;   // swimmers: unit-frames in the water
 
     // Units in the water this frame (CGUnit_C::CreateRipple): the surface's height at each.
@@ -172,7 +179,9 @@ namespace {
                 t.model = body->model;
             }
 
-            if (cx * cx + cy * cy > kBodyReach * kBodyReach || !SXC::Bones::Current(body->model)) {
+            const float reach = Distance().Get();
+
+            if (cx * cx + cy * cy > reach * reach || !SXC::Bones::Current(body->model)) {
                 std::fill(std::begin(t.have), std::end(t.have), false);
                 continue;
             }
@@ -241,6 +250,19 @@ namespace {
 }
 
 namespace SXC::Water {
+    bool RippleAt(float x, float y, float radius, float depth) {
+        if (!RipplesOn().Get() || !Active() || !std::isfinite(x) || !std::isfinite(y)) {
+            return false;
+        }
+
+        if (!Push(x, y, std::clamp(radius, 0.1f, 4.0f), std::clamp(depth, -0.5f, 0.5f))) {
+            return false;
+        }
+
+        s_shownImpacts++;
+        return true;
+    }
+
     bool RippleFromUnit(const C3Vector& position, float size, float strength, bool moving) {
         if (!RipplesOn().Get() || !Active()) {
             return false;
@@ -285,6 +307,7 @@ namespace SXC::Water {
         waves.rippleSpeed = Speed().Get();
         waves.rippleLife = Life().Get();
         waves.rippleStrength = Strength().Get();
+        waves.rippleDistance = std::min(Distance().Get(), kFieldReach);
 
         if (!frame) {
             return;
@@ -308,11 +331,14 @@ namespace SXC::Water {
         // The rain's drops, after the units' (they come first): small, but two cells or more across, or the
         // field can't hold them (a one-cell dip is smoothed away by the step and the slope's sampling).
         const float rain = RainOn().Get() ? RainNow() : 0.0f;
-        s_rainCarry += rain * RainDrops().Get() * (dt > 0.0f && dt < 0.5f ? dt : 0.0f);
+        // As many a yd² as RainRipplesPerSecond within 25 yd, out to where the ripples show.
+        const float rainReach = waves.rippleDistance;
+        const float area = (rainReach * rainReach) / (kRainDensityReach * kRainDensityReach);
+        s_rainCarry += rain * RainDrops().Get() * area * (dt > 0.0f && dt < 0.5f ? dt : 0.0f);
 
         while (s_rainCarry >= 1.0f) {
             s_rainCarry -= 1.0f;
-            const float angle = Random() * 6.2831853f, reach = std::sqrt(Random()) * kRainReach;
+            const float angle = Random() * 6.2831853f, reach = std::sqrt(Random()) * rainReach;
 
             if (!Push(camera.x + std::cos(angle) * reach, camera.y + std::sin(angle) * reach, 0.2f + 0.1f * Random(), RainDepth().Get() * (0.6f + 0.8f * Random()))) {
                 s_rainCarry = 0.0f;
@@ -335,6 +361,8 @@ namespace SXC::Water {
             s_secondRain = s_shownRain;
             s_secondDropped = s_dropped;
             s_secondBody = s_shownBody;
+            s_secondImpacts = s_shownImpacts;
+            s_shownImpacts = 0;
             s_shownUnits = s_shownRain = s_dropped = s_shownBody = 0;
             s_swimmersShown = s_secondSwimmers;
             s_secondSwimmers = 0;
@@ -376,6 +404,12 @@ namespace SXC::Water {
             Speed().Set(speed);
         }
 
+        float distance = Distance().Get();
+
+        if (ImGui::SliderFloat("Ripple distance (yd)", &distance, 10.0f, 60.0f, "%.0f")) {
+            Distance().Set(distance);
+        }
+
         if (ImGui::SliderFloat("Ripple life (s)", &life, 0.3f, 15.0f)) {
             Life().Set(life);
         }
@@ -400,7 +434,7 @@ namespace SXC::Water {
             RainDrops().Set(drops);
         }
 
-        ImGui::TextDisabled("rain now %.2f; stamps / s: body parts %u (unit-frames in the water %u), unit events %u, rain %u, dropped (over %u a frame) %u",
-                            RainNow(), s_secondBody, s_swimmersShown, s_secondUnits, s_secondRain, kStamps, s_secondDropped);
+        ImGui::TextDisabled("rain now %.2f; stamps / s: body parts %u (unit-frames in the water %u), unit events %u, rain %u, impacts %u, dropped (over %u a frame) %u",
+                            RainNow(), s_secondBody, s_swimmersShown, s_secondUnits, s_secondRain, s_secondImpacts, kStamps, s_secondDropped);
     }
 }

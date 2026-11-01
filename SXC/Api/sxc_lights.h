@@ -77,7 +77,7 @@ typedef struct sxc_lights_assignment
     float       offset[3];    ///< yd from the attachment, in the model's space (scaled with it)
     float       direction[3]; ///< spot: where the cone points; an emitter's direction (a draft); in the model's space
     uint32_t    light_id;     ///< a kind's id; 0 = no light (with the flag: only suppresses)
-    uint32_t    flags;        ///< SXC_LIGHTS_SUPPRESS_MODEL_LIGHTS
+    uint32_t    flags;        ///< SXC_LIGHTS_SUPPRESS_MODEL_LIGHTS, SXC_LIGHTS_TO_*, SXC_LIGHTS_*_UNDER_WATER
     uint32_t    id;           ///< the row's ID (the log names it)
     uint32_t    emitter_id;   ///< the mod's emitter (heat, moisture, a draft) placed here too; 0 = none. The client only places it (emitters())
 } sxc_lights_assignment;
@@ -92,6 +92,8 @@ typedef struct sxc_lights_emitter
     float       scale;         ///< the model's scale (x the emitter's radius)
     float       distance;      ///< from the camera
     const char* model_path;    ///< valid until the next frame
+    uint32_t    surface;       ///< SXC_LIGHTS_SURFACE_*: the surface its row moved it to (SXC_LIGHTS_TO_*)
+    uint32_t    liquid_type;   ///< on a water surface: its LiquidType
 } sxc_lights_emitter;
 
 #define SXC_LIGHTS_POINT 0u
@@ -109,6 +111,19 @@ typedef struct sxc_lights_emitter
 #define SXC_LIGHTS_ATTACH_EMITTER   3u ///< a particle emitter by its index
 
 #define SXC_LIGHTS_SUPPRESS_MODEL_LIGHTS 0x1u ///< the model's own lights are left out
+/// The row's light and emitter move along its direction (from where the attachment puts them, up to 60
+/// yd) to the first surface they meet: the water's, the ground's (terrain and WMOs; models don't count),
+/// or with both the nearer one; a drip's mark on the floor below, bubbles rising to the surface. Where
+/// there is none in reach, nothing is placed. Kept while the source holds still.
+#define SXC_LIGHTS_TO_WATER              0x2u
+#define SXC_LIGHTS_TO_GROUND             0x4u
+#define SXC_LIGHTS_OFF_UNDER_WATER       0x8u  ///< not placed while below a water surface (a torch)
+#define SXC_LIGHTS_ONLY_UNDER_WATER      0x10u ///< placed only while below one (a glow of the sea floor)
+
+/// sxc_lights_emitter::surface
+#define SXC_LIGHTS_SURFACE_NONE   0u
+#define SXC_LIGHTS_SURFACE_WATER  1u
+#define SXC_LIGHTS_SURFACE_GROUND 2u
 
 typedef struct sxc_lights_stats
 {

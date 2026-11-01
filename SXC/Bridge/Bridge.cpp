@@ -19,6 +19,7 @@
 #include "SXC/Api/sxc_lights.h"
 #include "SXC/Api/sxc_grass.h"
 #include "SXC/Api/sxc_profiler.h"
+#include "SXC/Api/sxc_water.h"
 #include "wxl/mod.h"
 
 namespace {
@@ -40,6 +41,7 @@ namespace {
         { SXC_LIGHTS_SERVICE, SXC_LIGHTS_SERVICE_VERSION },
         { SXC_GRASS_SERVICE, SXC_GRASS_SERVICE_VERSION },
         { SXC_PROFILER_SERVICE, SXC_PROFILER_SERVICE_VERSION },
+        { SXC_WATER_SERVICE, SXC_WATER_SERVICE_VERSION },
     };
 
     void Log(const wxl_host* host, wxl_log_level level, const std::string& line) {

@@ -18,7 +18,9 @@
 #include <utility>
 #include <vector>
 #include "SXC/Api/sxc_lights.h"
+#include "SXC/Api/sxc_world.h"
 #include "SXC/Log.h"
+#include "SXC/Water/Liquid.h"
 #include "SXC/Profiler/Profiler.h"
 #include "Engine/Source/Model2/M2Data.h"
 #include "Engine/Source/Model2/M2Model.h"
@@ -211,6 +213,136 @@ namespace {
         return Finite(out);
     }
 
+    // Where a row's source lands with SXC_LIGHTS_TO_* and whether it is below water, per model and row: kept
+    // while the source holds still (found again when it moves or turns, and every few seconds, as the map
+    // streams in), like the lights' shadows.
+    constexpr float kSurfaceReach = 60.0f;  // yd along the direction
+    constexpr float kSurfaceGap = 0.1f;     // yd short of the surface (a light on it lights it)
+    constexpr float kSurfaceMarch = 0.5f;   // yd between the water probes
+    constexpr uint32_t kSurfaceRecheckMs = 5000;
+    constexpr uint32_t kSurfaceForgetMs = 10000;
+
+    struct Landing {
+        C3Vector from, dir;       // the source as it was found for
+        uint32_t flags = 0;
+        bool placed = false;      // a surface in reach (or no TO_* flag)
+        C3Vector at;
+        uint32_t surface = SXC_LIGHTS_SURFACE_NONE, liquid = 0;
+        bool under = false;
+        uint32_t foundMs = 0, usedMs = 0;
+    };
+
+    std::unordered_map<uint64_t, Landing> s_landings;
+    uint32_t s_landingSweepMs = 0;
+
+    bool UnderWater(const C3Vector& p, float* height = nullptr, uint32_t* type = nullptr) {
+        float h = 0.0f;
+        uint32_t t = 0;
+
+        if (!SXC::Water::LiquidAt(p, h, t)) {
+            return false;
+        }
+
+        if (height) *height = h;
+        if (type) *type = t;
+        return p.z < h;
+    }
+
+    // How far along `dir` the line from `from` crosses a water surface (either way: a drip falling in, a
+    // bubble rising out), probing the liquid every half yard.
+    bool WaterAlong(const C3Vector& from, const C3Vector& dir, float& distance, uint32_t& liquid) {
+        const bool startUnder = UnderWater(from);
+
+        for (float s = kSurfaceMarch; s <= kSurfaceReach; s += kSurfaceMarch) {
+            const C3Vector p = from + dir * s;
+            float h = 0.0f;
+            uint32_t t = 0;
+
+            if (!SXC::Water::LiquidAt(p, h, t) || (p.z < h) == startUnder) {
+                continue;
+            }
+
+            // Between the last probe and this one: where the line meets the surface's height.
+            const float back = std::fabs(dir.z) > 0.05f ? (p.z - h) / dir.z : 0.0f;
+            distance = std::clamp(s - back, s - kSurfaceMarch, s);
+            liquid = t;
+            return true;
+        }
+
+        return false;
+    }
+
+    bool GroundAlong(const C3Vector& from, const C3Vector& dir, float& distance) {
+        // A little ahead: a source on a ceiling starts just inside it.
+        const C3Vector start = from + dir * 0.05f, end = from + dir * kSurfaceReach;
+        C3Vector hit;
+        float fraction = 1.0f;
+
+        if (!::World::Intersect(start, end, &hit, &fraction, SXC_TRACE_TERRAIN_AND_WMO, nullptr)) {
+            return false;
+        }
+
+        distance = 0.05f + fraction * (kSurfaceReach - 0.05f);
+        return true;
+    }
+
+    const Landing& LandingFor(uint64_t key, const C3Vector& from, const C3Vector& dir, uint32_t flags) {
+        const uint32_t now = OsGetAsyncTimeMs();
+        Landing& l = s_landings[key];
+        const C3Vector moved = from - l.from;
+        const bool still = l.foundMs && l.flags == flags && moved.x * moved.x + moved.y * moved.y + moved.z * moved.z < 0.05f * 0.05f &&
+                           dir.x * l.dir.x + dir.y * l.dir.y + dir.z * l.dir.z > 0.9995f && now - l.foundMs < kSurfaceRecheckMs;
+        l.usedMs = now;
+
+        if (still) {
+            return l;
+        }
+
+        l.from = from;
+        l.dir = dir;
+        l.flags = flags;
+        l.foundMs = now ? now : 1;
+        l.placed = true;
+        l.at = from;
+        l.surface = SXC_LIGHTS_SURFACE_NONE;
+        l.liquid = 0;
+
+        if (flags & (SXC_LIGHTS_TO_WATER | SXC_LIGHTS_TO_GROUND)) {
+            float water = 1e9f, ground = 1e9f;
+            uint32_t liquid = 0;
+            const bool toWater = (flags & SXC_LIGHTS_TO_WATER) && WaterAlong(from, dir, water, liquid);
+            const bool toGround = (flags & SXC_LIGHTS_TO_GROUND) && GroundAlong(from, dir, ground);
+            l.placed = toWater || toGround;
+
+            if (toWater && water <= ground) {
+                l.at = from + dir * std::fmax(water - kSurfaceGap, 0.0f);
+                l.surface = SXC_LIGHTS_SURFACE_WATER;
+                l.liquid = liquid;
+            } else if (toGround) {
+                l.at = from + dir * std::fmax(ground - kSurfaceGap, 0.0f);
+                l.surface = SXC_LIGHTS_SURFACE_GROUND;
+            }
+        }
+
+        l.under = l.placed && UnderWater(l.at);
+        return l;
+    }
+
+    // Landings not asked for in a while: forgotten (a model gone, a row changed).
+    void SweepLandings() {
+        const uint32_t now = OsGetAsyncTimeMs();
+
+        if (now - s_landingSweepMs < kSurfaceForgetMs) {
+            return;
+        }
+
+        s_landingSweepMs = now;
+
+        for (auto it = s_landings.begin(); it != s_landings.end();) {
+            it = now - it->second.usedMs > kSurfaceForgetMs ? s_landings.erase(it) : std::next(it);
+        }
+    }
+
     // An assignment's light and emitter on one model (`lights` false: the emitters' own scan, no lights).
     void AddRow(const Placement& at, const Row& row, uint64_t key, const std::string* path, const C3Vector& camera, float reach, bool lights) {
         const bool light = lights && row.kind >= 0;
@@ -268,6 +400,29 @@ namespace {
             return;
         }
 
+        // Moved to a surface, kept from or to the water.
+        uint32_t surface = SXC_LIGHTS_SURFACE_NONE, liquid = 0;
+        constexpr uint32_t kWhere = SXC_LIGHTS_TO_WATER | SXC_LIGHTS_TO_GROUND | SXC_LIGHTS_OFF_UNDER_WATER | SXC_LIGHTS_ONLY_UNDER_WATER;
+
+        if (a.flags & kWhere) {
+            const C3Vector rough = f.pos - camera;
+
+            // Out of reach anyway (the search is the dear part): not placed.
+            if (Length(rough) > reach + kSurfaceReach) {
+                return;
+            }
+
+            const Landing& l = LandingFor(key, f.pos, f.spotDir, a.flags & kWhere);
+
+            if (!l.placed || ((a.flags & SXC_LIGHTS_OFF_UNDER_WATER) && l.under) || ((a.flags & SXC_LIGHTS_ONLY_UNDER_WATER) && !l.under)) {
+                return;
+            }
+
+            f.pos = l.at;
+            surface = l.surface;
+            liquid = l.liquid;
+        }
+
         const C3Vector d = f.pos - camera;
         f.distance = Length(d);
 
@@ -285,6 +440,8 @@ namespace {
             e.scale = scale;
             e.distance = f.distance;
             e.model_path = path ? path->c_str() : "";
+            e.surface = surface;
+            e.liquid_type = liquid;
             s_emitters.push_back(e);
         }
 
@@ -1580,6 +1737,7 @@ namespace {
             s_emitters.clear();
             const C3Vector camera(scene->m_viewInv.d0, scene->m_viewInv.d1, scene->m_viewInv.d2);
             const float range = s_haveSettings ? std::fmax(s_settings.range, 8.0f) : 256.0f;
+            SweepLandings();
 
             for (CM2Model* model = scene->m_modelList; model; model = model->m_sceneNext) {
                 Visit(scene, model, camera, range, 0, false);
@@ -1711,6 +1869,7 @@ namespace SXC::Lights {
         const C3Vector camera(scene->m_viewInv.d0, scene->m_viewInv.d1, scene->m_viewInv.d2);
 
         s_emitters.clear();
+        SweepLandings();
 
         for (CM2Model* model = scene->m_modelList; model; model = model->m_sceneNext) {
             Visit(scene, model, camera, range, 0, true);

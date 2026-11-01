@@ -305,7 +305,8 @@ vec2 RippleFieldSlope(vec2 xy, float distance)
     vec2 c = xy / cell;
     vec2 centre = scene.rippleGrid.xy + 0.5 * n;
     vec2 off = abs(c - centre) / (0.5 * n);
-    float fade = (1.0 - smoothstep(0.75, 0.95, max(off.x, off.y))) * (1.0 - smoothstep(20.0, 30.0, distance));
+    float far = scene.rippleLook.w;
+    float fade = (1.0 - smoothstep(0.85, 0.97, max(off.x, off.y))) * (1.0 - smoothstep(far * 0.7, far, distance));
 
     if (fade <= 0.0)
     {

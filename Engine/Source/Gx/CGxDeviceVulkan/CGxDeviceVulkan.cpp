@@ -713,6 +713,7 @@ bool CGxDeviceVulkan::SxcWaterCapture(const SXC::Water::Waves& waves, bool* firs
     in.ripples.stamps = waves.rippleStamp && waves.rippleStamps < gxvk::vk::ripples::kStamps ? waves.rippleStamps : (waves.rippleStamp ? gxvk::vk::ripples::kStamps : 0);
     if (in.ripples.stamps) std::memcpy(in.ripples.stamp, waves.rippleStamp, in.ripples.stamps * sizeof in.ripples.stamp[0]);
     in.rippleStrength = waves.rippleStrength;
+    in.rippleDistance = waves.rippleDistance;
     return gxvk::vk::water::Capture(in, first);
 }
 

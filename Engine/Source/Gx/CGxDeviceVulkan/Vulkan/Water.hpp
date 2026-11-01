@@ -131,6 +131,7 @@ namespace gxvk::vk::water
         QueryInput query;
         ripples::Input ripples;            ///< the ripple field's step this frame (Vulkan/Ripples.hpp)
         float      rippleStrength = 1.0f;  ///< x the field's slopes on the water
+        float      rippleDistance = 45.0f; ///< yd from the camera the ripples show (fading over the last 30%)
         bool       prepareOnly = false;   ///< the frame's water work without the scene copy (no water drawn yet)
     };
 

@@ -17,6 +17,10 @@ namespace SXC::Water {
     // it (the stock ring isn't made).
     bool RippleFromUnit(const C3Vector& position, float size, float strength, bool moving);
 
+    // sxc.water's ripple(): one stamp this frame (a mod's: an impact emitter). False when ripples are off
+    // or this frame's stamps are full.
+    bool RippleAt(float x, float y, float radius, float depth);
+
     // CGUnit_C::CreateRipple, every frame a unit is in the water (not deeper than twice its height), with the
     // surface's height there: its body parts (SXC/Bones) ripple the water where they move through the
     // surface. True: ours took the unit (the client makes no ripple events for it then); false when ripples

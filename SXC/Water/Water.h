@@ -71,6 +71,7 @@ namespace SXC::Water {
         float rippleSpeed = 1.5f;
         float rippleLife = 2.0f;
         float rippleStrength = 1.0f;
+        float rippleDistance = 45.0f;   // yd from the camera they show
         uint32_t rippleStamps = 0;
         const float (*rippleStamp)[4] = nullptr;
     };
