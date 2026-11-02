@@ -5,7 +5,7 @@
 
 // Not in the original: FlashWOW Two Forms, after Cataclysm's ChrRaces AlteredFormRaceID (which 3.3.5 lacks).
 //
-// A race with an altered form (Worgen) is drawn as that form's race (Gilnean) while the server sets
+// A race with an altered form (Worgen, Dracthyr) is drawn as that form's race (Gilnean, Visage) while the server sets
 // kAlteredFormFlag2 in UNIT_FIELD_FLAGS_2 and the unit shows its native display. The form race has its own
 // model (its ChrRaces display) and customization tables; the five appearance bytes and the stored Retail
 // choices are the active form's, swapped by the server when the form changes. Druid forms, morphs and
@@ -17,7 +17,8 @@ constexpr uint32_t kAlteredFormFlag2 = 0x00080000;
 // How a form change is animated (Retail's Worgen Two Forms). Into the race's own form, the altered body plays
 // toNativeAnim (Retail 486); at toNativeSwapMs (per sex) the body is swapped and the own body plays the same
 // animation on from that moment (its part is frozen before it). Into the altered form, the own body plays
-// toAlteredAnim (496) and the body is swapped when it ends. A body without the animation swaps at once.
+// toAlteredAnim (496) and the body is swapped when it ends. A body without the animation swaps at once
+// (Dracthyr: Retail's Visage change is a quick swap under the spell's effect).
 struct AlteredFormTransition {
     uint32_t toNativeAnim;
     uint32_t toNativeSwapMs[2];     // male, female
@@ -40,6 +41,8 @@ bool AlteredFormTransitionPending(uint64_t guid);
 inline uint32_t AlteredFormRace(uint32_t race) {
     switch (race) {
         case 16: return 54;     // Worgen -> Gilnean
+        case 20:                // Dracthyr (Alliance) -> Visage
+        case 21: return 55;     // Dracthyr (Horde) -> Visage
         default: return 0;
     }
 }
