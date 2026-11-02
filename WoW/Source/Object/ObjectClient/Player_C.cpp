@@ -1,4 +1,5 @@
 #include "Player_C.h"
+#include "AlteredForm.h"
 #include <malloc.h>
 #include "Engine/Source/Base/CDataStore.h"
 #include "Engine/Source/BlizzardCore/SFile2-Core.h"
@@ -513,7 +514,7 @@ static int32_t OnUpdatePlayerHairColor(WOWGUID guid, uint32_t fieldOffset, uint3
     CGPlayer_C* player = static_cast<CGPlayer_C*>(ClntObjMgrObjectPtr(guid, TYPEMASK_PLAYER, __FILE__, __LINE__));
 
     if (player) {
-        if (player->m_characterComponent) {
+        if (player->m_characterComponent && !AlteredFormTransitionPending(guid.m_guid)) {     // Two Forms: the new body takes it
             player->m_characterComponent->SetHairColor(player->m_player->m_playerBytes[3], true, nullptr);
         }
 
@@ -534,7 +535,7 @@ static int32_t OnUpdatePlayerSkinID(WOWGUID guid, uint32_t fieldOffset, uint32_t
     CGPlayer_C* player = static_cast<CGPlayer_C*>(ClntObjMgrObjectPtr(guid, TYPEMASK_PLAYER, __FILE__, __LINE__));
 
     if (player) {
-        if (player->m_characterComponent) {
+        if (player->m_characterComponent && !AlteredFormTransitionPending(guid.m_guid)) {     // Two Forms: the new body takes it
             player->m_characterComponent->SetSkinColor(player->m_player->m_playerBytes[0], true, false, nullptr);
         }
 
@@ -556,7 +557,8 @@ static int32_t OnUpdatePlayerHairStyle(WOWGUID guid, uint32_t fieldOffset, uint3
 
     if (player) {
         bool activePlayer = ClntObjMgrGetActivePlayer() == guid;
-        CCharacterComponent* component = player->m_characterComponent;
+        // Not in the original: FlashWOW Two Forms; during a form change the new body takes the new look.
+        CCharacterComponent* component = AlteredFormTransitionPending(guid.m_guid) ? nullptr : player->m_characterComponent;
 
         if (component) {
             component->SetHairStyle(player->m_player->m_playerBytes[2], nullptr);
@@ -588,7 +590,8 @@ static int32_t OnUpdatePlayerFacialStyle(WOWGUID guid, uint32_t fieldOffset, uin
 
     if (player) {
         bool activePlayer = ClntObjMgrGetActivePlayer() == guid;
-        CCharacterComponent* component = player->m_characterComponent;
+        // Not in the original: FlashWOW Two Forms; during a form change the new body takes the new look.
+        CCharacterComponent* component = AlteredFormTransitionPending(guid.m_guid) ? nullptr : player->m_characterComponent;
 
         if (component) {
             component->SetBeardStyle(player->m_player->m_playerBytes2[0], true, nullptr);

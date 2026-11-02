@@ -6537,6 +6537,11 @@ struct AlteredFormTransitionState {
 
 static std::unordered_map<uint64_t, AlteredFormTransitionState> s_alteredFormTransitions;
 
+bool AlteredFormTransitionPending(uint64_t guid) {
+    const auto found = s_alteredFormTransitions.find(guid);
+    return found != s_alteredFormTransitions.end() && !found->second.swapped;
+}
+
 bool CGUnit_C::InAlteredForm() const {
     if (!(this->m_obj->m_type & TYPEMASK_PLAYER) || !AlteredFormRace(this->m_unit->m_unitFieldBytes0[0]) ||
         !g_chrRacesDB.GetRecord(AlteredFormRace(this->m_unit->m_unitFieldBytes0[0]))) {

@@ -1,6 +1,7 @@
 #if defined(WOWDECOMP_RETAIL_MODELS)
 
 #include "WoW/Common/ComponentCore/RetailCharacter.h"
+#include "WoW/Source/Object/ObjectClient/AlteredForm.h"
 #include "WoW/Common/ComponentCore/CharacterComponent.h"
 #include "Engine/Source/BlizzardCore/Source/System/Log/Log.h"
 #include "Engine/Source/Model2/M2Model.h"
@@ -1220,6 +1221,8 @@ void RetailCustomizationStore(uint64_t guid, const RetailChoiceList& choices) {
     const auto known = s_storedChoices.find(guid);
     if (known != s_storedChoices.end() && known->second == next) return;
     s_storedChoices[guid] = std::move(next);
+    // FlashWOW Two Forms: during a form change the old body keeps its look; the new body reads these at the swap.
+    if (AlteredFormTransitionPending(guid)) return;
     for (const auto& bound : s_boundGuids) {
         if (bound.second != guid || s_extraChoices.count(bound.first)) continue;
         auto* character = const_cast<CCharacterComponent*>(bound.first);

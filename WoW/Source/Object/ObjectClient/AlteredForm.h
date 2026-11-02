@@ -32,6 +32,10 @@ inline const AlteredFormTransition* AlteredFormTransitionFor(uint32_t race) {
     }
 }
 
+// Whether a player is in an animated form change and still shows the old body (Unit_C.cpp). Its appearance
+// updates wait: they belong to the new body, which is built at the swap.
+bool AlteredFormTransitionPending(uint64_t guid);
+
 // The race a race's altered form is drawn as, 0 for a race without one.
 inline uint32_t AlteredFormRace(uint32_t race) {
     switch (race) {
