@@ -78,8 +78,8 @@ namespace Retail::Appearance
     uint32_t BodyModel(uint32_t chrModel, const std::vector<uint32_t>& choices, uint32_t& defaultFileDataId);
 
     // Anatomy that no customization choice of a race names, shown unless a choice picks that group:
-    // feet (20), torso (22), hands (23), head (32), eyes (33) and eye overlays (51). From Esteria's
-    // RaceGeometry.h.
+    // feet (20), torso (22), hands (23), head (32), eyes (33), eye overlays (51) and the Dracthyr dragon's
+    // wings (46, the only body with that group). From Esteria's RaceGeometry.h, plus the wings.
     void DefaultGeosets(const std::vector<uint16_t>& chosen, std::vector<uint16_t>& defaults);
 
     // One layer of a composed texture: ChrModelTextureLayer matched to a chosen material.

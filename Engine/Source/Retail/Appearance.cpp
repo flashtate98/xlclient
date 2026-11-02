@@ -506,7 +506,7 @@ void TextureLayers(uint32_t chrModel, const std::vector<uint32_t>& choices, std:
 
 void DefaultGeosets(const std::vector<uint16_t>& chosen, std::vector<uint16_t>& defaults) {
     defaults.clear();
-    for (const uint16_t base : {2001, 2201, 2301, 3202, 3301, 5101}) {
+    for (const uint16_t base : {2001, 2201, 2301, 3202, 3301, 4601, 5101}) {
         bool picked = false;
         for (const uint16_t geoset : chosen) picked = picked || geoset / 100 == base / 100;
         if (!picked) defaults.push_back(base);
