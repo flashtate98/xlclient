@@ -1213,7 +1213,24 @@ bool RetailCustomizationBind(const CCharacterComponent* character, uint64_t guid
     return s_askedGuids.insert(guid).second;
 }
 
+// FlashWOW Two Forms: choices that arrived during a form change, kept for the new body (RetailCustomizationFlushDeferred).
+std::unordered_map<uint64_t, RetailChoiceList> s_deferredChoices;
+
+void RetailCustomizationFlushDeferred(uint64_t guid) {
+    const auto found = s_deferredChoices.find(guid);
+    if (found == s_deferredChoices.end()) return;
+    const RetailChoiceList choices = std::move(found->second);
+    s_deferredChoices.erase(found);
+    RetailCustomizationStore(guid, choices);
+}
+
 void RetailCustomizationStore(uint64_t guid, const RetailChoiceList& choices) {
+    // FlashWOW Two Forms: during a form change the old body keeps the old choices; the new body gets these.
+    if (AlteredFormTransitionPending(guid)) {
+        s_deferredChoices[guid] = choices;
+        return;
+    }
+    s_deferredChoices.erase(guid);
     std::map<uint32_t, uint32_t> next(choices.begin(), choices.end());
     std::string text;
     for (const auto& choice : next) text += " " + std::to_string(choice.first) + "=" + std::to_string(choice.second);
@@ -1221,8 +1238,6 @@ void RetailCustomizationStore(uint64_t guid, const RetailChoiceList& choices) {
     const auto known = s_storedChoices.find(guid);
     if (known != s_storedChoices.end() && known->second == next) return;
     s_storedChoices[guid] = std::move(next);
-    // FlashWOW Two Forms: during a form change the old body keeps its look; the new body reads these at the swap.
-    if (AlteredFormTransitionPending(guid)) return;
     for (const auto& bound : s_boundGuids) {
         if (bound.second != guid || s_extraChoices.count(bound.first)) continue;
         auto* character = const_cast<CCharacterComponent*>(bound.first);
@@ -1250,6 +1265,7 @@ void RetailCharacterShutdown() {
     s_bodies.clear();
     s_bodyOrder.clear();
     s_storedChoices.clear();
+    s_deferredChoices.clear();
     s_boundGuids.clear();
     s_askedGuids.clear();
 }

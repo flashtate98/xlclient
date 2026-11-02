@@ -123,6 +123,9 @@ bool RetailCustomizationBind(const CCharacterComponent* character, uint64_t guid
 // that character are refreshed.
 void RetailCustomizationStore(uint64_t guid, const RetailChoiceList& choices);
 
+// FlashWOW Two Forms: stores the choices that arrived while the character's form change was showing the old body.
+void RetailCustomizationFlushDeferred(uint64_t guid);
+
 // Releases every composed texture. Called at shutdown before TextureDestroy: textures still held at
 // process exit would be freed after the graphics device is gone.
 void RetailCharacterShutdown();

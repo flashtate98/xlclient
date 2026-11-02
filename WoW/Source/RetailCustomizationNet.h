@@ -34,6 +34,9 @@ void RetailCustomizationNetAppendCreate(CDataStore& msg);
 // Appends a component's block to a CMSG_ALTER_APPEARANCE (or any message the server reads it from).
 void RetailCustomizationNetAppendChoices(CDataStore& msg, const CCharacterComponent* character);
 
+// A player's Two Forms form flag changed: stores the choices of the new form that arrived before it.
+void RetailCustomizationNetFormChanged(uint64_t guid);
+
 // The Two Forms form the server reported for a character (0 the race's own form, 1 its altered form).
 uint32_t RetailCustomizationSavedForm(uint64_t guid);
 

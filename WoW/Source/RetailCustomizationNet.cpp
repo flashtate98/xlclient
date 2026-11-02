@@ -8,6 +8,9 @@
 #include "WoW/Common/ComponentCore/RetailCharacter.h"
 #include "WoW/Source/Glue/CharacterCreation.h"
 #include "WoW/Source/WowSvcs/WowSvcsClient/ClientServices.h"
+#include "WoW/Source/Object/ObjectClient/AlteredForm.h"
+#include "WoW/Source/Object/ObjectClient/Player_C.h"
+#include "WoW/Source/ObjectMgrClient/ObjectMgrClient.h"
 
 namespace {
 
@@ -17,6 +20,15 @@ constexpr uint8_t kMaxChoices = 64;
 constexpr uint32_t kSavedFormOption = 0xFFFFFF01;  // not a Retail option: the character's Two Forms form
 
 std::unordered_map<uint64_t, uint32_t> s_savedForms;
+std::unordered_map<uint64_t, RetailChoiceList> s_formChoices;    // a form change's choices, waiting for its flag
+
+// FlashWOW Two Forms: whether a player in the world still shows the other form than `form` (the server's form
+// change sends the new form's choices before the field update that changes the form).
+bool AwaitsForm(uint64_t guid, uint32_t form) {
+    CGPlayer_C* player = static_cast<CGPlayer_C*>(ClntObjMgrObjectPtr(WOWGUID{ guid }, TYPEMASK_PLAYER, __FILE__, __LINE__));
+    if (!player || !AlteredFormRace(player->m_unit->m_unitFieldBytes0[0])) return false;
+    return ((player->m_unit->m_unitFieldFlags2 & kAlteredFormFlag2) != 0) != (form != 0);
+}
 
 uint32_t Remaining(const CDataStore* msg) {
     return msg->m_size > msg->m_read ? msg->m_size - msg->m_read : 0;
@@ -35,17 +47,24 @@ int32_t OnChoices(void* param, NETMESSAGE msgId, uint32_t time, CDataStore* msg)
         msg->Get(count);
         if (Remaining(msg) < static_cast<uint32_t>(count) * 8) break;
         choices.clear();
-        s_savedForms.erase(guid);     // only the character list names the form; anything else means none known
+        s_savedForms.erase(guid);     // the character list and form changes name the form; anything else means none known
+        bool named = false;
         for (uint8_t i = 0; i < count; ++i) {
             uint32_t option = 0, choice = 0;
             msg->Get(option);
             msg->Get(choice);
             if (option == kSavedFormOption) {
                 s_savedForms[guid] = choice;
+                named = true;
                 continue;
             }
             choices.emplace_back(option, choice);
         }
+        if (named && AwaitsForm(guid, s_savedForms[guid])) {
+            s_formChoices[guid] = choices;
+            continue;
+        }
+        s_formChoices.erase(guid);
         RetailCustomizationStore(guid, choices);
     }
     return 1;
@@ -89,6 +108,14 @@ void RetailCustomizationNetAppendChoices(CDataStore& msg, const CCharacterCompon
         msg.Put(choice.first);
         msg.Put(choice.second);
     }
+}
+
+void RetailCustomizationNetFormChanged(uint64_t guid) {
+    const auto found = s_formChoices.find(guid);
+    if (found == s_formChoices.end()) return;
+    const RetailChoiceList choices = std::move(found->second);
+    s_formChoices.erase(found);
+    RetailCustomizationStore(guid, choices);
 }
 
 uint32_t RetailCustomizationSavedForm(uint64_t guid) {

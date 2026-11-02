@@ -146,6 +146,7 @@
 #include "WoW/Source/WowSvcs/WowSvcsClient/ClientServices.h"
 #if defined(WOWDECOMP_RETAIL_MODELS)
 #include "WoW/Source/RetailCustomizationNet.h"
+#include "WoW/Common/ComponentCore/RetailCharacter.h"
 #include "Engine/Source/Retail/LocalSource.h"
 #include "Engine/Source/BlizzardCore/SFile2-Core.h"
 #include "Engine/Source/BlizzardCore/Source/System/Log/Log.h"
@@ -6609,6 +6610,9 @@ void CGUnit_C::UpdateAlteredFormTransition() {
         }
 
         state.swapped = true;
+#if defined(WOWDECOMP_RETAIL_MODELS)
+        RetailCustomizationFlushDeferred(this->m_obj->m_guid.m_guid);
+#endif
         this->UpdateDisplayInfo(0);
 
         if (!state.anim) {
@@ -24029,8 +24033,15 @@ void CGUnit_C::OnFlag2Changed(uint32_t oldFlags) {
     if ((changed & kAlteredFormFlag2) && (this->m_obj->m_type & TYPEMASK_PLAYER) &&
         AlteredFormRace(this->m_unit->m_unitFieldBytes0[0]) && this->m_worldModel) {
         s_alteredFormTransitions.erase(this->m_obj->m_guid.m_guid);
+#if defined(WOWDECOMP_RETAIL_MODELS)
+        RetailCustomizationFlushDeferred(this->m_obj->m_guid.m_guid);
+#endif
+        const bool animated = this->StartAlteredFormTransition((oldFlags & kAlteredFormFlag2) != 0);
+#if defined(WOWDECOMP_RETAIL_MODELS)
+        RetailCustomizationNetFormChanged(this->m_obj->m_guid.m_guid);     // deferred again while animated
+#endif
 
-        if (!this->StartAlteredFormTransition((oldFlags & kAlteredFormFlag2) != 0)) {
+        if (!animated) {
             this->UpdateDisplayInfo(0);
         }
     }
