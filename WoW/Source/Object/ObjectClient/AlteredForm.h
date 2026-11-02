@@ -14,6 +14,24 @@
 // The flag is Cataclysm's UNIT_FLAG2_WORGEN_TRANSFORM, unused in 3.3.5.
 constexpr uint32_t kAlteredFormFlag2 = 0x00080000;
 
+// How a form change is animated (Retail's Worgen Two Forms). Into the race's own form, the altered body plays
+// toNativeAnim (Retail 486); at toNativeSwapMs (per sex) the body is swapped and the own body plays the same
+// animation on from that moment (its part is frozen before it). Into the altered form, the own body plays
+// toAlteredAnim (496) and the body is swapped when it ends. A body without the animation swaps at once.
+struct AlteredFormTransition {
+    uint32_t toNativeAnim;
+    uint32_t toNativeSwapMs[2];     // male, female
+    uint32_t toAlteredAnim;
+};
+
+inline const AlteredFormTransition* AlteredFormTransitionFor(uint32_t race) {
+    static const AlteredFormTransition kWorgen = { 486, { 3200, 2700 }, 496 };
+    switch (race) {
+        case 16: return &kWorgen;
+        default: return nullptr;
+    }
+}
+
 // The race a race's altered form is drawn as, 0 for a race without one.
 inline uint32_t AlteredFormRace(uint32_t race) {
     switch (race) {

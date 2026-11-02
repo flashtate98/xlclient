@@ -549,6 +549,8 @@ class CGUnit_C : public CGObject_C, public CGUnit {
     bool InAlteredForm() const;
     uint32_t GetAppearanceRace() const;
     int32_t GetBaseFormDisplayId(int32_t displayId) const;
+    bool StartAlteredFormTransition(bool fromAltered);
+    void UpdateAlteredFormTransition();
     uint32_t GetDisplaySex() const;
     uint32_t GetShapeshiftForm() const;
     int32_t IsInMelee() const;

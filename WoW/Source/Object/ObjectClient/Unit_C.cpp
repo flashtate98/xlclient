@@ -151,6 +151,7 @@
 #include "Engine/Source/BlizzardCore/Source/System/Log/Log.h"
 #include <set>
 #include <string>
+#include <unordered_map>
 #endif
 #include "WarcraftXL/Seams.h"
 
@@ -1400,6 +1401,10 @@ void CGUnit_C::ModelLoaded(CM2Model* model) {
 // OFFSET: 0x0073DAB0
 void CGUnit_C::PreAnimate(CGWorldFrame* frame) {
     uint32_t time = FrameTime::s_curTimeMs;
+
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    this->UpdateAlteredFormTransition();    // Not in the original: FlashWOW Two Forms
+#endif
 
     if (this->m_vehiclePassenger) {
         this->m_vehiclePassenger->CheckForVehicleTransitionAnimTimeout();
@@ -6521,9 +6526,103 @@ uint32_t CGUnit_C::GetDisplayRace() const {
 
 // Not in the original: FlashWOW Two Forms (AlteredForm.h). A player of a race with an altered form whose
 // server has set the form flag.
+// A form change being animated (StartAlteredFormTransition), by player GUID: the old body shows until the swap.
+struct AlteredFormTransitionState {
+    bool fromAltered = false;       // the body shown before the change
+    bool swapped = false;
+    uint32_t start = 0;
+    uint32_t swapAt = 0;            // ms after start
+    uint32_t anim = 0;              // played on the new body from swapAt (0: none)
+};
+
+static std::unordered_map<uint64_t, AlteredFormTransitionState> s_alteredFormTransitions;
+
 bool CGUnit_C::InAlteredForm() const {
-    return (this->m_obj->m_type & TYPEMASK_PLAYER) && (this->m_unit->m_unitFieldFlags2 & kAlteredFormFlag2) &&
-        AlteredFormRace(this->m_unit->m_unitFieldBytes0[0]) && g_chrRacesDB.GetRecord(AlteredFormRace(this->m_unit->m_unitFieldBytes0[0]));
+    if (!(this->m_obj->m_type & TYPEMASK_PLAYER) || !AlteredFormRace(this->m_unit->m_unitFieldBytes0[0]) ||
+        !g_chrRacesDB.GetRecord(AlteredFormRace(this->m_unit->m_unitFieldBytes0[0]))) {
+        return false;
+    }
+
+    const auto transition = s_alteredFormTransitions.find(this->m_obj->m_guid.m_guid);
+
+    if (transition != s_alteredFormTransitions.end() && !transition->second.swapped) {
+        return transition->second.fromAltered;
+    }
+
+    return (this->m_unit->m_unitFieldFlags2 & kAlteredFormFlag2) != 0;
+}
+
+// Starts the animated change away from the body shown now (fromAltered: the altered body). False when the body
+// has no transition animation, so the caller swaps at once.
+bool CGUnit_C::StartAlteredFormTransition(bool fromAltered) {
+    const AlteredFormTransition* data = AlteredFormTransitionFor(this->m_unit->m_unitFieldBytes0[0]);
+    CM2Model* model = this->m_worldModel;
+
+    if (!data || !model || !model->IsLoaded(0, 0) || this->IsDeadOrGhost() ||
+        this->m_unit->m_unitFieldNativedisplayid != this->m_unit->m_unitFieldDisplayid) {
+        return false;
+    }
+
+    const uint32_t anim = fromAltered ? data->toNativeAnim : data->toAlteredAnim;
+    M2SequenceInfo info;
+    info.Clear();
+    model->GetSequenceInfo(anim, 0, info);
+
+    if (info.m_animId != anim || !info.m_duration) {
+        return false;
+    }
+
+    AlteredFormTransitionState state;
+    state.fromAltered = fromAltered;
+    state.start = FrameTime::s_curTimeMs;
+    state.swapAt = fromAltered ? data->toNativeSwapMs[this->m_unit->m_unitFieldBytes0[2] ? 1 : 0] : info.m_duration;
+    state.anim = fromAltered ? anim : 0;
+
+    if (state.swapAt > info.m_duration) {
+        state.swapAt = info.m_duration;
+    }
+
+    s_alteredFormTransitions[this->m_obj->m_guid.m_guid] = state;
+    this->PlayBaseAnimation(anim, 0x2 | 0x4);
+    return true;
+}
+
+// Called every frame: swaps the body at the transition's swap point, then plays the new body's part.
+void CGUnit_C::UpdateAlteredFormTransition() {
+    const auto found = s_alteredFormTransitions.find(this->m_obj->m_guid.m_guid);
+
+    if (found == s_alteredFormTransitions.end()) {
+        return;
+    }
+
+    AlteredFormTransitionState& state = found->second;
+    const uint32_t elapsed = FrameTime::s_curTimeMs - state.start;
+
+    if (!state.swapped) {
+        if (elapsed < state.swapAt) {
+            return;
+        }
+
+        state.swapped = true;
+        this->UpdateDisplayInfo(0);
+
+        if (!state.anim) {
+            s_alteredFormTransitions.erase(found);
+        }
+
+        return;
+    }
+
+    // The new body plays the animation on from the swap point once it has loaded (given up after 3 seconds).
+    CM2Model* model = this->m_worldModel;
+
+    if (model && model->IsLoaded(0, 0) && this->m_characterComponent) {
+        this->PlayBaseAnimation(state.anim, 0x2 | 0x4);
+        this->SetBoneSequenceTimeRecursive(model, 0xFFFFFFFF, state.swapAt, 1);
+        s_alteredFormTransitions.erase(found);
+    } else if (elapsed > state.swapAt + 3000) {
+        s_alteredFormTransitions.erase(found);
+    }
 }
 
 // The race whose model and customization tables the unit's own body uses: the altered form's race while in
@@ -23919,11 +24018,16 @@ void CGUnit_C::OnFlag2Changed(uint32_t oldFlags) {
     uint32_t flags = this->m_unit->m_unitFieldFlags2;
     uint32_t changed = oldFlags ^ flags;
 
-    // Not in the original: FlashWOW Two Forms. The form changed: redraw the body (only when it shows the
-    // native display; a druid form or morph keeps its model and the form shows when it ends).
+    // Not in the original: FlashWOW Two Forms. The form changed: animate the change when the body has the
+    // animation (the swap follows in UpdateAlteredFormTransition), else redraw the body now. A druid form or morph
+    // keeps its model and the form shows when it ends.
     if ((changed & kAlteredFormFlag2) && (this->m_obj->m_type & TYPEMASK_PLAYER) &&
         AlteredFormRace(this->m_unit->m_unitFieldBytes0[0]) && this->m_worldModel) {
-        this->UpdateDisplayInfo(0);
+        s_alteredFormTransitions.erase(this->m_obj->m_guid.m_guid);
+
+        if (!this->StartAlteredFormTransition((oldFlags & kAlteredFormFlag2) != 0)) {
+            this->UpdateDisplayInfo(0);
+        }
     }
 
     if (changed & 0x1) {
