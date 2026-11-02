@@ -388,7 +388,8 @@ struct ResolvedOption {
     bool driven = false;            // by a 3.3.5 selector
     bool implied = false;           // set from the other choices (Retail::Appearance::ClassImplied); no row
     int32_t stock = -1;             // the Stock selector that drives it, when driven
-    bool Row() const { return !driven && !implied; }
+    // Unnamed options (the Dracthyr dragon's three single-choice ones) are Retail's hidden ones: no row.
+    bool Row() const { return !driven && !implied && !name.empty(); }
     std::vector<uint32_t> offered;
     uint32_t index = 0;             // into offered
 };
@@ -488,6 +489,9 @@ struct EquipmentLayer {
     uint32_t section, layer, displayId;
     void* texture;
 };
+
+// Retail bodies that show no item textures (ChrModel 89: the Dracthyr dragon).
+bool WearsNoArmorTextures(uint32_t chrModel) { return chrModel == 89; }
 
 std::vector<EquipmentLayer> CollectEquipmentLayers(const CCharacterComponent* character, bool robe) {
     constexpr uint32_t counts[] = {2, 7, 1, 5, 7, 3, 6, 1};
@@ -1382,7 +1386,10 @@ void RetailCharacterBody(CCharacterComponent* character) {
 
     // The 3.3.5 item section grid is the left half of the Retail sheet at twice the size, in the same
     // section order, so each equipped item texture is stretched over its section's rectangle.
-    const auto layers = CollectEquipmentLayers(character, (character->m_flags & 0x20) != 0);
+    // The Dracthyr dragon wears no armour on its body, as on Retail: its armour pieces are customization
+    // choices. Equipped items keep their models (weapons, shoulders) but paint nothing on the skin.
+    const auto layers = WearsNoArmorTextures(look.chrModel) ? std::vector<EquipmentLayer>{}
+                                                            : CollectEquipmentLayers(character, (character->m_flags & 0x20) != 0);
     // Named by the skin layers rather than every choice: a new hairstyle or ears keep the same equipped sheet.
     std::string name = "Retail\\Character\\" + std::to_string(look.chrModel) + "\\" +
         std::to_string(std::hash<std::string>{}(look.bodyKey)) + "\\body";
