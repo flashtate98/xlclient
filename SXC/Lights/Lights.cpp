@@ -62,7 +62,15 @@ namespace {
         sxc_lights_assignment a = {};
         std::string path;   // normalised
         int kind = -1;      // index into s_kinds, -1 none
+        std::string condition;   // the texture the model must wear (TextureName), empty: any
     };
+
+    // The glows (set_glows), by id.
+    struct Glow {
+        sxc_lights_glow g = {};
+        std::string texture;   // TextureName, empty: any of the model's
+    };
+    std::unordered_map<uint32_t, Glow> s_glows;
     std::vector<sxc_lights_kind> s_kinds;
     std::vector<Row> s_rows;
     std::unordered_map<std::string, std::vector<uint32_t>> s_byPath; // normalised path -> rows
@@ -76,6 +84,7 @@ namespace {
         std::string name;
         const std::vector<uint32_t>* rows = nullptr;
         bool suppress = false;
+        bool glows = false;      // a row with a glow
     };
     std::unordered_map<const CM2Shared*, FileRows> s_files;
 
@@ -99,15 +108,64 @@ namespace {
             const auto it = s_byPath.find(Normalize(shared->m_fileName));
             f.rows = it != s_byPath.end() ? &it->second : nullptr;
             f.suppress = false;
+            f.glows = false;
 
             if (f.rows) {
                 for (uint32_t r : *f.rows) {
                     f.suppress = f.suppress || (s_rows[r].a.flags & SXC_LIGHTS_SUPPRESS_MODEL_LIGHTS) != 0;
+                    f.glows = f.glows || s_rows[r].a.glow_id != 0;
                 }
             }
         }
 
         return f;
+    }
+
+    // A texture's name as rows give it: lower case, backslashes, no extension.
+    std::string TextureName(const char* path) {
+        std::string s = Normalize(path);
+        const size_t dot = s.rfind('.');
+
+        if (dot != std::string::npos && s.find('\\', dot) == std::string::npos) {
+            s.resize(dot);
+        }
+
+        return s;
+    }
+
+    // The textures' names, by texture (a texture keeps its file while it lives).
+    std::unordered_map<const CTexture*, std::string> s_textureNames;
+
+    const std::string& NameOf(CTexture* texture) {
+        if (s_textureNames.size() > 16384) {
+            s_textureNames.clear();
+        }
+
+        auto it = s_textureNames.find(texture);
+
+        if (it == s_textureNames.end()) {
+            it = s_textureNames.emplace(texture, TextureName(TextureGetFilename(texture))).first;
+        }
+
+        return it->second;
+    }
+
+    // Whether a model wears a texture: one of its own textures (a creature's replaceable ones as its
+    // display set them) has that name.
+    bool Wears(const CM2Model* model, const std::string& name) {
+        const M2Data* data = model->m_shared ? model->m_shared->m_data : nullptr;
+
+        if (!data || !model->m_textures) {
+            return false;
+        }
+
+        for (uint32_t i = 0; i < data->m_textures.m_count; i++) {
+            if (model->m_textures[i] && NameOf(model->m_textures[i]) == name) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // --- this frame's lights -----------------------------------------------------------------------
@@ -349,6 +407,10 @@ namespace {
         const bool emitter = row.a.emitter_id != 0;
 
         if (!light && !emitter) {
+            return;
+        }
+
+        if (!row.condition.empty() && !Wears(at.model, row.condition)) {
             return;
         }
 
@@ -1497,6 +1559,8 @@ namespace {
             row.a = rows[r];
             row.path = Normalize(rows[r].model_path);
             row.a.model_path = nullptr; // not kept: the caller's
+            row.condition = rows[r].texture_condition ? TextureName(rows[r].texture_condition) : std::string();
+            row.a.texture_condition = nullptr;
             const auto it = kindIndex.find(rows[r].light_id);
             row.kind = rows[r].light_id && it != kindIndex.end() ? it->second : -1;
 
@@ -1751,8 +1815,49 @@ namespace {
         return n;
     }
 
+    void WXL_CALL SetGlows(const sxc_lights_glow* glows, uint32_t count) {
+        s_glows.clear();
+
+        for (uint32_t i = 0; glows && i < count; i++) {
+            Glow g;
+            g.g = glows[i];
+            g.texture = glows[i].texture ? TextureName(glows[i].texture) : std::string();
+            g.g.texture = nullptr;   // not kept: the caller's
+            s_glows[glows[i].id] = std::move(g);
+        }
+    }
+
+    std::vector<std::string> s_textureList;   // ModelTextures' names (valid until its next call)
+
+    uint32_t WXL_CALL ModelTextures(const char* path, const float pos[3], sxc_lights_texture* out, uint32_t max) {
+        const SceneModel* best = out && max ? NearestOf(path, pos) : nullptr;
+        const M2Data* data = best ? best->model->m_shared->m_data : nullptr;
+
+        if (!data || !best->model->m_textures) {
+            return 0;
+        }
+
+        s_textureList.clear();
+        s_textureList.reserve(data->m_textures.m_count);
+        uint32_t n = 0;
+
+        for (uint32_t i = 0; i < data->m_textures.m_count && i < max; i++) {
+            CTexture* texture = best->model->m_textures[i];
+            const char* name = texture ? TextureGetFilename(texture) : nullptr;
+            s_textureList.emplace_back(name ? name : "");
+        }
+
+        for (uint32_t i = 0; i < s_textureList.size(); i++) {
+            out[n++] = sxc_lights_texture{ s_textureList[i].c_str(), data->m_textures[i].m_type };
+        }
+
+        return n;
+    }
+
     const sxc_lights_api s_api = { sizeof(sxc_lights_api), Available, SetSettings, Stats, Status, SetTable, ModelsNear, ModelPoints, ActiveLights, MissingRows,
-                                   Emitters, ModelAxes };
+                                   Emitters, ModelAxes, SetGlows, ModelTextures };
+
+    float s_drawGlow[8] = {};
 }
 
 namespace SXC::Lights {
@@ -1785,6 +1890,73 @@ namespace SXC::Lights {
 
     void SetDrawModel(const CM2Model* model) {
         s_drawModel = model;
+
+        if (!model) {
+            ClearDrawGlow();
+        }
+    }
+
+    void ClearDrawGlow() {
+        s_drawGlow[3] = 0.0f;
+    }
+
+    void SetDrawGlow(const CM2Model* model, CTexture* const stages[2]) {
+        s_drawGlow[3] = 0.0f;
+
+        if (!model || !model->m_shared || s_glows.empty()) {
+            return;
+        }
+
+        const FileRows& file = RowsFor(model->m_shared);
+
+        if (!file.glows || !file.rows) {
+            return;
+        }
+
+        for (uint32_t r : *file.rows) {
+            const Row& row = s_rows[r];
+            const auto found = row.a.glow_id ? s_glows.find(row.a.glow_id) : s_glows.end();
+
+            if (found == s_glows.end() || (!row.condition.empty() && !Wears(model, row.condition))) {
+                continue;
+            }
+
+            const Glow& glow = found->second;
+
+            for (uint32_t s = 0; s < 2; s++) {
+                if (!stages[s] || (!glow.texture.empty() && NameOf(stages[s]) != glow.texture)) {
+                    continue;
+                }
+
+                // A pulse dims it by up to its amount, smoothly.
+                const sxc_lights_glow& g = glow.g;
+                float strength = g.strength;
+
+                if (g.pulse_speed > 0.0f && g.pulse_amount > 0.0f) {
+                    const double t = static_cast<double>(OsGetAsyncTimeMs()) * 0.001 * g.pulse_speed;
+                    const float phase = static_cast<float>(t - std::floor(t));
+                    strength *= 1.0f - std::fmin(g.pulse_amount, 1.0f) * (0.5f - 0.5f * std::cos(phase * 6.2831853f));
+                }
+
+                s_drawGlow[0] = g.color[0] * strength;
+                s_drawGlow[1] = g.color[1] * strength;
+                s_drawGlow[2] = g.color[2] * strength;
+                s_drawGlow[3] = static_cast<float>(g.mode >= SXC_LIGHTS_GLOW_WHOLE && g.mode <= SXC_LIGHTS_GLOW_BRIGHT ? g.mode : SXC_LIGHTS_GLOW_WHOLE);
+                s_drawGlow[4] = static_cast<float>(s);
+                s_drawGlow[5] = g.threshold;
+                s_drawGlow[6] = g.knee > 0.0f ? g.knee : 0.1f;
+                s_drawGlow[7] = 0.0f;
+                return;
+            }
+        }
+    }
+
+    const float* DrawGlow() {
+        return s_drawGlow;
+    }
+
+    bool DrawingModel() {
+        return s_drawModel != nullptr;
     }
 
     Surface ModelSurface(const CM2Model* model) {

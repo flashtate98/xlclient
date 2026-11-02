@@ -80,7 +80,33 @@ typedef struct sxc_lights_assignment
     uint32_t    flags;        ///< SXC_LIGHTS_SUPPRESS_MODEL_LIGHTS, SXC_LIGHTS_TO_*, SXC_LIGHTS_*_UNDER_WATER
     uint32_t    id;           ///< the row's ID (the log names it)
     uint32_t    emitter_id;   ///< the mod's emitter (heat, moisture, a draft) placed here too; 0 = none. The client only places it (emitters())
+    /// Only on models wearing this texture (a path; case, / vs \ and the extension don't matter; the
+    /// replaceable textures a creature's display gives count): two rows tell apart models that share a
+    /// file (a fire and a fel elemental). Null or empty: every model of the file. Copied.
+    const char* texture_condition;
+    uint32_t    glow_id;      ///< a glow (set_glows) on the models of this row; 0 = none
 } sxc_lights_assignment;
+
+/// How a glow's texture glows (sxc_lights_glow::mode).
+#define SXC_LIGHTS_GLOW_WHOLE  1u ///< all of it
+#define SXC_LIGHTS_GLOW_ALPHA  2u ///< by its alpha
+#define SXC_LIGHTS_GLOW_BRIGHT 3u ///< its pixels brighter than the threshold
+
+/// A glow (a DoodadGlowProperties row): one of a model's textures drawn brighter, lighting nothing
+/// (like WMO windows); lights go beside it by hand.
+typedef struct sxc_lights_glow
+{
+    uint32_t    id;
+    const char* texture;      ///< the texture that glows (as texture_condition); null or empty: every texture of the model. Copied
+    uint32_t    mode;         ///< SXC_LIGHTS_GLOW_*
+    float       threshold;    ///< _BRIGHT: from this brightness (0..1, the brightest channel)
+    float       knee;         ///< _BRIGHT: how much brighter it glows fully (<= 0: 0.1)
+    float       color[3];     ///< linear, x the texture's own colour
+    float       strength;     ///< x the colour
+    float       pulse_speed;  ///< pulses a second; 0 steady
+    float       pulse_amount; ///< 0..1 how far a pulse dims it
+    uint32_t    flags;        ///< reserved
+} sxc_lights_glow;
 
 /// An emitter where its row placed it (emitters()): what it does is the mod's (its emitter_id).
 typedef struct sxc_lights_emitter
@@ -174,6 +200,13 @@ typedef struct sxc_lights_point
     float    pos[3];           ///< world
 } sxc_lights_point;
 
+/// A texture a placed model wears (model_textures).
+typedef struct sxc_lights_texture
+{
+    const char* path;          ///< as the client loaded it; valid until the next call
+    uint32_t    replaceable;   ///< the file's texture type: 0 a file of the model's own, else replaceable (a creature's skin, hair, a cape...)
+} sxc_lights_texture;
+
 /// A light as it was drawn last frame (after merging).
 typedef struct sxc_lights_active
 {
@@ -236,6 +269,16 @@ typedef struct sxc_lights_api
     /// a row per axis), to turn a world direction into the model's space. False: none placed, or it hangs
     /// on another model.
     wxl_bool(WXL_CALL* model_axes)(const char* path, const float pos[3], float axes[9]);
+
+    // --- appended 2026-11-01: glows (check struct_size) ---------------------------------------------
+
+    /// The glows by data (DoodadGlowProperties); copied. The rows' glow_id name them. Call again when
+    /// they change. Vulkan only (the translated model and WMO shaders).
+    void(WXL_CALL* set_glows)(const sxc_lights_glow* glows, uint32_t count);
+
+    /// The placed model of file `path` nearest `pos`: the textures it wears now (a creature's replaceable
+    /// ones as its display set them), in the file's order; how many were written.
+    uint32_t(WXL_CALL* model_textures)(const char* path, const float pos[3], sxc_lights_texture* out, uint32_t max);
 } sxc_lights_api;
 
 #ifdef __cplusplus

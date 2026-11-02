@@ -20,7 +20,18 @@
 #include "Engine/Source/Tempest/CMath.h"
 #include "Engine/Source/Tempest/CImVector.h"
 #include "SXC/Lights/Lights.h"  // SXC: which of our lights a model takes
+#include "SXC/Settings/Settings.h"  // SXC: [Models] AlphaKeyRetail
 #include "WarcraftXL/Seams.h"
+
+namespace {
+    // SXC: the alpha key's reference. 3.3.5 keeps alpha >= 224/255; later clients keep >= 128/255, and
+    // their textures (Cataclysm corals, bushes, grasses) put the cut there, so at 224 they vanish.
+    float AlphaKeyRef() {
+        static SXC::Settings::Bool s_retail("Models", "AlphaKeyRetail", true, "Alpha key at 128 (retail)",
+                                            "Cut alpha-keyed model textures at 128/255 like later clients, so retail and retroported models show. Off: 3.3.5's 224/255.");
+        return s_retail.Get() ? 0.50196081f : 0.87843138f;
+    }
+}
 
 // STATIC: 0x00A45390
 const uint32_t s_fogModes[M2BLEND_COUNT] = { 1, 1, 1, 2, 2, 3, 4, 2 };
@@ -67,6 +78,8 @@ CM2SceneRender::CM2SceneRender(CM2Scene* scene) {
 // VERIFY: 43a75437 manual
 // OFFSET: 0x0081F450
 void CM2SceneRender::SetupTextures() {
+    SXC::Lights::ClearDrawGlow();  // SXC: glows (SetDrawGlow below)
+
     if (this->m_curType > 2) {
         for (uint32_t i = 0; i < 2; i++) {
             g_theGxDevicePtr->RsSet(static_cast<EGxRenderState>(GxRs_Texture0 + i), nullptr);
@@ -91,6 +104,7 @@ void CM2SceneRender::SetupTextures() {
     }
 
     uint32_t i = 0;
+    CTexture* glowStages[2] = { nullptr, nullptr };  // SXC: the stages' textures, for the model's glows
 
     if (count) {
         uint32_t shift = 4;
@@ -111,6 +125,10 @@ void CM2SceneRender::SetupTextures() {
 
             g_theGxDevicePtr->RsSet(static_cast<EGxRenderState>(GxRs_Texture0 + i), gxTex);
 
+            if (i < 2 && gxTex) {
+                glowStages[i] = this->m_curModel->m_textures[combo];
+            }
+
             uint32_t transform = this->m_data->m_textureTransformCombos[i + this->m_curBatch->m_textureTransformComboIndex];
             uint32_t stage = envSecond ? 1 : i;
             uint16_t shader = this->m_curBatch->m_shader;
@@ -128,6 +146,8 @@ void CM2SceneRender::SetupTextures() {
             shift -= 4;
             i++;
         } while (i < count);
+
+        SXC::Lights::SetDrawGlow(this->m_curModel, glowStages);  // SXC:
 
         if (i >= 2) {
             return;
@@ -300,7 +320,7 @@ void CM2SceneRender::SetupMaterial() {
         if (this->m_curMaterial->m_blendMode == M2BLEND_OPAQUE || this->m_curMaterial->m_blendMode == M2BLEND_BLEND_ADD) {
             alphaRef = 0.0f;
         } else if (this->m_curMaterial->m_blendMode == M2BLEND_ALPHA_KEY) {
-            alphaRef = this->m_curElement->m_alpha * 0.87843138f;
+            alphaRef = this->m_curElement->m_alpha * AlphaKeyRef();
         } else {
             alphaRef = 0.0039215689f;
         }
@@ -1007,6 +1027,7 @@ void CM2SceneRender::Draw(M2PASS pass, M2Element* elements, uint32_t* indices, u
         this->m_data = this->m_curShared->m_data;
         this->m_cache->LinkToSharedUpdateList(this->m_curShared);
         SXC::Lights::SetDrawModel(this->m_curModel);  // SXC: which of our lights it takes (inside / outside)
+        SXC::Lights::ClearDrawGlow();                 // SXC: a batch's SetupTextures sets its own
 
         switch (this->m_curElement->m_type) {
             case 0:

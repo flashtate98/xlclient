@@ -3,6 +3,7 @@
 #include <cstdint>
 
 class CGxTex;
+class CTexture;
 class CM2Model;
 class CM2Scene;
 
@@ -109,6 +110,16 @@ namespace SXC::Lights {
     // (cached per model, re-located when it moves or every few seconds).
     void SetDrawModel(const CM2Model* model);
     Surface ModelSurface(const CM2Model* model);
+
+    // The seam in CM2SceneRender::SetupTextures: the batch's textures on stages 0 and 1 (null: none); the
+    // glow of the model's rows that names one of them, for the next draws. ClearDrawGlow: none.
+    void SetDrawGlow(const CM2Model* model, CTexture* const stages[2]);
+    void ClearDrawGlow();
+
+    // The device, for a draw: pixel rows 13 and 14 of the translated model shaders (8 floats; row 13's w
+    // 0 when the draw doesn't glow). Main thread.
+    const float* DrawGlow();
+    bool DrawingModel();   // between SetDrawModel(model) and SetDrawModel(nullptr): the M2 scene's draws
 
     // The class of the draw being made now: a WMO group's side, else the model's being drawn, else any;
     // kSurfaceOff outside the world's scene; with the indoor test off, any.

@@ -439,8 +439,11 @@ namespace SXC::Water {
                 }
             }
 
-            // The near mesh's cells: water, and land within reach of its nearest water (that water's surface
-            // and type), then not where two levels meet.
+            // The near mesh's cells: water (under the models standing in it too: the shore field takes them as
+            // land, for their foam and waves, but left out of the mesh the stock water filled them, still by its
+            // easing toward a shore, and the foam ring around a rock rode apart from the sea: Seyri,
+            // 2026-11-02), and land within reach of its nearest water (that water's surface and type), then not
+            // where two levels meet.
             constexpr int32_t kReachAbove = 3;    // cells onto land above the surface
             constexpr int32_t kReachBelow = 12;   // cells onto land below it (water a map cut short)
             // yd: land higher than this above the surface: never. Cliffs too: stopped 2 yd up, the mesh ended
@@ -458,7 +461,7 @@ namespace SXC::Water {
                 for (int32_t wi = 0; wi < n; wi++) {
                     const int32_t w = wj * n + wi, k = at(wi, wj);
 
-                    if (wet[w]) {
+                    if (s.water[k]) {
                         surfaceOf[w] = s.surface[k];
                         typeOf[w] = s.type[k];
                         covered[w] = s.type[k] != 0 ? 1 : 0;   // not a chunk not loaded
@@ -580,7 +583,7 @@ namespace SXC::Water {
                     c[1] = s.ground[k] > -1e5f ? s.ground[k] : surfaceOf[w] - kMaxDepth;
                     c[2] = static_cast<float>(typeOf[w]) + (NotWater(typeOf[w]) ? 0.25f : 0.0f);   // + 0.25: lava, slime
                     // Covered: 1 plus the stock depth coordinate (land the mesh reaches over: 0, the waterline's).
-                    c[3] = own[w] ? 1.0f + (wet[w] ? s.coord[k] : 0.0f) : 0.0f;
+                    c[3] = own[w] ? 1.0f + (s.water[k] ? s.coord[k] : 0.0f) : 0.0f;
                 }
             }
 

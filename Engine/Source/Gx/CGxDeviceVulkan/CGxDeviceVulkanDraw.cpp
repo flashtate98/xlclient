@@ -13,6 +13,7 @@
 #include "Engine/Source/Gx/CGxPool.h"
 #include "Engine/Source/Gx/CGxTex.h"
 #include "SXC/Cover/Cover.h"  // SXC: projected textures on the raised covers
+#include "SXC/Lights/Lights.h"  // SXC: the draw's glow
 #include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler's draw count
 
 namespace frame     = gxvk::vk::frame;
@@ -274,6 +275,16 @@ bool CGxDeviceVulkan::IDrawState(pipelines::Draw& d) {
     pixelRows[15 * 4 + 1] = ((fogColour >> 8) & 0xFF) / 255.0f;
     pixelRows[15 * 4 + 2] = (fogColour & 0xFF) / 255.0f;
     pixelRows[15 * 4 + 3] = fogOn ? 1.0f : 0.0f;
+    // SXC: rows 13 and 14, which no stock pixel shader reads either: while a model draws, its glow
+    // (SXC::Lights::DrawGlow; the translated model shaders add it). Every other translated draw gets no
+    // glow: the WMO modules add one too, and read whatever our water or terrain last set in these rows
+    // (Seyri, 2026-11-02: WMO interiors turned orange where no terrain or water drew). Our own water and
+    // terrain pipelines carry their own values here: left as they are.
+    if (SXC::Lights::DrawingModel()) {
+        memcpy(pixelRows + 13 * 4, SXC::Lights::DrawGlow(), 8 * sizeof(float));
+    } else if (d.fragment == pipelines::FragmentProgram::Translated) {
+        memset(pixelRows + 13 * 4, 0, 8 * sizeof(float));
+    }
     // SXC: the same fog for the fixed-function programs (Shaders/Push.glsl's fog), which D3D9 applies
     // as linear vertex fog (D3DRS_FOGVERTEXMODE LINEAR): the horizon's terrain and map objects rely on
     // it to turn into the fog colour.

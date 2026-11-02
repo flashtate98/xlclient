@@ -63,6 +63,14 @@ SWZ = ir.SWZ
 SXC_VIEW_LOCATION, SXC_NORMAL_LOCATION = 11, 12
 SXC_LIT_VERTEX = ('Diffuse_', 'Color_', 'CDiffuse_', 'MapObj')
 SXC_LIT_PIXEL = ('Combiners_', 'MapObj', 'DetailDoodad')   # DetailDoodad: the instanced grass (step 7c) writes the view position and normal
+# SXC: glows (kb: emitters). The model and WMO pixel modules keep what they sampled from texture stages 0
+# and 1 (sampler slots 0 and 1) and add a glow of one of them to their output: pixel rows 13 and 14,
+# which no stock pixel shader reads, carry it per draw (SXC::Lights::DrawGlow; row 13 w 0: none).
+#   p[13] rgb the glow's colour x strength, w the mode (1 the whole texture, 2 by its alpha, 3 its
+#         pixels brighter than a threshold); p[14] x the stage, y the threshold, z the knee's width.
+# It is added after the module's own fog, faded by the fog factor (fog0) where the module reads one.
+SXC_GLOW_STAGES = (0, 1)
+SXC_GLOW_ROW, SXC_GLOW_ROW2 = 13, 14
 SXC_PROJECTION = (2, 3, 4, 5)
 SXC_SUN = 12
 SXC_LIGHTS_GLSL = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..',
@@ -139,6 +147,7 @@ class Emitter(object):
         self.sxc_view_done = False
         self.sxc_normal_done = False
         self.sxc_lights = None
+        self.sxc_glow_tex = set()   # stages whose sample the glow may take
 
     # -- operands ---------------------------------------------------------------------------------
 
@@ -535,6 +544,12 @@ class Emitter(object):
         if t is None:
             raise Refused('s%d sampled without a dcl' % samp.index)
         uv = self.src_sw(coord, [0, 1] if t == '2d' else [0, 1, 2])
+        if self.sxc_lit_pixel and t == '2d' and samp.index in SXC_GLOW_STAGES:
+            # SXC: kept for the glow (the last sample of the stage).
+            self.sxc_glow_tex.add(samp.index)
+            self.line('sxcTex%d = texture(s%d, %s);' % (samp.index, samp.index, uv))
+            self.assign(i.dst, full='sxcTex%d' % samp.index)
+            return
         self.assign(i.dst, full='texture(s%d, %s)' % (samp.index, uv))
 
     def r_texldl(self, i):
@@ -748,6 +763,8 @@ class Emitter(object):
             P('    sxcNormal = vec4(0.0);')
         else:
             P('    oC0 = vec4(0.0);')
+            for s in sorted(self.sxc_glow_tex):
+                P('    vec4 sxcTex%d = vec4(0.0);   // SXC: stage %d as sampled, for the glow' % (s, s))
             for nm, sem in self.inputs.items():
                 if sem == 'fog0':
                     rhs = 'vec4(fog0, 0.0, 0.0, 0.0)'
@@ -775,6 +792,22 @@ class Emitter(object):
                     else:
                         P('    %s = %s;' % (sem, nm))
         else:
+            if self.sxc_glow_tex:
+                stages = sorted(self.sxc_glow_tex)
+                pick = 'sxcTex%d' % stages[-1]
+                for s in reversed(stages[:-1]):
+                    pick = '(int(regs.p[%d].x + 0.5) == %d ? sxcTex%d : %s)' % (SXC_GLOW_ROW2, s, s, pick)
+                fog = 'fog0' if 'fog0' in self.reads else '1.0'
+                P('    // SXC: the draw\'s glow (pixel rows %d, %d: SXC::Lights::DrawGlow), after the fog, faded by it.' % (SXC_GLOW_ROW, SXC_GLOW_ROW2))
+                P('    if (regs.p[%d].w > 0.5)' % SXC_GLOW_ROW)
+                P('    {')
+                P('        vec4 g = %s;' % pick)
+                P('        float mode = regs.p[%d].w;' % SXC_GLOW_ROW)
+                P('        float lit = max(g.r, max(g.g, g.b));')
+                P('        float mask = mode < 1.5 ? 1.0 : mode < 2.5 ? g.a : smoothstep(regs.p[%d].y, regs.p[%d].y + max(regs.p[%d].z, 0.001), lit);'
+                  % (SXC_GLOW_ROW2, SXC_GLOW_ROW2, SXC_GLOW_ROW2))
+                P('        oC0.rgb += g.rgb * regs.p[%d].rgb * mask * clamp(%s, 0.0, 1.0);' % (SXC_GLOW_ROW, fog))
+                P('    }')
             P('    // The alpha test (GxRs_AlphaRef) is not in the bytecode: GREATEREQUAL against')
             P('    // misc.x = alphaRef / 255, off when 0.')
             P('    if (regs.misc.x > 0.0 && oC0.a < regs.misc.x) discard;')

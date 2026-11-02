@@ -375,7 +375,7 @@ namespace SXC::Water {
     void DrawRipplePanel() {
         bool on = RipplesOn().Get();
 
-        if (ImGui::Checkbox("Ripples", &on)) {
+        if (ImGui::Checkbox("Ripples on", &on)) {
             RipplesOn().Set(on);
         }
 
