@@ -6564,8 +6564,10 @@ bool CGUnit_C::StartAlteredFormTransition(bool fromAltered) {
     const AlteredFormTransition* data = AlteredFormTransitionFor(this->m_unit->m_unitFieldBytes0[0]);
     CM2Model* model = this->m_worldModel;
 
+    // Moving, falling, swimming or mounted bodies change at once: the animation is a standing one.
     if (!data || !model || !model->IsLoaded(0, 0) || this->IsDeadOrGhost() ||
-        this->m_unit->m_unitFieldNativedisplayid != this->m_unit->m_unitFieldDisplayid) {
+        this->m_unit->m_unitFieldNativedisplayid != this->m_unit->m_unitFieldDisplayid ||
+        (this->m_movement->m_flags & (0xF | 0x3000 | 0x200000)) || this->m_unit->m_unitFieldMountdisplayid) {
         return false;
     }
 
@@ -6605,7 +6607,12 @@ void CGUnit_C::UpdateAlteredFormTransition() {
     const uint32_t elapsed = FrameTime::s_curTimeMs - state.start;
 
     if (!state.swapped) {
-        if (elapsed < state.swapAt) {
+        // Starting to move, fall or swim during the change finishes it at once, without the new body's part.
+        const bool moving = (this->m_movement->m_flags & (0xF | 0x3000 | 0x200000)) != 0;
+
+        if (moving) {
+            state.anim = 0;
+        } else if (elapsed < state.swapAt) {
             return;
         }
 
