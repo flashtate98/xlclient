@@ -45,6 +45,9 @@ void RetailCharacterBody(CCharacterComponent* character);
 // pass; does nothing for stock bodies or Retail helmets.
 void RetailCharacterFitHelmet(CCharacterComponent* character);
 
+// Bodies that wear no helmet model (the Dracthyr dragon, as on Retail; its Visage wears them).
+bool RetailCharacterWearsNoHelmet(const CCharacterComponent* character);
+
 // Live helmet tuning: replaces the helmets.csv row for the character's race and sex for this session and
 // refits its helmet now. Returns the row ("race;sex;scale;x;y;z") to paste into helmets.csv to keep it.
 std::string RetailCharacterTuneHelmet(CCharacterComponent* character, float scale, float x, float y, float z);

@@ -3953,6 +3953,13 @@ void CCharacterComponent::AddHelm(int32_t itemVisual) {
     ItemDisplayInfoRec rec;
     const ItemDisplayInfoRec* displayRec;
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: bodies that wear no helmet (the Dracthyr dragon, as on Retail).
+    if (RetailCharacterWearsNoHelmet(this)) {
+        return;
+    }
+#endif
+
     if (!this->GetHelmModelFilePath(rec, displayRec)) {
         return;
     }

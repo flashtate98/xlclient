@@ -493,6 +493,15 @@ struct EquipmentLayer {
 // Retail bodies that show no item textures (ChrModel 89: the Dracthyr dragon).
 bool WearsNoArmorTextures(uint32_t chrModel) { return chrModel == 89; }
 
+}   // namespace
+
+bool RetailCharacterWearsNoHelmet(const CCharacterComponent* character) {
+    uint32_t retailRace = 0;
+    return RetailModelOf(character, retailRace) == 89;
+}
+
+namespace {
+
 std::vector<EquipmentLayer> CollectEquipmentLayers(const CCharacterComponent* character, bool robe) {
     constexpr uint32_t counts[] = {2, 7, 1, 5, 7, 3, 6, 1};
     std::vector<EquipmentLayer> layers;
