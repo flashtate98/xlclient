@@ -126,6 +126,15 @@ void RetailCustomizationStore(uint64_t guid, const RetailChoiceList& choices);
 // FlashWOW Two Forms: stores the choices that arrived while the character's form change was showing the old body.
 void RetailCustomizationFlushDeferred(uint64_t guid);
 
+// FlashWOW Two Forms: the Worgen arms shown on the Gilnean body while it changes into the Worgen. Attach
+// takes the Worgen's race, sex, class and selector values (its fur is composed from them and the
+// choices that came with the change); Update starts the arms' animation at the change's elapsed time
+// once they have loaded (called every frame of the change); Drop removes them.
+bool RetailCharacterAttachTransformArms(CM2Model* body, uint64_t guid, uint32_t race, uint32_t sex, uint32_t classId,
+    uint32_t skin, uint32_t face, uint32_t hairStyle, uint32_t hairColor, uint32_t facial);
+void RetailCharacterUpdateTransformArms(CM2Model* body, uint32_t elapsed);
+void RetailCharacterDropTransformArms(CM2Model* body);
+
 // Releases every composed texture. Called at shutdown before TextureDestroy: textures still held at
 // process exit would be freed after the graphics device is gone.
 void RetailCharacterShutdown();

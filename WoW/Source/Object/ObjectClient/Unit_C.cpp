@@ -6534,6 +6534,7 @@ struct AlteredFormTransitionState {
     uint32_t start = 0;
     uint32_t swapAt = 0;            // ms after start
     uint32_t anim = 0;              // played on the new body from swapAt (0: none)
+    bool armsAttached = false;      // the Worgen arms on the old body (UpdateAlteredFormArms)
 };
 
 static std::unordered_map<uint64_t, AlteredFormTransitionState> s_alteredFormTransitions;
@@ -6595,6 +6596,29 @@ bool CGUnit_C::StartAlteredFormTransition(bool fromAltered) {
     return true;
 }
 
+// The Worgen arms growing from the Gilnean body (RetailCharacterAttachTransformArms), attached on the change's
+// first frame: by then the Worgen's appearance bytes and choices have arrived.
+static void UpdateAlteredFormArms(CGUnit_C* unit, AlteredFormTransitionState& state, uint32_t elapsed) {
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    CM2Model* model = unit->m_worldModel;
+
+    if (!state.fromAltered || !model || !(unit->m_obj->m_type & TYPEMASK_PLAYER)) {
+        return;
+    }
+
+    if (!state.armsAttached) {
+        state.armsAttached = true;
+        const CGPlayer_C* player = static_cast<const CGPlayer_C*>(unit);
+        RetailCharacterAttachTransformArms(model, unit->m_obj->m_guid.m_guid, unit->m_unit->m_unitFieldBytes0[0],
+            unit->m_unit->m_unitFieldBytes0[2], unit->m_unit->m_unitFieldBytes0[1], player->m_player->m_playerBytes[0],
+            player->m_player->m_playerBytes[1], player->m_player->m_playerBytes[2], player->m_player->m_playerBytes[3],
+            player->m_player->m_playerBytes2[0]);
+    }
+
+    RetailCharacterUpdateTransformArms(model, elapsed);
+#endif
+}
+
 // Called every frame: swaps the body at the transition's swap point, then plays the new body's part.
 void CGUnit_C::UpdateAlteredFormTransition() {
     const auto found = s_alteredFormTransitions.find(this->m_obj->m_guid.m_guid);
@@ -6613,10 +6637,14 @@ void CGUnit_C::UpdateAlteredFormTransition() {
         if (moving) {
             state.anim = 0;
         } else if (elapsed < state.swapAt) {
+            UpdateAlteredFormArms(this, state, elapsed);
             return;
         }
 
         state.swapped = true;
+#if defined(WOWDECOMP_RETAIL_MODELS)
+        RetailCharacterDropTransformArms(this->m_worldModel);
+#endif
 #if defined(WOWDECOMP_RETAIL_MODELS)
         RetailCustomizationFlushDeferred(this->m_obj->m_guid.m_guid);
 #endif
@@ -24041,6 +24069,7 @@ void CGUnit_C::OnFlag2Changed(uint32_t oldFlags) {
         AlteredFormRace(this->m_unit->m_unitFieldBytes0[0]) && this->m_worldModel) {
         s_alteredFormTransitions.erase(this->m_obj->m_guid.m_guid);
 #if defined(WOWDECOMP_RETAIL_MODELS)
+        RetailCharacterDropTransformArms(this->m_worldModel);
         RetailCustomizationFlushDeferred(this->m_obj->m_guid.m_guid);
 #endif
         const bool animated = this->StartAlteredFormTransition((oldFlags & kAlteredFormFlag2) != 0);

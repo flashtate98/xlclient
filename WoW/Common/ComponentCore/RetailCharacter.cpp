@@ -397,9 +397,8 @@ struct ResolvedOption {
 // drive take the Nth offered choice for the character's value (wrapping); the others take the stored
 // extra choice, or their first. A choice that asks for a choice of an earlier option is offered only
 // when that choice was taken.
-uint32_t Resolve(const CCharacterComponent* character, uint32_t chrModel, std::vector<ResolvedOption>& resolved,
-    std::vector<uint32_t>& choices) {
-    const auto& prefs = character->m_data.m_preferences;
+uint32_t ResolveFor(const CharacterPreferences& prefs, const std::map<uint32_t, uint32_t>* extras, uint32_t chrModel,
+    std::vector<ResolvedOption>& resolved, std::vector<uint32_t>& choices) {
     std::vector<Retail::Appearance::Option> options;
     Retail::Appearance::Options(chrModel, prefs.m_classId, options);
     std::vector<int32_t> driven(options.size(), -1);
@@ -412,7 +411,6 @@ uint32_t Resolve(const CCharacterComponent* character, uint32_t chrModel, std::v
                     found = true;
                 }
     }
-    const auto* extras = ExtraChoicesOf(character);
     resolved.clear();
     choices.clear();
     for (size_t i = 0; i < options.size(); ++i) {
@@ -454,6 +452,11 @@ uint32_t Resolve(const CCharacterComponent* character, uint32_t chrModel, std::v
             }
     }
     return chrModel;
+}
+
+uint32_t Resolve(const CCharacterComponent* character, uint32_t chrModel, std::vector<ResolvedOption>& resolved,
+    std::vector<uint32_t>& choices) {
+    return ResolveFor(character->m_data.m_preferences, ExtraChoicesOf(character), chrModel, resolved, choices);
 }
 
 // The character's Retail race and ChrModel, or 0 for stock bodies and unmapped races.
@@ -1246,6 +1249,103 @@ void RetailCustomizationStore(uint64_t guid, const RetailChoiceList& choices) {
     }
 }
 
+// FlashWOW Two Forms: the Worgen arms that grow from the Gilnean body during its change (a Retail
+// collection model with its own copy of the change animation). It is not bound to the body's skeleton:
+// its animation scales its own arm bones up from nothing, so it plays that animation itself, attached
+// at the body's root, in step with the body. Its skin (texture type 1) is the Worgen's fur, composed
+// from the Worgen look the change leads to.
+constexpr uint32_t kTransformArmsSocket = 0xFFFFFFFDu;
+constexpr uint32_t kTransformArmsAnim = 486;
+std::set<CM2Model*> s_armsStarted;
+std::map<std::string, std::shared_ptr<OwnedTexture>> s_armsSkins;
+std::deque<std::string> s_armsSkinOrder;
+
+CM2Model* TransformArmsOf(CM2Model* body) {
+    for (CM2Model* child = body ? body->m_attachList : nullptr; child; child = child->m_attachNext)
+        if (child->m_attachmentId == kTransformArmsSocket) return child;
+    return nullptr;
+}
+
+// The Worgen fur sheet for the look the change leads to: its race, sex and selector values, and the
+// choices that came with the change (else those stored for the character, else the defaults).
+std::shared_ptr<OwnedTexture> TransformArmsSkin(uint64_t guid, const CharacterPreferences& prefs) {
+    const auto& map = RaceMap();
+    const auto race = map.find(prefs.m_raceID);
+    if (race == map.end()) return nullptr;
+    const uint32_t chrModel = Retail::Appearance::ChrModelFor(race->second, prefs.m_sexID);
+    if (!chrModel) return nullptr;
+    std::map<uint32_t, uint32_t> extras;
+    const auto deferred = s_deferredChoices.find(guid);
+    if (deferred != s_deferredChoices.end()) {
+        extras.insert(deferred->second.begin(), deferred->second.end());
+    } else if (const auto stored = s_storedChoices.find(guid); stored != s_storedChoices.end()) {
+        extras = stored->second;
+    }
+    std::vector<ResolvedOption> resolved;
+    std::vector<uint32_t> choices;
+    ResolveFor(prefs, &extras, chrModel, resolved, choices);
+    const auto look = LookFor(race->second, prefs.m_sexID, chrModel, choices);
+    if (!look || !look->body || !look->body->width) return nullptr;
+    const auto cached = s_armsSkins.find(look->bodyKey);
+    if (cached != s_armsSkins.end()) return cached->second;
+    CTexture* made = MakeTexture("Retail\\Character\\Arms\\" + std::to_string(std::hash<std::string>{}(look->bodyKey)), *look->body);
+    if (!made) return nullptr;
+    auto owned = std::make_shared<OwnedTexture>(made);
+    s_armsSkins[look->bodyKey] = owned;
+    s_armsSkinOrder.push_back(look->bodyKey);
+    Trim(s_armsSkins, s_armsSkinOrder, 2);
+    return owned;
+}
+
+bool RetailCharacterAttachTransformArms(CM2Model* body, uint64_t guid, uint32_t race, uint32_t sex, uint32_t classId,
+    uint32_t skin, uint32_t face, uint32_t hairStyle, uint32_t hairColor, uint32_t facial) {
+    RetailCharacterDropTransformArms(body);
+    if (!body || !body->m_scene) return false;
+    CharacterPreferences prefs{};
+    prefs.m_raceID = race;
+    prefs.m_sexID = sex;
+    prefs.m_classId = classId;
+    prefs.m_skinID = skin;
+    prefs.m_faceId = face;
+    prefs.m_hairStyleId = hairStyle;
+    prefs.m_hairColorId = hairColor;
+    prefs.m_facialHairId = facial;
+    const auto fur = TransformArmsSkin(guid, prefs);
+    const char* path = sex ? "item\\objectcomponents\\collections\\worgencombattransformation_wo_f.m2"
+                           : "item\\objectcomponents\\collections\\worgencombattransformation_wo_m.m2";
+    CM2Model* arms = body->m_scene->CreateModel(path, 0);
+    if (!arms) {
+        Blizzard::Log::Printf(1, kLog, "Transform arms %s could not be created\n", path);
+        return false;
+    }
+    s_armsStarted.erase(arms);   // a model freed with an earlier body may have had this address
+    arms->SetGeometryVisible(0, 65535, 0);   // shown once its animation starts (RetailCharacterUpdateTransformArms)
+    arms->AttachToParent(body, kTransformArmsSocket, nullptr, 1);
+    if (fur && fur->texture) arms->ReplaceTexture(1, fur->texture);
+    arms->Release();   // the attachment holds the body's reference
+    Blizzard::Log::Printf(1, kLog, "Transform arms %s attached to %s, fur %s\n", path,
+        body->m_shared ? body->m_shared->m_fileName : "?", fur && fur->texture ? fur->texture->m_filename : "none");
+    return true;
+}
+
+void RetailCharacterUpdateTransformArms(CM2Model* body, uint32_t elapsed) {
+    CM2Model* arms = TransformArmsOf(body);
+    if (!arms || !(arms->m_fFlags & 1) || s_armsStarted.count(arms)) return;
+    s_armsStarted.insert(arms);
+    // The arms (0) and bare hands (401); the glove (402-404) and sleeve (802, 803) variants stay hidden.
+    arms->SetGeometryVisible(0, 0, 1);
+    arms->SetGeometryVisible(401, 401, 1);
+    arms->SetBoneSequence(0xFFFFFFFF, kTransformArmsAnim, 0xFFFFFFFF, 0, 1.0f, 0, 1);
+    arms->SetBoneSequenceTime(0xFFFFFFFF, elapsed);
+}
+
+void RetailCharacterDropTransformArms(CM2Model* body) {
+    while (CM2Model* arms = TransformArmsOf(body)) {
+        s_armsStarted.erase(arms);
+        arms->DetachFromParent();
+    }
+}
+
 void RetailCharacterShutdown() {
     {
         std::lock_guard<std::mutex> lock(s_lookMutex);
@@ -1258,6 +1358,9 @@ void RetailCharacterShutdown() {
     s_composedTextureOrder.clear();
     s_tintedTextures.clear();
     s_tintedTextureOrder.clear();
+    s_armsSkins.clear();
+    s_armsSkinOrder.clear();
+    s_armsStarted.clear();
     s_itemImages.clear();
     s_itemImageOrder.clear();
     s_collections.clear();
