@@ -35,6 +35,14 @@ else ()
     message(FATAL_ERROR "Unsupported pointer size.")
 endif ()
 
+# SXC: Release with debug information (in the objects, /Z7) and a PDB from the linker, so the hang
+# watchdog (SXC/Watchdog) and the crash log name functions and lines. The code is the same; the linker keeps
+# dropping unused code and folding duplicates (/OPT:REF, /OPT:ICF, which /DEBUG would otherwise turn off).
+if (MSVC)
+    add_compile_options($<$<CONFIG:Release>:/Z7>)
+    add_link_options($<$<CONFIG:Release>:/DEBUG:FULL> $<$<CONFIG:Release>:/OPT:REF> $<$<CONFIG:Release>:/OPT:ICF>)
+endif ()
+
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)

@@ -6491,6 +6491,7 @@ int32_t CM2Model::ProcessCallbacks() {
     }
 
     uint32_t current;
+    uint32_t sxcRounds = 0;   // SXC: rounds this frame (below)
 
     do {
         uint16_t boneIndex = this->m_animListHead;
@@ -6536,7 +6537,13 @@ int32_t CM2Model::ProcessCallbacks() {
                     current = this->ProcessEventCallbacks(boneIndex, sequenceIndex, loopStart, duration, start, current, now);
 
                     if (finished) {
-                        current = this->ProcessSequenceCallback(boneIndex, now, now - loopEnd, current);
+                        // SXC: the next sequence starts where this one ended, but no earlier than this frame. A
+                        // model left unanimated for a while (a wolf roaming out of sight, its unit still there)
+                        // ended its sequence minutes ago: from there every sequence since was played through
+                        // with its events, a bone animation for each, and the client hung for seconds to
+                        // minutes, the longer the longer it was away (Seyri, 2026-11-03: creature\wolf2).
+                        const uint32_t ago = now - loopEnd;
+                        current = this->ProcessSequenceCallback(boneIndex, now, ago < scene->m_timeDelta ? ago : scene->m_timeDelta, current);
                     }
                 }
             }
@@ -6555,7 +6562,9 @@ int32_t CM2Model::ProcessCallbacks() {
         }
 
         start = current;
-    } while (static_cast<int32_t>(current - now) < 0);
+        // SXC: a model whose callbacks keep it on a sequence that has already ended would come round here
+        // without end: a frame takes at most 64 rounds of events (a busy one needs a handful).
+    } while (static_cast<int32_t>(current - now) < 0 && ++sxcRounds < 64);
 
     return 1;
 }

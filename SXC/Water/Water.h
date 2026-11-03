@@ -43,6 +43,9 @@ namespace SXC::Water {
         const float* shoreCells = nullptr;   // the near mesh's cells (Shore.h's ShoreMap::cells)
         uint32_t shoreVersion = 0;
         int32_t shoreOriginX = 0, shoreOriginY = 0;
+        // The rivers' flow on the same window (SXC/Water/Flow.h): four half floats a cell; null: none.
+        const uint16_t* flow = nullptr;
+        uint32_t flowVersion = 0;
         float shoreFoam = 1.0f;          // the shore's foam strength
         float shoreWaveHeight = 0.12f;   // yd
         float shoreWavelength = 7.0f;    // yd

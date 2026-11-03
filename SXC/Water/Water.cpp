@@ -7,6 +7,7 @@
 #include "SXC/Water/Medium.h"
 #include "SXC/Water/Ride.h"
 #include "SXC/Water/Ripples.h"
+#include "SXC/Water/Flow.h"
 #include "SXC/Water/Shore.h"
 #include "SXC/Water/Surface.h"
 
@@ -566,6 +567,13 @@ namespace SXC::Water {
             waves.shoreVersion = shore.version;
             waves.shoreOriginX = shore.originX;
             waves.shoreOriginY = shore.originY;
+
+            const SXC::Water::FlowMap& flow = SXC::Water::FlowField(shore);
+
+            if (flow.valid) {
+                waves.flow = flow.texels;
+                waves.flowVersion = flow.version;
+            }
         }
 
         // The shore's values, like the sea's, from the row of the water the player is in.
@@ -783,7 +791,8 @@ namespace SXC::Water {
         static const char* const kViews[] = { "Off", "Reflection hits (red: sky)", "Water crossed (white 20 yd)", "Normal",
                                               "Folding / foam", "Reflection alone", "Scene behind", "Screen mapping check (black: right)",
                                               "Reflection search outcome (blue: sky on screen)", "Depth conversion self-test (black: right)", "Movement easing (white: moves)",
-                                              "Shore field (blue water, red land, green depth)", "Shore waves (red crests, white foam)" };
+                                              "Shore field (blue water, red land, green depth)", "Shore waves (red crests, white foam)",
+                                              "River flow (colour: speed, blue to red; dots drift with it)" };
         ImGui::Combo("Debug view", &s_panel.debugView, kViews, IM_ARRAYSIZE(kViews));
         ImGui::Checkbox("Screen-space reflections", &s_panel.screenReflections);
         ImGui::Checkbox("Override the wind", &s_panel.windOverride);

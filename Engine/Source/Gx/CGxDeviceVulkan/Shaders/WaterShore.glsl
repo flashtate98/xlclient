@@ -8,6 +8,9 @@ layout(set = 2, binding = 5) uniform sampler2D shoreMap;
 // The near mesh's cells (Shore.h's ShoreMap::cells), read exactly: the surface (world z), the ground, the
 // LiquidType, 0 where the near mesh doesn't cover the cell, else 1 plus the stock mesh's depth coordinate.
 layout(set = 2, binding = 6) uniform sampler2D shoreCells;
+// The rivers' flow on the same cells (SXC/Water/Flow.h): the flow in world x and y (yd / s), roughness (0
+// calm, 1 rapids), how much of a river is there (0..1).
+layout(set = 2, binding = 8) uniform sampler2D flowMap;
 
 const float kShoreHalfWorld = 32.0 * 533.33333;
 
@@ -30,6 +33,21 @@ vec4 ShoreAt(vec2 world, out float weight)
     vec2 edge = min(inside, vec2(256.0) - inside);
     weight = clamp((min(edge.x, edge.y) - 2.0) / 14.0, 0.0, 1.0);
     return textureLod(shoreMap, g / 256.0, 0.0);
+}
+
+// The rivers' flow at a world point (as above); nothing outside the shore field or on other water.
+vec4 FlowAt(vec2 world)
+{
+    if (scene.shoreGrid.z < 0.5 || SHORE_TERRAIN < 0.5)
+    {
+        return vec4(0.0);
+    }
+
+    vec2 g = vec2(kShoreHalfWorld - world.y, kShoreHalfWorld - world.x) / scene.shoreGrid.w;
+    vec2 inside = g - scene.shoreGrid.xy;
+    vec2 edge = min(inside, vec2(256.0) - inside);
+    float weight = clamp((min(edge.x, edge.y) - 2.0) / 14.0, 0.0, 1.0);
+    return textureLod(flowMap, g / 256.0, 0.0) * weight;
 }
 
 // The cell a world point lies in (global cell coordinates) and its near-mesh data.

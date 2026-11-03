@@ -174,6 +174,11 @@ namespace
         gxvk::vk::water::ShoreShared shared;  ///< the values for the terrain (Shore()), from the last capture
         uint64_t       sharedSerial = 0;
         uint64_t       shoreUpload  = 0;      ///< the serial of the last upload
+        Image          flow;                  ///< the rivers' flow on the shore field's cells (binding 8)
+        memory::Buffer flowStaging;
+        uint32_t       flowVersion  = 0;
+        bool           flowHas      = false;
+        uint64_t       flowUpload   = 0;
         VkImageView    wavesNear    = VK_NULL_HANDLE;   ///< cascade 0's displacement alone (2D), for the terrain
         VkImageView    ripplesNear  = VK_NULL_HANDLE;   ///< cascade 2's slopes alone (2D), for the caustics
 
@@ -332,10 +337,10 @@ namespace
         // waves' parameters, 3 the waves' slopes (a layer per cascade), 4 their displacement (the vertex
         // stage moves the surface with it, step 3b), 5 the shore field, 6 its cells for the near mesh
         // (both stages; the fragment stage reads 4 too: which side of the surface a pixel starts on), 7 the
-        // ripple field (fragment). The swimmers' query and the underwater medium (compute) read 2 and 4..6 as
-        // the vertex stage does.
-        VkDescriptorSetLayoutBinding draw[8] = {};
-        for (uint32_t i = 0; i < 8; ++i)
+        // ripple field (fragment), 8 the rivers' flow on the shore field's cells. The swimmers' query and the
+        // underwater medium (compute) read 2 and 4..6 as the vertex stage does.
+        VkDescriptorSetLayoutBinding draw[9] = {};
+        for (uint32_t i = 0; i < 9; ++i)
         {
             draw[i].binding         = i;
             draw[i].descriptorType  = i == 2 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -347,7 +352,7 @@ namespace
         }
         VkDescriptorSetLayoutCreateInfo drawInfo = {};
         drawInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        drawInfo.bindingCount = 8;
+        drawInfo.bindingCount = 9;
         drawInfo.pBindings    = draw;
         if (!Check(d.CreateDescriptorSetLayout(s.device, &drawInfo, nullptr, &s.drawLayout), "vkCreateDescriptorSetLayout (set 2)")) return false;
 
@@ -373,7 +378,7 @@ namespace
 
         VkDescriptorPoolSize sizes[3] = {};
         sizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[0].descriptorCount = 9 * kSlots;
+        sizes[0].descriptorCount = 10 * kSlots;
         sizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         sizes[1].descriptorCount = 2 * kSlots;
         sizes[2].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -445,7 +450,9 @@ namespace
         const VkDeviceSize shoreBytes = static_cast<VkDeviceSize>(gxvk::vk::water::kShoreSize) * gxvk::vk::water::kShoreSize * 8;
         if (!CreateImage(VK_FORMAT_R16G16B16A16_SFLOAT, shoreExtent, s.shore)) return false;
         if (!CreateImage(VK_FORMAT_R32G32B32A32_SFLOAT, shoreExtent, s.shoreCells)) return false;
-        if (!memory::CreateBuffer(shoreBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, memory::Where::Stream, s.shoreStaging) || !s.shoreStaging.block.mapped
+        if (!CreateImage(VK_FORMAT_R16G16B16A16_SFLOAT, shoreExtent, s.flow)) return false;
+        if (!memory::CreateBuffer(shoreBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, memory::Where::Stream, s.flowStaging) || !s.flowStaging.block.mapped
+            || !memory::CreateBuffer(shoreBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, memory::Where::Stream, s.shoreStaging) || !s.shoreStaging.block.mapped
             || !memory::CreateBuffer(shoreBytes * 2, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, memory::Where::Stream, s.shoreCellsStaging) || !s.shoreCellsStaging.block.mapped)
         {
             Write(Error, "vulkan: water: no staging buffer for the shore field");
@@ -477,7 +484,7 @@ namespace
     {
         // The ripple field when there is one, else a stand-in of the same kind (a 2D array; the draws don't read it).
         const VkImageView rippleView = gxvk::vk::ripples::View();
-        VkDescriptorImageInfo images[8] = {
+        VkDescriptorImageInfo images[9] = {
             { s.linearClamp, s.colour.view, VK_IMAGE_LAYOUT_GENERAL },
             { s.nearestClamp, s.depth.view, VK_IMAGE_LAYOUT_GENERAL },
             {},
@@ -487,10 +494,11 @@ namespace
             { s.nearestClamp, s.shoreCells.view, VK_IMAGE_LAYOUT_GENERAL },
             { rippleView != VK_NULL_HANDLE ? gxvk::vk::ripples::Sampler() : s.linearRepeat,
               rippleView != VK_NULL_HANDLE ? rippleView : s.waveImages[6].view, VK_IMAGE_LAYOUT_GENERAL },
+            { s.linearRepeat, s.flow.view, VK_IMAGE_LAYOUT_GENERAL },
         };
         VkDescriptorBufferInfo params = { slot.params.handle, 0, sizeof(Params) };
-        VkWriteDescriptorSet writes[8] = {};
-        for (uint32_t i = 0; i < 8; ++i)
+        VkWriteDescriptorSet writes[9] = {};
+        for (uint32_t i = 0; i < 9; ++i)
         {
             writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[i].dstSet          = slot.drawSet;
@@ -500,7 +508,7 @@ namespace
             if (i == 2) writes[i].pBufferInfo = &params;
             else writes[i].pImageInfo = &images[i];
         }
-        s.dapi->UpdateDescriptorSets(s.device, 8, writes, 0, nullptr);
+        s.dapi->UpdateDescriptorSets(s.device, 9, writes, 0, nullptr);
         slot.written    = true;
         slot.rippleView = rippleView;
     }
@@ -518,7 +526,7 @@ namespace
         {
             VkClearColorValue zero = {};
             VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-            Image* const fresh[2] = { &s.shore, &s.shoreCells };
+            Image* const fresh[3] = { &s.shore, &s.shoreCells, &s.flow };
             for (Image* img : fresh)
             {
                 ImageBarrier(cmd, img->image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
@@ -529,6 +537,26 @@ namespace
                 img->layout = VK_IMAGE_LAYOUT_GENERAL;
             }
             s.shoreFresh = false;
+        }
+
+        // The rivers' flow, on its own version (an edited river changes it, the shore staying).
+        if (in.flow && !(s.flowHas && in.flowVersion == s.flowVersion) && (!s.flowUpload || frame::WaitSerial(s.flowUpload)))
+        {
+            const size_t flowBytes = static_cast<size_t>(gxvk::vk::water::kShoreSize) * gxvk::vk::water::kShoreSize * 8;
+            std::memcpy(s.flowStaging.block.mapped, in.flow, flowBytes);
+            memory::FlushHost(s.flowStaging.block);
+            ImageBarrier(cmd, s.flow.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, readers, VK_ACCESS_SHADER_READ_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+            VkBufferImageCopy flowRegion = {};
+            flowRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            flowRegion.imageSubresource.layerCount = 1;
+            flowRegion.imageExtent = VkExtent3D{ gxvk::vk::water::kShoreSize, gxvk::vk::water::kShoreSize, 1 };
+            d.CmdCopyBufferToImage(cmd, s.flowStaging.handle, s.flow.image, VK_IMAGE_LAYOUT_GENERAL, 1, &flowRegion);
+            ImageBarrier(cmd, s.flow.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_ACCESS_TRANSFER_WRITE_BIT, readers, VK_ACCESS_SHADER_READ_BIT);
+            s.flowVersion = in.flowVersion;
+            s.flowHas     = true;
+            s.flowUpload  = frame::Serial();
         }
 
         if (!in.texels || (s.shoreHas && in.version == s.shoreVersion)) return;
@@ -1179,6 +1207,8 @@ namespace gxvk::vk::water
         DestroyImage(s.shore);
         memory::DestroyBuffer(s.shoreStaging);
         DestroyImage(s.shoreCells);
+        DestroyImage(s.flow);
+        memory::DestroyBuffer(s.flowStaging);
         memory::DestroyBuffer(s.shoreCellsStaging);
         for (VkPipeline& p : s.wavePipes)
             if (p != VK_NULL_HANDLE) d.DestroyPipeline(s.device, p, nullptr);

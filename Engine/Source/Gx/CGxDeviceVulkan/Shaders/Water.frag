@@ -675,6 +675,26 @@ void main()
         // The surface movement's easing from the depth byte: black still (the shore), white moving fully.
         fogged = vec3(vEase);
     }
+    else if (debugView == 13)
+    {
+        // The rivers' flow: the colour its speed (blue still, cyan, green, yellow, red at 4 yd / s and more),
+        // dots drifting with it (dark; white on rough water), grey where no river is. The dots are carried
+        // in two phases a second apart, each faded out as it restarts (as the water's detail will be), on
+        // the world point wrapped every 64 yd (a whole number of the dots' 2 yd), so far from the world's
+        // origin they stay precise.
+        vec4 flow = FlowAt(world.xy);
+        float speed = length(flow.xy);
+        float heat = clamp(speed / 4.0, 0.0, 1.0);
+        vec3 colour = clamp(vec3(heat * 4.0 - 2.0, heat < 0.5 ? heat * 4.0 : 4.0 - heat * 4.0, 2.0 - heat * 4.0), 0.0, 1.0);
+        vec2 local = mod(world.xy, 64.0);
+        float phase0 = fract(regs.p[6].x * 0.5), phase1 = fract(regs.p[6].x * 0.5 + 0.5);
+        vec2 c0 = fract((local - flow.xy * phase0 * 2.0) * 0.5) - 0.5;
+        vec2 c1 = fract((local - flow.xy * phase1 * 2.0 + vec2(1.0)) * 0.5) - 0.5;
+        float w0 = 1.0 - abs(phase0 * 2.0 - 1.0);
+        float dots = (1.0 - smoothstep(0.08, 0.14, length(c0))) * w0 + (1.0 - smoothstep(0.08, 0.14, length(c1))) * (1.0 - w0);
+        vec3 river = mix(colour, flow.z > 0.5 ? vec3(1.0) : vec3(0.0), dots * 0.8);
+        fogged = mix(vec3(0.25), river, clamp(flow.w, 0.0, 1.0));
+    }
     else if (debugView == 7)
     {
         // The screen mapping's check: the pixel's own point through ToScene against where the pixel is

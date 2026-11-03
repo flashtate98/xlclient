@@ -4,6 +4,7 @@
 #include <cmath>
 #include "Engine/Source/Tempest/C3Vector.h"
 #include "SXC/Api/sxc_water.h"
+#include "SXC/Water/Flow.h"
 #include "SXC/Water/Ripples.h"
 #include "WoW/Source/WorldClient/Map.h"
 
@@ -51,7 +52,24 @@ namespace {
         return SXC::Water::RippleAt(x, y, radius, depth) ? WXL_TRUE : WXL_FALSE;
     }
 
-    const sxc_water_api s_api = { sizeof(sxc_water_api), ApiLiquidAt, ApiRipple };
+    void WXL_CALL ApiSetRivers(const sxc_water_river* rivers, uint32_t riverCount, const sxc_water_river_node* nodes, uint32_t nodeCount) {
+        SXC::Water::SetRivers(rivers, riverCount, nodes, nodeCount);
+    }
+
+    wxl_bool WXL_CALL ApiFlowAt(float x, float y, float* outX, float* outY, float* outWeight) {
+        float fx = 0.0f, fy = 0.0f, w = 0.0f;
+
+        if (!SXC::Water::FlowAt(x, y, fx, fy, w)) {
+            return WXL_FALSE;
+        }
+
+        if (outX) *outX = fx;
+        if (outY) *outY = fy;
+        if (outWeight) *outWeight = w;
+        return WXL_TRUE;
+    }
+
+    const sxc_water_api s_api = { sizeof(sxc_water_api), ApiLiquidAt, ApiRipple, ApiSetRivers, ApiFlowAt };
 }
 
 namespace SXC::Water {

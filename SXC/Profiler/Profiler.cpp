@@ -10,6 +10,7 @@
 #include <string>
 #include "SXC/Api/sxc_profiler.h"
 #include "SXC/Settings/Settings.h"
+#include "SXC/Watchdog.h"
 #include "SXC/ThirdParty/imgui/imgui.h"
 
 namespace {
@@ -372,6 +373,7 @@ namespace SXC::Profiler {
     }
 
     void FrameEnd() {
+        SXC::Watchdog::Beat();   // a frame done: the hang watchdog's heartbeat
         const int64_t now = Now();
 
         if (!s_mainThread) {

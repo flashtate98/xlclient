@@ -56,6 +56,8 @@ namespace gxvk::vk::water
         const uint16_t* texels  = nullptr;   ///< kShoreSize x kShoreSize x 4; null: none
         const float*    cells   = nullptr;   ///< kShoreSize x kShoreSize x 4 floats: surface, ground, type, covered
         uint32_t        version = 0;         ///< uploaded again when it changes
+        const uint16_t* flow    = nullptr;   ///< the rivers' flow on the same cells (SXC/Water/Flow.h): kShoreSize x kShoreSize x 4 halves; null: none
+        uint32_t        flowVersion = 0;     ///< uploaded again when it changes
         int32_t         originX = 0;         ///< the window's first cell (global)
         int32_t         originY = 0;
         float           foam       = 1.0f;    ///< the shore's foam strength

@@ -21,6 +21,7 @@
 #include "Engine/Source/Tempest/C33Matrix.h"
 #include "Engine/Source/Tempest/C3Ray.h"
 #include "Engine/Source/Tempest/NTempest.h"
+#include <chrono>
 #include "SXC/Log.h"  // SXC:
 #include "SXC/Lights/Lights.h"  // SXC: the world's lights only on the world's scene
 
@@ -54,13 +55,37 @@ void CM2Scene::SetTime(uint32_t time) {
     this->m_cache->GarbageCollect(0);
 }
 
+// SXC: a probe for the freezes in "models: animation" (Seyri, 2026-11-03: seconds to minutes on
+// coming back to a place seen before): each step of the scene's animation, and each model's part in it,
+// that takes longer than 20 ms goes to the log with the model's file, so the one that hangs names itself.
+namespace {
+    using SxcClock = std::chrono::steady_clock;
+
+    double SxcMs(SxcClock::time_point since) {
+        return std::chrono::duration<double, std::milli>(SxcClock::now() - since).count();
+    }
+
+    void SxcSlow(const char* step, SxcClock::time_point since, const CM2Model* model = nullptr) {
+        const double ms = SxcMs(since);
+
+        if (ms >= 20.0) {
+            SXC::Log("slow model animation: %s took %.1f ms%s%s", step, ms, model && model->m_shared ? " for " : "",
+                     model && model->m_shared ? model->m_shared->m_fileName : "");
+        }
+    }
+}
+
 // VERIFY: fb95d1fc auto
 // OFFSET: 0x0081C9C0
 void CM2Scene::AdvanceTime(uint32_t delta) {
     WXL_CORE_ZONE("M2.AdvanceTime");
     this->m_time += delta;
+    SxcClock::time_point sxcStep = SxcClock::now();
     this->m_cache->UpdateShared();
+    SxcSlow("loading models (UpdateShared)", sxcStep);
+    sxcStep = SxcClock::now();
     this->m_cache->GarbageCollect(0);
+    SxcSlow("freeing models (GarbageCollect)", sxcStep);
     this->m_flags |= 4;
     this->m_timeDelta = delta;
 
@@ -69,7 +94,9 @@ void CM2Scene::AdvanceTime(uint32_t delta) {
 
         while (model) {
             CM2Model* next = model->m_animateNext;
+            const SxcClock::time_point sxcModel = SxcClock::now();
             model->ProcessCallbacksRecursive();
+            SxcSlow("its events (ProcessCallbacks)", sxcModel, model);
             model = next;
         }
     }
@@ -1743,16 +1770,22 @@ int32_t CM2Scene::Animate(const C3Vector& cameraPos) {
     this->m_view.Translate(move);
     this->m_viewInv = this->m_view.Inverse(this->m_view.Determinant());
 
+    const SxcClock::time_point sxcBones = SxcClock::now();
+
     if (this->m_cache->m_flags & 4) {
         this->m_cache->BeginThread(&CM2Scene::AnimateThread, this);
 
         for (CM2Model* model = this->m_animateList; model; ) {
             if (!model->m_attachParent) {
+                const SxcClock::time_point sxcModel = SxcClock::now();
+
                 if (model->m_fFlags & 0x1000) {
                     model->AnimateMTSimple(&this->m_view, C3Vector(1.0f, 1.0f, 1.0f), C3Vector(0.0f, 0.0f, 0.0f), 1.0f, 1.0f);
                 } else {
                     model->AnimateMT(&this->m_view, C3Vector(1.0f, 1.0f, 1.0f), C3Vector(0.0f, 0.0f, 0.0f), 1.0f, 1.0f);
                 }
+
+                SxcSlow("its bones (AnimateMT)", sxcModel, model);
             }
 
             CM2Model* next = model->m_animateNext;
@@ -1771,17 +1804,25 @@ int32_t CM2Scene::Animate(const C3Vector& cameraPos) {
                 continue;
             }
 
+            const SxcClock::time_point sxcModel = SxcClock::now();
+
             if (model->m_fFlags & 0x1000) {
                 model->AnimateMTSimple(&this->m_view, C3Vector(1.0f, 1.0f, 1.0f), C3Vector(0.0f, 0.0f, 0.0f), 1.0f, 1.0f);
             } else {
                 model->AnimateMT(&this->m_view, C3Vector(1.0f, 1.0f, 1.0f), C3Vector(0.0f, 0.0f, 0.0f), 1.0f, 1.0f);
             }
+
+            SxcSlow("its bones (AnimateMT)", sxcModel, model);
         }
     }
 
+    SxcSlow("all bones (AnimateMT, both threads)", sxcBones);
+
     for (CM2Model* model = this->m_animateList; model; model = model->m_animateNext) {
         if (!model->m_attachParent) {
+            const SxcClock::time_point sxcModel = SxcClock::now();
             model->AnimateST();
+            SxcSlow("its particles and ribbons (AnimateST)", sxcModel, model);
         }
     }
 
@@ -1790,7 +1831,9 @@ int32_t CM2Scene::Animate(const C3Vector& cameraPos) {
         this->m_animateList = model->m_animateNext;
         model->m_animatePrev = nullptr;
         model->m_animateNext = nullptr;
+        const SxcClock::time_point sxcModel = SxcClock::now();
         model->SetupLighting();
+        SxcSlow("its lighting (SetupLighting)", sxcModel, model);
     }
 
     this->m_doodadElements.m_count = 0;

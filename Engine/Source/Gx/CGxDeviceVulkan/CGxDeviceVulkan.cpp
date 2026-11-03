@@ -684,6 +684,8 @@ bool CGxDeviceVulkan::SxcWaterCapture(const SXC::Water::Waves& waves, bool* firs
     in.shore.texels = waves.shore;
     in.shore.cells = waves.shoreCells;
     in.shore.version = waves.shoreVersion;
+    in.shore.flow = waves.flow;
+    in.shore.flowVersion = waves.flowVersion;
     in.shore.originX = waves.shoreOriginX;
     in.shore.originY = waves.shoreOriginY;
     in.shore.foam = waves.shoreFoam;
