@@ -14026,7 +14026,12 @@ int32_t CGUnit_C::InitializeExtendedDisplay(CGPlayer_C* player, int32_t hasDispl
 #endif
     ComponentData data;
 
-    if (hasDisplayInfo) {
+    // Not in the original: FlashWOW; a player showing its own body takes its race and sex from the player, not
+    // from the display's extra row. After a druid form the display info can be left on another extra row, which
+    // drew a female Gilnean as a male until the next login.
+    const bool ownBody = player && this->m_unit->m_unitFieldDisplayid == this->m_unit->m_unitFieldNativedisplayid;
+
+    if (hasDisplayInfo && !ownBody) {
         data.m_preferences.m_raceID = this->m_displayInfoExtra->m_displayRaceID;
         data.m_preferences.m_sexID = this->m_displayInfoExtra->m_displaySexID;
     } else {
