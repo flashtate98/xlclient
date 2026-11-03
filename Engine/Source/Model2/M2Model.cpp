@@ -5939,6 +5939,20 @@ void CM2Model::AnimateParticleST(float deltaTime, uint32_t index) {
         emitter->m_alphaScale = alpha;
     }
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    if (!particle->m_active && IsSpellEffect(this)) {
+        uint32_t& frames = s_particleFrames[this];
+        if (index == 0) ++frames;
+        if (frames == 1 || frames == 10 || frames == 40 || frames == 120) {
+            Blizzard::Log::Printf(1, "Logs/Particles.log",
+                "frame %u %s emitter %u INACTIVE: visible %u emitting %u rate %.2f emitter flags 0x%x seq %u time %u\n",
+                frames, this->m_shared->m_fileName, index, particle->m_visibilityTrack.m_currentValue, particle->m_emitting,
+                rate, emitter->m_flags, this->m_bones[particleData->m_boneIndex].m_sequence.m_animIndex,
+                this->m_bones[particleData->m_boneIndex].m_sequence.m_currentTime);
+        }
+    }
+#endif
+
     if (!particle->m_active) {
         return;
     }
@@ -7185,6 +7199,12 @@ void CModelBatchList::Optimize() {
 // OFFSET: 0x00832EA0
 int32_t CM2Model::InitializeLoaded() {
     CM2Shared* shared = this->m_shared;
+
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    if (IsSpellEffect(this)) {
+        Blizzard::Log::Printf(1, "Logs/Particles.log", "model init %s: shared flags 0x%x\n", shared->m_fileName, shared->m_flags);
+    }
+#endif
 
     if (!(shared->m_flags & 1) || !(shared->m_flags & 2)) {
         return 1;

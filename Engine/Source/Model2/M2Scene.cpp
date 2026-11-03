@@ -1558,6 +1558,11 @@ CM2Model* CM2Scene::CreateModel(const char* fileName, uint32_t flags) {
         shared = this->m_cache->CreateShared("Spells\\ErrorCube.mdx", 0);
     }
 
+    if (shared && M2IsSpellPath(fileName)) {
+        M2Trace("request %s: shared %s, flags 0x%x (main file %s, skin %s)", fileName, shared->m_fileName, shared->m_flags,
+            (shared->m_flags & 1) ? "loaded" : "pending", (shared->m_flags & 2) ? "loaded" : "pending");
+    }
+
     CM2Model* model = nullptr;
 
     if (shared) {
