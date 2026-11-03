@@ -151,6 +151,8 @@
 #include "Engine/Source/BlizzardCore/SFile2-Core.h"
 #include "Engine/Source/BlizzardCore/Source/System/Log/Log.h"
 #include <set>
+#include <cstdarg>
+#include <cstdio>
 #include <string>
 #include <unordered_map>
 #endif
@@ -9906,6 +9908,25 @@ void CGUnit_C::OnCollideFalling() {
     this->PlayBaseAnimation(ANIM_FALL, 0);
 }
 
+// Not in the original: FlashWOW Two Forms diagnostics. Each change in how a player with an altered form is
+// drawn goes to Logs/TwoForms.log (only when it differs from the last line written for that player).
+#if defined(WOWDECOMP_RETAIL_MODELS)
+static void TwoFormsLog(uint64_t guid, const char* format, ...) {
+    char line[512];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(line, sizeof(line), format, args);
+    va_end(args);
+    static std::unordered_map<uint64_t, std::string> s_last;
+    std::string& last = s_last[guid];
+    if (last == line) {
+        return;
+    }
+    last = line;
+    Blizzard::Log::Printf(1, "Logs/TwoForms.log", "%llu %s\n", static_cast<unsigned long long>(guid), line);
+}
+#endif
+
 // VERIFY: 8cfa7612 auto
 // OFFSET: 0x0072D940
 void CGUnit_C::RefreshDataPointers() {
@@ -9926,6 +9947,16 @@ void CGUnit_C::RefreshDataPointers() {
 
     CreatureDisplayInfoRec* displayInfo = this->m_displayInfo;
     this->m_displayInfoExtra = g_creatureDisplayInfoExtraDB.GetRecord(displayInfo->m_extendedDisplayInfoID);
+
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    if ((this->m_obj->m_type & TYPEMASK_PLAYER) && AlteredFormRace(this->m_unit->m_unitFieldBytes0[0])) {
+        const CreatureDisplayInfoExtraRec* extra = this->m_displayInfoExtra;
+        TwoFormsLog(this->m_obj->m_guid.m_guid, "display: field %d native %d cached %d -> %d, extra %d (race %d sex %d), sex byte %d, altered %d",
+            static_cast<int32_t>(this->m_unit->m_unitFieldDisplayid), static_cast<int32_t>(this->m_unit->m_unitFieldNativedisplayid),
+            this->m_displayId, displayInfo->m_id, extra ? extra->m_id : 0, extra ? extra->m_displayRaceID : -1,
+            extra ? extra->m_displaySexID : -1, this->m_unit->m_unitFieldBytes0[2], this->InAlteredForm() ? 1 : 0);
+    }
+#endif
 
     CreatureModelDataRec* modelData = g_creatureModelDataDB.GetRecord(displayInfo->m_modelID);
     this->m_modelData = modelData;
@@ -14026,12 +14057,7 @@ int32_t CGUnit_C::InitializeExtendedDisplay(CGPlayer_C* player, int32_t hasDispl
 #endif
     ComponentData data;
 
-    // Not in the original: FlashWOW; a player showing its own body takes its race and sex from the player, not
-    // from the display's extra row. After a druid form the display info can be left on another extra row, which
-    // drew a female Gilnean as a male until the next login.
-    const bool ownBody = player && this->m_unit->m_unitFieldDisplayid == this->m_unit->m_unitFieldNativedisplayid;
-
-    if (hasDisplayInfo && !ownBody) {
+    if (hasDisplayInfo) {
         data.m_preferences.m_raceID = this->m_displayInfoExtra->m_displayRaceID;
         data.m_preferences.m_sexID = this->m_displayInfoExtra->m_displaySexID;
     } else {
@@ -14039,6 +14065,13 @@ int32_t CGUnit_C::InitializeExtendedDisplay(CGPlayer_C* player, int32_t hasDispl
         data.m_preferences.m_raceID = this->GetAppearanceRace();
         data.m_preferences.m_sexID = this->m_unit->m_unitFieldBytes0[2];
     }
+
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    if (player && AlteredFormRace(this->m_unit->m_unitFieldBytes0[0])) {
+        TwoFormsLog(this->m_obj->m_guid.m_guid, "body: %s race %d sex %d", hasDisplayInfo ? "from extra" : "from player",
+            static_cast<int32_t>(data.m_preferences.m_raceID), static_cast<int32_t>(data.m_preferences.m_sexID));
+    }
+#endif
 
     data.m_preferences.m_classId = this->m_unit->m_unitFieldBytes0[1];
 
