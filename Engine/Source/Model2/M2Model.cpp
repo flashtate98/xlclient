@@ -43,6 +43,27 @@
 #include <mutex>
 #include <vector>
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+#include <cctype>
+#include <cmath>
+#include <string>
+#include <unordered_map>
+#include "Engine/Source/BlizzardCore/Source/System/Log/Log.h"
+
+namespace {
+// Not in the original: diagnostics for spell effects whose particles do not show. Models under Spells\ log
+// their emitters when created and their state on a few early frames to Logs/Particles.log.
+bool IsSpellEffect(const CM2Model* model) {
+    if (!model || !model->m_shared) return false;
+    std::string name = model->m_shared->m_fileName;
+    for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return name.compare(0, 7, "spells\\") == 0 || name.compare(0, 7, "spells/") == 0;
+}
+
+std::unordered_map<const CM2Model*, uint32_t> s_particleFrames;
+}
+#endif
+
 namespace {
 // Not in the original: skin-parent bindings (CM2Model::SetSkinParent), kept outside CM2Model so its
 // layout stays the original's. Ported from the Esteria fork's M2Model.cpp. The pointers are borrowed
@@ -5931,6 +5952,25 @@ void CM2Model::AnimateParticleST(float deltaTime, uint32_t index) {
     transform = s_emitterRotation * transform;
     emitter->Update(deltaTime, transform, *reinterpret_cast<const C3Vector*>(&this->m_scene->m_viewInv.d0), static_cast<const C44Matrix*>(this->m_frameOfReference));
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    if (IsSpellEffect(this)) {
+        uint32_t& frames = s_particleFrames[this];
+        if (index == 0) ++frames;
+        if (frames == 1 || frames == 10 || frames == 40 || frames == 120) {
+            CTexture* texture = emitter->m_texture;
+            const bool finite = std::isfinite(transform.d0) && std::isfinite(transform.d1) && std::isfinite(transform.d2);
+            Blizzard::Log::Printf(1, "Logs/Particles.log",
+                "frame %u %s emitter %u: visible %u emitting %u active %u rate %.2f life %.2f speed %.2f alpha %.2f/%.2f flags 0x%x live %d prims %u texture %s%s at %s (%.2f %.2f %.2f) seq %u time %u\n",
+                frames, this->m_shared->m_fileName, index, particle->m_visibilityTrack.m_currentValue, particle->m_emitting,
+                particle->m_active, rate, emitter->m_params.m_life, emitter->m_params.m_speed, emitter->m_alphaScale,
+                this->m_effectiveAlpha, emitter->m_flags, emitter->HasLiveParticles(), emitter->GetNumPrimitives(),
+                texture ? texture->m_filename : "NONE", texture && !TextureGetGxTex(texture, 0, nullptr) ? " (not loaded)" : "",
+                finite ? "position" : "NON-FINITE position", transform.d0, transform.d1, transform.d2,
+                this->m_bones[particleData->m_boneIndex].m_sequence.m_animIndex,
+                this->m_bones[particleData->m_boneIndex].m_sequence.m_currentTime);
+        }
+    }
+#endif
     uint32_t modelCount = emitter->GetNumParticleModels();
 
     for (uint32_t i = 0; i < modelCount; i++) {
@@ -7438,6 +7478,15 @@ int32_t CM2Model::InitializeLoaded() {
             }
 
             emitter->m_params.m_emissionRateVariation = particleData->m_emissionRateVariation;
+#if defined(WOWDECOMP_RETAIL_MODELS)
+            if (IsSpellEffect(this)) {
+                if (i == 0) s_particleFrames.erase(this);
+                Blizzard::Log::Printf(1, "Logs/Particles.log", "create %s emitter %u/%u: type %u flags 0x%08x texture %u blend %u bone %u, rate key %s\n",
+                    this->m_shared->m_fileName, i, data->m_particles.m_count, particleData->m_emitterType, particleData->m_flags,
+                    particleData->m_textureIndex, particleData->m_blendMode, particleData->m_boneIndex,
+                    particleData->m_emissionRateTrack.m_sequenceKeys[0].m_count ? "yes" : "none");
+            }
+#endif
 
             if (particleData->m_speedTrack.m_sequenceKeys[0].m_count) {
                 emitter->m_params.m_speed = particleData->m_speedTrack.m_sequenceKeys[0][0];
