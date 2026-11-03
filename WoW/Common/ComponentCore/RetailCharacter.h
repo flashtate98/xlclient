@@ -90,8 +90,9 @@ using RetailBodyOwner = void (*)(void* owner, CM2Model* replacement);
 void RetailCharacterSetBodyOwner(const CCharacterComponent* character, RetailBodyOwner swap, void* owner);
 
 // The stock client race (1-11) whose helmets a race wears: itself, or for a new race the stock race whose
-// ChrRaces client prefix it shares (Nightborne "Ni": Night Elf). 0 if none.
-uint32_t RetailCharacterStockRace(uint32_t raceId);
+// ChrRaces client prefix it shares (Nightborne "Ni": Night Elf), by sex where the two differ (Dracthyr
+// Visage: Blood Elf male, Human female). 0 if none.
+uint32_t RetailCharacterStockRace(uint32_t raceId, uint32_t sexId);
 // Whether a helmet model exists (an .mdx path is checked as the .m2 it loads as). Remembered per path.
 bool RetailCharacterHelmFileExists(const char* mdxPath);
 

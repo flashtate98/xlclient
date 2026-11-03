@@ -1019,17 +1019,17 @@ static void ApplyGlueScale(CCharacterComponent* character) {
     m.c0 *= k; m.c1 *= k; m.c2 *= k;
 }
 
-uint32_t StockRaceFor(uint32_t raceId);
-uint32_t RetailCharacterStockRace(uint32_t raceId) { return StockRaceFor(raceId); }
+uint32_t StockRaceFor(uint32_t raceId, uint32_t sexId);
+uint32_t RetailCharacterStockRace(uint32_t raceId, uint32_t sexId) { return StockRaceFor(raceId, sexId); }
 uint32_t RetailCharacterHelmetRace(const CCharacterComponent* character) {
     const uint32_t race = character->m_data.m_preferences.m_raceID;
     uint32_t retailRace = 0;
-    const uint32_t stock = RetailModelOf(character, retailRace) ? StockRaceFor(race) : 0;
+    const uint32_t stock = RetailModelOf(character, retailRace) ? StockRaceFor(race, character->m_data.m_preferences.m_sexID) : 0;
     if (stock) return stock;
     // A race past the 32-bit masks that copies a stock race (the NPC races 34-43: Human, Orc, Dwarf, ... by
     // their ChrRaces client prefix) hides as that race.
     if (race >= 32)
-        if (const uint32_t copied = StockRaceFor(race)) return copied;
+        if (const uint32_t copied = StockRaceFor(race, character->m_data.m_preferences.m_sexID)) return copied;
     // FlashWOW moved its NPC races above 32 to free 23, 24 and 27-32 for new player races. The helmet hides
     // are 32-bit race masks, so the moved races keep the bit of their old number (which the new player races,
     // hiding by a stock race, do not read). Any other race past the masks hides nothing.
@@ -1555,13 +1555,19 @@ std::string RetailCharacterTuneHelmet(CCharacterComponent* character, float scal
 
 // The stock client race (1-11) whose helmets a race wears: itself, or for a new race the stock race whose
 // ChrRaces client prefix it shares (Void Elf "Be": Blood Elf helmet models, Blood Elf helmet hides). 0 if none.
-uint32_t StockRaceFor(uint32_t raceId) {
+uint32_t StockRaceFor(uint32_t raceId, uint32_t sexId) {
     // The stock prefixes, then the Retail prefixes of new races with their own helmets (CharacterComponent's
     // ComposeHelmModelFilePath tries the race's own helmet first and falls back to the stock race's).
     static const std::pair<const char*, uint32_t> kByPrefix[] = {{"Hu", 1}, {"Or", 2}, {"Dw", 3}, {"Ni", 4}, {"Sc", 5},
         {"Ta", 6}, {"Gn", 7}, {"Tr", 8}, {"Be", 10}, {"Dr", 11},
         {"Kt", 1}, {"Mo", 2}, {"Di", 3}, {"Ed", 3}, {"Hr", 4}, {"Ht", 6}, {"Mg", 7}, {"Za", 8}};
     if (raceId >= 1 && raceId <= 11 && raceId != 9) return raceId;
+    // A race whose two bodies come from different stock races: the Dracthyr Visage ("Dv") is a Blood Elf
+    // build as a male and a Human build as a female, and wears their helmets.
+    static const struct { const char* prefix; uint32_t male, female; } kBySex[] = {{"Dv", 10, 1}};
+    if (const ChrRacesRec* rec = g_chrRacesDB.GetRecord(raceId); rec && rec->m_clientPrefix)
+        for (const auto& entry : kBySex)
+            if (!_stricmp(rec->m_clientPrefix, entry.prefix)) return sexId ? entry.female : entry.male;
     if (const ChrRacesRec* rec = g_chrRacesDB.GetRecord(raceId); rec && rec->m_clientPrefix)
         for (const auto& entry : kByPrefix)
             if (!_stricmp(rec->m_clientPrefix, entry.first)) return entry.second;
@@ -1588,7 +1594,7 @@ bool OwnRaceHelmet(uint32_t raceId, uint32_t sexId, const char* fileName) {
     if (raceId >= 1 && raceId <= 11) return false;
     // Only races with a stock fallback (the Retail prefixes in StockRaceFor); the others (Vulpera "Vu", Pandaren
     // "Pa", ...) keep their helmets.csv tuning.
-    if (!StockRaceFor(raceId)) return false;
+    if (!StockRaceFor(raceId, sexId)) return false;
     static const char* const kStockPrefixes[] = {"Hu", "Or", "Dw", "Ni", "Sc", "Ta", "Gn", "Tr", "Be", "Dr"};
     for (const char* stock : kStockPrefixes)
         if (!_stricmp(rec->m_clientPrefix, stock)) return false;
@@ -1608,7 +1614,7 @@ bool OwnRaceHelmet(uint32_t raceId, uint32_t sexId, const char* fileName) {
 const Retail::HelmetAnchor* StockAnchor(uint32_t raceId, uint32_t sexId) {
     static const char* const kStock[] = {nullptr, "Human", "Orc", "Dwarf", "NightElf", "Scourge", "Tauren", "Gnome",
         "Troll", nullptr, "BloodElf", "Draenei"};
-    const uint32_t stockRace = StockRaceFor(raceId);
+    const uint32_t stockRace = StockRaceFor(raceId, sexId);
     if (sexId > 1 || !stockRace || !kStock[stockRace]) return nullptr;
     const std::string race = kStock[stockRace], sex = sexId ? "Female" : "Male";
     const std::string donorPath = "Character\\" + race + "\\" + sex + "\\" + race + sex + ".m2";

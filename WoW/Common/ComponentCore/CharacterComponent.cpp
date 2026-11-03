@@ -487,7 +487,7 @@ int32_t CCharacterComponent::ComposeHelmModelFilePath(const ChrRacesRec* raceRec
     const char* sex = s_fileDecorations[this->m_data.m_preferences.m_sexID];
     const char* fallbackPrefix = nullptr;
 
-    if (const uint32_t stockRace = RetailCharacterStockRace(raceRec->m_id); stockRace && stockRace != static_cast<uint32_t>(raceRec->m_id)) {
+    if (const uint32_t stockRace = RetailCharacterStockRace(raceRec->m_id, this->m_data.m_preferences.m_sexID); stockRace && stockRace != static_cast<uint32_t>(raceRec->m_id)) {
         if (const ChrRacesRec* stockRec = g_chrRacesDB.GetRecord(stockRace); stockRec && stockRec->m_clientPrefix &&
             _stricmp(stockRec->m_clientPrefix, raceRec->m_clientPrefix)) {
             fallbackPrefix = stockRec->m_clientPrefix;
