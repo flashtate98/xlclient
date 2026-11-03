@@ -1410,10 +1410,6 @@ int32_t CM2Shared::FinishLoadingSkinProfile(uint32_t size) {
 
     this->m_flags |= 2;
 
-    if (M2IsSpellPath(this->m_fileName)) {
-        M2Trace("skin loaded %s: %u batches, %u sections", this->m_fileName, skinData->m_batches.m_count, skinData->m_skinSections.m_count);
-    }
-
     while (this->m_callbackList) {
         CM2Model* model = this->m_callbackList;
         model->UnlinkFromCallbackList();
@@ -1896,11 +1892,6 @@ int32_t CM2Shared::FinishLoading() {
     this->m_lowPrioritySequenceCapacity = count;
     this->m_flags |= 1;
     this->m_lowPrioritySequenceCount = 0;
-
-    if (M2IsSpellPath(this->m_fileName)) {
-        M2Trace("loaded %s: %u sequences, %u particles, %u textures", this->m_fileName, this->m_data->m_sequences.m_count,
-            this->m_data->m_particles.m_count, this->m_data->m_textures.m_count);
-    }
 
     return 1;
 }
