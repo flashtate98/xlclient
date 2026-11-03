@@ -453,9 +453,18 @@ namespace SXC::Water {
             constexpr float kBelow = 1.5f;        // yd: land lower than this under it: never (the valley below a
                                                   // raised lake or a waterfall's lip, Seyri 2026-10-31)
             constexpr float kStep = 0.4f;         // yd: neighbours further apart are two levels
+            // yd: but two cells both under the liquid are one sloped surface up to this (a river running down;
+            // held to 0.4 every steeper cell went to the stock mesh, in patches of other waves: Seyri
+            // 2026-11-03). Steeper (about 45 degrees per cell) stays two levels.
+            constexpr float kSlope = 2.0f;
             std::vector<float> surfaceOf(n * n, 0.0f);
             std::vector<uint16_t> typeOf(n * n, 0);
             std::vector<uint8_t> covered(n * n, 0);
+            // Cells whose surface is the liquid's own there (water, or land the liquid's tile runs over), not
+            // borrowed from the nearest water: on a slope the borrowed one is off by the slope over the reach,
+            // so the waterline broke into steps beside the shore and those cells fell out of the mesh, still
+            // and in other waves (Seyri, 2026-11-03: a river where the ground rises through the surface).
+            std::vector<uint8_t> real(n * n, 0);
 
             for (int32_t wj = 0; wj < n; wj++) {
                 for (int32_t wi = 0; wi < n; wi++) {
@@ -465,6 +474,7 @@ namespace SXC::Water {
                         surfaceOf[w] = s.surface[k];
                         typeOf[w] = s.type[k];
                         covered[w] = s.type[k] != 0 ? 1 : 0;   // not a chunk not loaded
+                        real[w] = covered[w];
                         continue;
                     }
 
@@ -480,8 +490,10 @@ namespace SXC::Water {
 
                     const int32_t nk = at(ni, nj);
                     const int32_t reach = std::abs(offX[w]) > std::abs(offY[w]) ? std::abs(offX[w]) : std::abs(offY[w]);
-                    const float above = s.ground[k] - s.surface[nk];
-                    surfaceOf[w] = s.surface[nk];
+                    real[w] = s.type[k] != 0 && s.type[k] == s.type[nk] ? 1 : 0;
+                    const float surface = real[w] ? s.surface[k] : s.surface[nk];
+                    const float above = s.ground[k] - surface;
+                    surfaceOf[w] = surface;
                     typeOf[w] = s.type[nk];
                     covered[w] = s.type[nk] != 0 && ((above < 0.0f && above > -kBelow && reach <= kReachBelow) || (above >= 0.0f && above < kAbove && reach <= kReachAbove)) ? 1 : 0;
                 }
@@ -521,7 +533,9 @@ namespace SXC::Water {
                         };
                         const bool from = wet[w] || under(w);
 
-                        if (covered[nw] && !joined[nw] && std::fabs(surfaceOf[nw] - surfaceOf[w]) <= kStep && (from || !under(nw))) {
+                        const float step = real[w] && real[nw] ? kSlope : kStep;
+
+                        if (covered[nw] && !joined[nw] && std::fabs(surfaceOf[nw] - surfaceOf[w]) <= step && (from || !under(nw))) {
                             joined[nw] = 1;
                             queue.push_back(nw);
                         }
@@ -550,8 +564,21 @@ namespace SXC::Water {
                     for (const auto& d : kSides) {
                         const int32_t ni = wi + d[0], nj = wj + d[1];
 
-                        if (ni >= 0 && nj >= 0 && ni < n && nj < n && covered[nj * n + ni] &&
-                            (std::fabs(surfaceOf[nj * n + ni] - surfaceOf[w]) > kStep || typeOf[nj * n + ni] != typeOf[w])) {
+                        if (ni < 0 || nj < 0 || ni >= n || nj >= n || !covered[nj * n + ni]) {
+                            continue;
+                        }
+
+                        const bool realHere = real[w] != 0, realThere = real[nj * n + ni] != 0;
+
+                        // The liquid's own surface against land carrying a borrowed height: the land leaves the
+                        // mesh (its own test), not the water.
+                        if (realHere && !realThere && typeOf[nj * n + ni] == typeOf[w]) {
+                            continue;
+                        }
+
+                        const float step = realHere && realThere ? kSlope : kStep;
+
+                        if (std::fabs(surfaceOf[nj * n + ni] - surfaceOf[w]) > step || typeOf[nj * n + ni] != typeOf[w]) {
                             level = false;
                         }
                     }

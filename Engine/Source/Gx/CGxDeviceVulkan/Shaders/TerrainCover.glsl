@@ -784,6 +784,9 @@ CoverResult Covers(vec4 c, vec4 w, vec3 twice, bool litLayers)
     float rowWet = mix(s.rowWet, s.snowWet, r.snow);
     float shown = max(r.painted, r.snow);
     r.wet = clamp(rowWet * shown + s.g.z * (1.0 - r.snow), 0.0, 1.0);
+    // Under the water the ground is soaked (soaking in over the first few inches), so the swash's wet sand
+    // runs into it: dry there, the swash's end showed as a hard edge round every water (Seyri, 2026-11-03).
+    r.wet = max(r.wet, smoothstep(0.0, 0.3, s.under));
     r.c.rgb *= 1.0 - cover.enable.z * r.wet;
     return r;
 }

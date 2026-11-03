@@ -87,6 +87,45 @@ bool NearCovers(vec2 world)
     return ShoreCell(a).w > 0.5 && ShoreCell(o + ivec2(1, 0)).w > 0.5 && ShoreCell(o + ivec2(0, 1)).w > 0.5;
 }
 
+// The still surface's slope at a world point (dz per yd in world x and y), from the near mesh's cell heights
+// around it (zero outside the window, where any of them isn't covered, or across two levels). Not from the
+// screen derivatives of the moving surface: the mesh's waves, interpolated per triangle, made them jump at
+// every triangle edge, and the side test flipped along them in long seams (Seyri, 2026-11-03).
+vec2 StillGrade(vec2 world)
+{
+    if (scene.shoreGrid.z < 0.5)
+    {
+        return vec2(0.0);
+    }
+
+    vec2 u = vec2(kShoreHalfWorld - world.y, kShoreHalfWorld - world.x) / scene.shoreGrid.w - 0.5 - scene.shoreGrid.xy;
+    ivec2 i0 = ivec2(floor(u));
+
+    if (any(lessThan(i0, ivec2(0))) || any(greaterThan(i0, ivec2(254))))
+    {
+        return vec2(0.0);
+    }
+
+    vec2 f = u - vec2(i0);
+    ivec2 o = ivec2(scene.shoreGrid.xy) + i0;
+    vec4 c00 = ShoreCell(o), c10 = ShoreCell(o + ivec2(1, 0)), c01 = ShoreCell(o + ivec2(0, 1)), c11 = ShoreCell(o + ivec2(1, 1));
+
+    if (min(min(c00.w, c10.w), min(c01.w, c11.w)) < 0.5)
+    {
+        return vec2(0.0);
+    }
+
+    float du = mix(c10.x - c00.x, c11.x - c01.x, f.y), dv = mix(c01.x - c00.x, c11.x - c10.x, f.x);
+
+    if (max(abs(du), abs(dv)) > 2.0)
+    {
+        return vec2(0.0);   // two levels (Shore.cpp's kSlope)
+    }
+
+    // Cell x runs along world -y, cell y along world -x.
+    return vec2(-dv, -du) / scene.shoreGrid.w;
+}
+
 // Value noise over the world (yd); hashed without sin (precise far from the origin: the lattice points are
 // wrapped every 1024 before hashing, each on its own, so the noise repeats without a seam; wrapping the point
 // first broke it where the wrap fell, along world x = 0 and y = 0 among others: Seyri, 2026-10-31).

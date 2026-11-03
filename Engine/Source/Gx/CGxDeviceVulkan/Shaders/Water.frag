@@ -80,6 +80,46 @@ vec2 WaveSlope(vec2 xy, float distance, out float folding)
     return slope;
 }
 
+// A river's waves (kb: rivers): the cascades as WaveSlope takes them, but the wind's long sea calmed on
+// fast water and the short chop roughened (rapids rougher still), at a point the flow has carried.
+vec2 RiverSlope(vec2 xy, float distance, float fast, float rough, out float folding)
+{
+    vec2 slope = vec2(0.0);
+    float jacobian = 1.0;
+
+    for (int c = 0; c < 3; c++)
+    {
+        float fade = c == 0 ? 1.0 : clamp(1.0 - distance / scene.waveLook[c - 1], 0.0, 1.0);
+
+        if (fade <= 0.0)
+        {
+            continue;
+        }
+
+        float share = c == 0 ? mix(1.0, 0.3, fast) : mix(1.0, 1.6, fast) * (1.0 + 0.8 * rough);
+        vec4 w = texture(waveSlopes, vec3(xy / scene.waveSizes[c], float(c)));
+        slope += w.xy * fade * share;
+        jacobian += (w.z - 1.0) * fade * share;
+    }
+
+    folding = clamp((regs.p[14].y - jacobian) * 2.5, 0.0, 1.0);
+    return slope;
+}
+
+// Two copies of something carried by the flow, half a cycle apart, each fading out as it starts over (so
+// neither its reset nor the clock's wrap shows: 600 s is a whole number of cycles): where each copy is
+// sampled (`a`, `b`, the second shifted so the two don't line up) and how much the first counts.
+const float kFlowCycle = 2.0;   // s
+
+float FlowPhases(vec2 xy, vec2 flow, out vec2 a, out vec2 b)
+{
+    float t = regs.p[6].x / kFlowCycle;
+    float phaseA = fract(t), phaseB = fract(t + 0.5);
+    a = xy - flow * phaseA * kFlowCycle;
+    b = xy - flow * phaseB * kFlowCycle + vec2(13.7, 7.3);
+    return 1.0 - abs(2.0 * phaseA - 1.0);
+}
+
 const float kTau = 6.2831853;
 
 // Travelling sines over the world xy (yd), their slopes summed: the surface's small movement until the FFT
@@ -357,7 +397,9 @@ void main()
     // it (WaterMove.glsl; the underwater medium decides the same way). Not the camera's height against the
     // point's (with the camera at the surface every crest above its eye was shaded as the underside, cut
     // level through the waves), nor the drawn triangle's side (noisy at grazing angles: stripes; Seyri
-    // 2026-11-01).
+    // 2026-11-01). The still surface is carried to the near point with its slope here (StillGrade; zero on
+    // level water): taken level, sloped water above the eye counted as seen from below and lost its foam in a
+    // hard line (a steep river, Seyri 2026-11-03).
     bool below;
     {
         float zNear = -regs.v[3].z / regs.v[2].z;
@@ -366,7 +408,7 @@ void main()
         if (regs.p[14].w > 0.5)
         {
             float still = world.z - RiseHere(world);
-            below = nearWorld.z < still + RiseHere(nearWorld);
+            below = nearWorld.z < still + dot(StillGrade(world.xy), nearWorld.xy - world.xy) + RiseHere(nearWorld);
         }
         else
         {
@@ -379,6 +421,24 @@ void main()
     float folding = 0.0;
     // This water's share of the shared sea (its look's wave scale).
     vec2 slope = (scene.waveSizes.w > 0.5 ? WaveSlope(world.xy, distance, folding) : RippleSlope(world.xy, regs.p[6].x, distance) * regs.p[6].z) * vLook[4].y;
+
+    // Rivers (kb: rivers): where the flow field has one, the waves are carried downstream (two copies, so
+    // nothing stretches), the long wind sea calmed on fast water, the chop roughened, rapids rougher.
+    vec4 flow = below ? vec4(0.0) : FlowAt(world.xy);
+    float river = clamp(flow.w, 0.0, 1.0);
+    float flowSpeed = length(flow.xy);
+    float fast = smoothstep(0.3, 3.0, flowSpeed);
+
+    if (river > 0.001 && scene.waveSizes.w > 0.5)
+    {
+        vec2 a, b;
+        float weightA = FlowPhases(world.xy, flow.xy, a, b);
+        float foldA, foldB;
+        vec2 slopeA = RiverSlope(a, distance, fast, flow.z, foldA);
+        vec2 slopeB = RiverSlope(b, distance, fast, flow.z, foldB);
+        slope = mix(slope, mix(slopeB, slopeA, weightA) * vLook[4].y, river);
+        folding = mix(folding, mix(foldB, foldA, weightA), river);
+    }
 
     // The shore (the shore field, terrain water near the player): the open sea calms over the shallows, and
     // shore waves roll in toward the beach, steepening as they come, breaking into whitewater that runs on
@@ -572,8 +632,9 @@ void main()
         // wrap shows (600 s is a whole number of cycles). One direction everywhere: carried toward the
         // nearest shore instead, the pattern stretched round every headland and bunched up in the bay
         // after it, which on WoW's ragged coasts is most places (Seyri, 2026-10-30).
+        // On a river it drifts with the flow instead (kb: rivers).
         const float kCycle = 4.0;   // s
-        vec2 drift = scene.shoreWind.xy * (shoreOmega / shoreK) * kCycle;
+        vec2 drift = mix(scene.shoreWind.xy * (shoreOmega / shoreK), flow.xy, river) * kCycle;
         float t = regs.p[6].x / kCycle;
         float phaseA = fract(t), phaseB = fract(t + 0.5);
         vec2 seedA = vec2(37.1, 17.3) * mod(floor(t), 150.0), seedB = vec2(37.1, 17.3) * mod(floor(t + 0.5), 150.0) + vec2(11.0, 5.0);
@@ -586,6 +647,17 @@ void main()
         float tear = 0.42 + 0.12 * age, edge = 0.07 + clamp(pixel * 0.4, 0.0, 0.2);
         float torn = smoothstep(tear - edge, tear + edge, pattern);
         foam = max(foam, scene.shoreLook.x * shoreWeight * max(lap, breaking) * torn);
+    }
+
+    // A river's own foam (kb: rivers): streaks carried with the flow on fast water, thick on rapids.
+    if (river > 0.001 && !below)
+    {
+        vec2 a, b;
+        float weightA = FlowPhases(world.xy, flow.xy, a, b);
+        float pattern = mix(FoamPattern(b, pixel, regs.p[6].x), FoamPattern(a, pixel, regs.p[6].x), weightA);
+        float amount = max(fast * 0.35, flow.z * smoothstep(0.5, 2.0, flowSpeed));
+        float tear = mix(0.62, 0.42, amount), edge = 0.07 + clamp(pixel * 0.4, 0.0, 0.2);
+        foam = max(foam, river * amount * smoothstep(tear - edge, tear + edge, pattern) * vLook[4].z);
     }
     vec3 foamColour = clamp(regs.v[34].rgb + regs.v[35].rgb * max(toSun.z, 0.0), 0.0, 1.0) * 0.9 + lamps * 0.3;
     vec3 surface = mix(mix(seen, reflected, fresnel) + highlight, foamColour, foam);

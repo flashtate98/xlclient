@@ -59,6 +59,32 @@ struct Swash
     float foam;   // 0..1
 };
 
+// The still water's height at a point (`g`: its global cell coordinates; `cell`: the cell it lies in), across
+// the near mesh's triangles as the water draws them (vertices at the cell centres, each quad split from
+// (i+1, j) to (i, j+1)), so the swash meets the water where its mesh does. The cell's own height alone made
+// steps of a cell's slope at every cell edge, and the wet line and its foam broke on sloped water (Seyri,
+// 2026-11-03). A corner of other water or another level (Shore.cpp's kSlope) leaves the cell's own.
+float SwashSurface(vec2 g, vec4 cell)
+{
+    vec2 u = g - 0.5;
+    ivec2 o = ivec2(floor(u));
+    vec2 f = u - vec2(o);
+    bool lower = f.x + f.y <= 1.0;
+    vec4 a = texelFetch(sShoreCells, (lower ? o : o + ivec2(1, 1)) & 255, 0);
+    vec4 b = texelFetch(sShoreCells, (o + ivec2(1, 0)) & 255, 0);
+    vec4 c = texelFetch(sShoreCells, (o + ivec2(0, 1)) & 255, 0);
+
+    if (abs(a.z - cell.z) > 0.1 || abs(b.z - cell.z) > 0.1 || abs(c.z - cell.z) > 0.1
+        || abs(a.x - cell.x) > 2.0 || abs(b.x - cell.x) > 2.0 || abs(c.x - cell.x) > 2.0)
+    {
+        return cell.x;
+    }
+
+    // a is (i, j) below the split, (i+1, j+1) above it; b is (i+1, j), c (i, j+1).
+    return lower ? a.x + f.x * (b.x - a.x) + f.y * (c.x - a.x)
+                 : a.x + (1.0 - f.x) * (c.x - a.x) + (1.0 - f.y) * (b.x - a.x);
+}
+
 // `up`: the ground normal's z. Swash runs up beaches; on steep rock the waves hit and fall back (spray,
 // later: water-contact) on their own timing, which the swash's (the shore waves') isn't, so it climbed a cliff
 // out of step with the waves seen there (Seyri, 2026-10-31). There only the moving waterline and its wet.
@@ -77,7 +103,7 @@ Swash TerrainSwash(vec3 world, float up)
     vec4 field = SwashField(world.xy, weight);
     float land = -field.x;   // yd from the waterline onto the land
 
-    if (weight <= 0.0 || land < -2.0 || land > kSwashFarthest)
+    if (weight <= 0.0 || land < -8.0 || land > kSwashFarthest)
     {
         return r;
     }
@@ -92,7 +118,8 @@ Swash TerrainSwash(vec3 world, float up)
 
     float rise = WaterRise(world, g);
 
-    float h = world.z - (cell.x + rise);   // above the water as it stands now
+    float surface = SwashSurface(g, cell);
+    float h = world.z - (surface + rise);   // above the water as it stands now
 
     // Only where the water could climb to: no ground between here and the waterline higher than both. Past a
     // lake's rim, the hollow behind it and the outer face of a cliff stay dry (Seyri, 2026-10-31). Below the
@@ -102,7 +129,7 @@ Swash TerrainSwash(vec3 world, float up)
     {
         return r;
     }
-    float rim = max(world.z, cell.x) + mix(0.05, 0.3, smoothstep(0.0, 0.5, h));
+    float rim = max(world.z, surface) + mix(0.05, 0.3, smoothstep(0.0, 0.5, h));
     for (float along = 1.0; along < land; along += 2.0)
     {
         vec2 q = world.xy + field.zw * along;
@@ -137,7 +164,10 @@ Swash TerrainSwash(vec3 world, float up)
     float beach = smoothstep(0.45, 0.75, up);   // ~63..41 degrees: the sheet and its foam fade on steeper rock
     float sheet = smoothstep(0.0, 0.02, lead) * beach;
     float left = 1.0 - smoothstep(0.75, 1.1, h / max(reach, 0.01));
-    r.wet = max(sheet, 0.6 * left) * weight * (h > -0.3 ? 1.0 : 0.0);
+    // Faded out under the water as it deepens and away from the waterline, where the water's own colour takes
+    // over (and the covers soak the ground under it): cut off 0.3 yd down and 2 yd out, the dry sand past it
+    // shone through the shallows in a bright ring round every water (Seyri, 2026-11-03).
+    r.wet = max(sheet, 0.6 * left) * weight * smoothstep(-1.5, -0.2, h) * smoothstep(-8.0, -2.0, land);
 
     // Foam along the front while it climbs, torn by a pattern carried with the wind (two copies half a 4 s
     // cycle apart, as the water's).
