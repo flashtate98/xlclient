@@ -5,6 +5,7 @@
 #include <limits>
 #include <new>
 #include <typeinfo>
+#include "Engine/Source/Model2/M2Log.h"
 #include "Engine/Source/Model2/M2Shared.h"
 #include "Engine/Source/Base/Handle.h"
 #include "Engine/Source/Base/SIMD.h"
@@ -1023,7 +1024,7 @@ void CM2Shared::AssignBatchTextureComboIndices() {
             if (j < combos.m_count - 1) {
                 comboIndex = static_cast<uint16_t>(j);
             } else {
-                DebugLog("Failed to fix up texture combo!\n");
+                M2Log("Failed to fix up texture combo!\n");
             }
 
             batch->m_textureComboIndex = comboIndex;
@@ -1043,7 +1044,7 @@ void CM2Shared::AssignBatchTextureComboIndices() {
             if (j < transforms.m_count - 1) {
                 transformIndex = static_cast<uint16_t>(j);
             } else {
-                DebugLog("Failed to fix up texture combo!\n");
+                M2Log("Failed to fix up texture combo!\n");
             }
         } else {
             uint16_t* combo = this->m_data->m_textureCombos.Data();
@@ -1398,12 +1399,12 @@ int32_t CM2Shared::FinishLoadingSkinProfile(uint32_t size) {
     uint8_t* base = reinterpret_cast<uint8_t*>(skinData);
 
     if (!M2Init(base, size, *data, skinData->m_vertices) || !M2Init(base, size, *data, skinData->m_indices) || !M2Init(base, size, *data, skinData->m_bones) || !M2Init(base, size, *data, skinData->m_skinSections) || !M2Init(base, size, *data, skinData->m_batches)) {
-        DebugLog("Corrupt skin profile data: %s", this->m_fileName);
+        M2Log("Corrupt skin profile data: %s", this->m_fileName);
         return 0;
     }
 
     if (!this->InitializeSkinProfile()) {
-        DebugLog("Failed to initialize model skin profile: %s", this->m_fileName);
+        M2Log("Failed to initialize model skin profile: %s", this->m_fileName);
         return 0;
     }
 
@@ -1650,7 +1651,7 @@ int32_t CM2Shared::FinishLoadingLowPrioritySequence(uint32_t sequenceIndex, uint
         std::string error;
 
         if (!Retail::InspectAnimation(buffer, size, layout, error)) {
-            DebugLog("Invalid Retail sequence chunks: %s (%d): %s", this->m_fileName, sequenceIndex, error.c_str());
+            M2Log("Invalid Retail sequence chunks: %s (%d): %s", this->m_fileName, sequenceIndex, error.c_str());
             return 0;
         }
     }
@@ -1677,7 +1678,7 @@ int32_t CM2Shared::FinishLoadingLowPrioritySequence(uint32_t sequenceIndex, uint
 #endif
 
     if (!result) {
-        DebugLog("Corrupt model sequence data: %s (%d)", this->m_fileName, sequenceIndex);
+        M2Log("Corrupt model sequence data: %s (%d)", this->m_fileName, sequenceIndex);
         return 0;
     }
 
@@ -1728,7 +1729,7 @@ int32_t CM2Shared::LoadSkinProfile(uint32_t profile) {
     SFileImpl* file;
 
     if (!SFile::OpenEx(nullptr, fileName, (this->m_flags & 4) >> 2, &file)) {
-        DebugLog("Model2: File not found: %s\n", fileName);
+        M2Log("Model2: File not found: %s\n", fileName);
         return 0;
     }
 
@@ -1806,19 +1807,19 @@ int32_t CM2Shared::Initialize() {
     uint32_t profile = this->GetSkinProfileIndex(maxBones);
 
     if (profile == 0xFFFFFFFF) {
-        DebugLog("Failed to choose skin profile: %s", this->m_fileName);
+        M2Log("Failed to choose skin profile: %s", this->m_fileName);
         return 0;
     }
 
     if (!this->LoadSkinProfile(profile)) {
-        DebugLog("Failed to load skin profile: %s", this->m_fileName);
+        M2Log("Failed to load skin profile: %s", this->m_fileName);
         return 0;
     }
 
     this->m_textures = static_cast<CTexture**>(SMemAlloc(sizeof(CTexture*) * this->m_data->m_textures.m_count, __FILE__, __LINE__, 8));
 
     if (!this->m_textures) {
-        DebugLog("Failed to allocate texture array: %s", this->m_fileName);
+        M2Log("Failed to allocate texture array: %s", this->m_fileName);
         return 0;
     }
 
@@ -1868,14 +1869,14 @@ int32_t CM2Shared::FinishLoading() {
     }
 
     if (!M2Init(reinterpret_cast<uint8_t*>(this->m_data), this->m_fileSize, *this->m_data)) {
-        DebugLog("Corrupt model data: %s", this->m_fileName);
+        M2Log("Corrupt model data: %s", this->m_fileName);
         return 0;
     }
 
     this->m_data->m_flags &= ~0x60u;
 
     if (!this->Initialize()) {
-        DebugLog("Failed to initialize model: %s", this->m_fileName);
+        M2Log("Failed to initialize model: %s", this->m_fileName);
         return 0;
     }
 
@@ -2159,7 +2160,7 @@ CM2SequenceLoad* CM2Shared::LoadLowPrioritySequence(uint16_t sequenceIndex) {
     SFileImpl* file;
 
     if (!SFile::OpenEx(nullptr, fileName, (this->m_flags & 4) >> 2, &file)) {
-        DebugLog("Model2: File not found: %s\n", fileName);
+        M2Log("Model2: File not found: %s\n", fileName);
         this->m_sequenceLoads.DeleteNode(load);
         return nullptr;
     }

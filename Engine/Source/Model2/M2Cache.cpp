@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <new>
+#include "Engine/Source/Model2/M2Log.h"
 #include "Engine/Source/Model2/M2Cache.h"
 #include "Engine/Source/Base/ObjectAlloc.h"
 #include "Engine/Source/BlizzardCore/SFile2-Core.h"
@@ -108,7 +109,7 @@ void M2SetCacheFlags(uint32_t flags) {
 // OFFSET: 0x0081C0D0
 int32_t CM2Cache::Initialize(uint32_t flags) {
     if (this->m_initialized) {
-        DebugLog("Model2: M2Initialize called more than once\n");
+        M2Log("Model2: M2Initialize called more than once\n");
         return 1;
     }
 
@@ -238,14 +239,14 @@ CM2Shared* CM2Cache::CreateShared(const char* name, uint32_t flags) {
 
     if (!(flags & 0x1000)) {
         if (!ext) {
-            DebugLog("Model2: Invalid file extension: %s\n", path);
+            M2Log("Model2: Invalid file extension: %s\n", path);
             return nullptr;
         }
 
         if (!strcmp(ext, ".mdl") || !strcmp(ext, ".mdx")) {
             strcpy(ext, ".m2");
         } else if (strcmp(ext, ".m2")) {
-            DebugLog("Model2: Invalid file extension: %s\n", path);
+            M2Log("Model2: Invalid file extension: %s\n", path);
             return nullptr;
         }
     }
@@ -318,7 +319,7 @@ CM2Shared* CM2Cache::CreateShared(const char* name, uint32_t flags) {
     SFileImpl* file;
 
     if (!SFile::OpenEx(nullptr, path, (flags >> 2) & 1, &file)) {
-        DebugLog("Model2: File not found: %s\n", path);
+        M2Log("Model2: File not found: %s\n", path);
         return nullptr;
     }
 

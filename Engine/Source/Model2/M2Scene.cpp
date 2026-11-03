@@ -4,6 +4,7 @@
 #include <cstring>
 #include <new>
 #include <xmmintrin.h>
+#include "Engine/Source/Model2/M2Log.h"
 #include "Engine/Source/Model2/M2Scene.h"
 #include "Engine/Source/Base/ObjectAlloc.h"
 #include "Engine/Source/Gx/CGxDevice/CGxDevice.h"
@@ -1553,6 +1554,7 @@ CM2Model* CM2Scene::CreateModel(const char* fileName, uint32_t flags) {
     CM2Shared* shared = this->m_cache->CreateShared(fileName, flags);
 
     if (!shared) {
+        M2Log("Model2: %s could not be loaded; drawing the error cube", fileName);
         shared = this->m_cache->CreateShared("Spells\\ErrorCube.mdx", 0);
     }
 
