@@ -137,8 +137,15 @@ bool Unlockable(const Index& x, const Row& choice) {
 // the Tauren's old horn styles (Wide, Ram, Forward Pointing; 1158-1160 on the female) draw the
 // Highmountain antlers, with the ordinary horn texture wrapped over them, and their unlockable horn
 // colours (1103; 1164-1168 on the female) paint the antler texture onto the ordinary horns.
+// The Orc's unlockable skin colours (orcmaleskin00_100-117, orcfemaleskin00_100-118 and the two
+// skin_color textures) are the brown and grey Mag'har looks, which stay with the Mag'har Orc; only the
+// fel red is left open (363, orcmaleskin00_101; 457, orcfemaleskin00_105).
 bool Hidden(uint32_t choiceId) {
-    static const uint32_t kHidden[] = {1097, 1098, 1099, 1158, 1159, 1160, 1103, 1164, 1165, 1166, 1167, 1168};
+    static const uint32_t kHidden[] = {1097, 1098, 1099, 1158, 1159, 1160, 1103, 1164, 1165, 1166, 1167, 1168,
+        // Orc male
+        362, 364, 365, 366, 367, 371, 372, 373, 374, 375, 376, 377, 378, 379, 380, 381, 382, 31951,
+        // Orc female
+        449, 450, 454, 455, 456, 458, 459, 460, 461, 462, 463, 464, 465, 466, 467, 468, 469, 470, 31955};
     return std::find(std::begin(kHidden), std::end(kHidden), choiceId) != std::end(kHidden);
 }
 
