@@ -474,6 +474,19 @@ void main()
         slope -= shore.zw * dh * shoreWeight;
         shoreCrest = pow(rise, 6.0) * smoothstep(0.02, 0.1, amp);
     }
+    // Rapids' standing water (kb: rivers): where the water breaks over the rocks it stays where it is while
+    // the river runs through it - patches at fixed places, heaped and churning, more in the shallows.
+    float standing = below ? 0.0 : river * flow.z * smoothstep(0.5, 2.0, flowSpeed) * mix(0.5, 1.0, 1.0 - smoothstep(0.8, 3.0, shoreDepth));
+    float standingSpots = 0.0;
+
+    if (standing > 0.001)
+    {
+        standingSpots = smoothstep(0.42, 0.72, Noise(world.xy * 0.12 + vec2(91.0, 17.0)));
+        vec2 q = world.xy * 1.25 + vec2(sin(regs.p[6].x * TurnsPer600(1.3)), cos(regs.p[6].x * TurnsPer600(1.7))) * 0.15;
+        vec2 heap = vec2(Noise(q + vec2(0.25, 0.0)) - Noise(q - vec2(0.25, 0.0)), Noise(q + vec2(0.0, 0.25)) - Noise(q - vec2(0.0, 0.25)));
+        slope += heap * 1.6 * standing * standingSpots * (1.0 - clamp(distance / 120.0, 0.0, 1.0));
+    }
+
     slope += RippleFieldSlope(world.xy, distance);
     vec3 N = normalize(vec3(-slope, 1.0));
 
@@ -658,6 +671,13 @@ void main()
         float amount = max(fast * 0.35, flow.z * smoothstep(0.5, 2.0, flowSpeed));
         float tear = mix(0.62, 0.42, amount), edge = 0.07 + clamp(pixel * 0.4, 0.0, 0.2);
         foam = max(foam, river * amount * smoothstep(tear - edge, tear + edge, pattern) * vLook[4].z);
+
+        // The rapids' whitewater, standing (not carried): its own pattern at the place, churning.
+        if (standing * standingSpots > 0.001)
+        {
+            float white = FoamPattern(world.xy * 1.3 + vec2(57.0, 23.0), pixel * 1.3, regs.p[6].x);
+            foam = max(foam, standing * standingSpots * smoothstep(0.38 - edge, 0.38 + edge, white) * vLook[4].z);
+        }
     }
     vec3 foamColour = clamp(regs.v[34].rgb + regs.v[35].rgb * max(toSun.z, 0.0), 0.0, 1.0) * 0.9 + lamps * 0.3;
     vec3 surface = mix(mix(seen, reflected, fresnel) + highlight, foamColour, foam);

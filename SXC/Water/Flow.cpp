@@ -93,7 +93,93 @@ namespace {
         }
     }
 
-    // One stretch (nodes i and i + 1) into the sums, over the window's cells it reaches.
+    bool Rough(uint32_t kind) {
+        return kind == SXC_WATER_RIVER_RAPIDS || kind == SXC_WATER_RIVER_FALLS;
+    }
+
+    const River* RiverById(uint32_t id) {
+        for (const River& r : s.rivers) {
+            if (r.id == id) {
+                return &r;
+            }
+        }
+
+        return nullptr;
+    }
+
+    // The nearest point of a river's line to (x, y): how far, the river's half width and direction there.
+    // False for a river not handed over.
+    bool NearestOn(const River* r, float x, float y, float& distance, float& half, float& tx, float& ty) {
+        if (!r) {
+            return false;
+        }
+
+        distance = 1e9f;
+
+        for (uint32_t i = 0; i + 1 < r->count; i++) {
+            const Node& a = s.nodes[r->first + i];
+            const Node& b = s.nodes[r->first + i + 1];
+            const float abx = b.x - a.x, aby = b.y - a.y, length2 = abx * abx + aby * aby;
+            const float t = length2 > 1e-6f ? std::clamp(((x - a.x) * abx + (y - a.y) * aby) / length2, 0.0f, 1.0f) : 0.0f;
+            const float cx = a.x + abx * t - x, cy = a.y + aby * t - y;
+            const float d = std::sqrt(cx * cx + cy * cy);
+
+            if (d < distance) {
+                const float l = std::sqrt(length2);
+                distance = d;
+                half = std::max((a.width + (b.width - a.width) * t) * 0.5f, 0.5f);
+                tx = l > 1e-3f ? abx / l : 1.0f;
+                ty = l > 1e-3f ? aby / l : 0.0f;
+            }
+        }
+
+        return distance < 1e9f;
+    }
+
+    // Where one river's end is attached to another (it joins it, or branches from it), its flow gives way
+    // to that river's inside that river's banks: turned along it toward its middle, and weighing less, so
+    // the tributary's water merges into the main current instead of shooting across it (and a branch's
+    // draws off along the main river). Nothing outside the other river's banks.
+    void GiveWay(const River* other, float px, float py, float& w, float& dx, float& dy) {
+        float distance, half, tx, ty;
+
+        if (!NearestOn(other, px, py, distance, half, tx, ty) || distance >= half) {
+            return;
+        }
+
+        const float keep = Smooth(0.0f, half, distance);   // 0 on its middle, 1 at its banks
+        dx = tx + (dx - tx) * keep;
+        dy = ty + (dy - ty) * keep;
+        const float l = std::sqrt(dx * dx + dy * dy);
+        dx = l > 1e-4f ? dx / l : tx;
+        dy = l > 1e-4f ? dy / l : ty;
+        w *= 0.15f + 0.85f * keep;
+    }
+
+    // Cells of the window within a world box (cell x runs along world -y, cell y along world -x).
+    struct CellBox {
+        int32_t gx0, gx1, gy0, gy1;
+    };
+
+    CellBox BoxOf(float x0, float y0, float x1, float y1, int32_t originX, int32_t originY) {
+        return CellBox{ std::max(static_cast<int32_t>(std::floor((kHalfWorld - y1) / kShoreCell)), originX),
+                        std::min(static_cast<int32_t>(std::floor((kHalfWorld - y0) / kShoreCell)), originX + kN - 1),
+                        std::max(static_cast<int32_t>(std::floor((kHalfWorld - x1) / kShoreCell)), originY),
+                        std::min(static_cast<int32_t>(std::floor((kHalfWorld - x0) / kShoreCell)), originY + kN - 1) };
+    }
+
+    void Add(int32_t gx, int32_t gy, float w, float dx, float dy, float speed, float rough) {
+        const int32_t k = Stored(gy) * kN + Stored(gx);
+        s.fx[k] += w * dx * speed;
+        s.fy[k] += w * dy * speed;
+        s.rough[k] += w * rough;
+        s.sum[k] += w;
+        s.top[k] = std::max(s.top[k], w);
+    }
+
+    // One stretch (nodes i and i + 1) into the sums, over the window's cells it reaches. Between stretches
+    // the ends are round (a bend turns over both); a river's own ends are round only where it is attached
+    // to another river: a free end is a mouth or an inlet (DrawEnd).
     void DrawStretch(const River& r, uint32_t i, int32_t originX, int32_t originY) {
         const Node& a = s.nodes[r.first + i];
         const Node& b = s.nodes[r.first + i + 1];
@@ -102,25 +188,35 @@ namespace {
         Tangent(r, i + 1, tb[0], tb[1]);
 
         const float abx = b.x - a.x, aby = b.y - a.y;
-        const float length2 = abx * abx + aby * aby;
+        const float length2 = abx * abx + aby * aby, length = std::sqrt(length2);
         const float widest = std::max(a.width, b.width);
         const float reach = widest * 0.5f + std::max(2.0f, widest * 0.25f);
+        const CellBox box = BoxOf(std::min(a.x, b.x) - reach, std::min(a.y, b.y) - reach, std::max(a.x, b.x) + reach, std::max(a.y, b.y) + reach, originX, originY);
 
-        // The cells of the stretch's box (cell x runs along world -y, cell y along world -x).
-        const float x0 = std::min(a.x, b.x) - reach, x1 = std::max(a.x, b.x) + reach;
-        const float y0 = std::min(a.y, b.y) - reach, y1 = std::max(a.y, b.y) + reach;
-        const int32_t gx0 = std::max(static_cast<int32_t>(std::floor((kHalfWorld - y1) / kShoreCell)), originX);
-        const int32_t gx1 = std::min(static_cast<int32_t>(std::floor((kHalfWorld - y0) / kShoreCell)), originX + kN - 1);
-        const int32_t gy0 = std::max(static_cast<int32_t>(std::floor((kHalfWorld - x1) / kShoreCell)), originY);
-        const int32_t gy1 = std::min(static_cast<int32_t>(std::floor((kHalfWorld - x0) / kShoreCell)), originY + kN - 1);
-        const float rough = a.kind == SXC_WATER_RIVER_RAPIDS || a.kind == SXC_WATER_RIVER_FALLS ? 1.0f : 0.0f;
+        const bool firstStretch = i == 0, lastStretch = i + 2 == r.count;
+        const River* joins = lastStretch && r.joins ? RiverById(r.joins) : nullptr;
+        const River* branchesFrom = firstStretch && r.branchesFrom ? RiverById(r.branchesFrom) : nullptr;
+        const bool capStart = !firstStretch || branchesFrom, capEnd = !lastStretch || joins;
 
-        for (int32_t gy = gy0; gy <= gy1; gy++) {
+        // Rapids ease in and out over a few yards where the stretch before or after is calm, instead of
+        // switching at the node.
+        const bool rough = Rough(a.kind);
+        const bool roughBefore = i > 0 && Rough(s.nodes[r.first + i - 1].kind);
+        const bool roughAfter = !lastStretch && Rough(b.kind);
+        const float ramp = std::max(std::min(8.0f, length * 0.3f), 0.5f);
+
+        for (int32_t gy = box.gy0; gy <= box.gy1; gy++) {
             const float px = kHalfWorld - (static_cast<float>(gy) + 0.5f) * kShoreCell;
 
-            for (int32_t gx = gx0; gx <= gx1; gx++) {
+            for (int32_t gx = box.gx0; gx <= box.gx1; gx++) {
                 const float py = kHalfWorld - (static_cast<float>(gx) + 0.5f) * kShoreCell;
-                const float t = length2 > 1e-6f ? std::clamp(((px - a.x) * abx + (py - a.y) * aby) / length2, 0.0f, 1.0f) : 0.0f;
+                const float raw = length2 > 1e-6f ? ((px - a.x) * abx + (py - a.y) * aby) / length2 : 0.0f;
+
+                if ((raw < 0.0f && !capStart) || (raw > 1.0f && !capEnd)) {
+                    continue;
+                }
+
+                const float t = std::clamp(raw, 0.0f, 1.0f);
                 const float cx = a.x + abx * t - px, cy = a.y + aby * t - py;
                 const float d = std::sqrt(cx * cx + cy * cy);
                 const float half = std::max((a.width + (b.width - a.width) * t) * 0.5f, 0.5f);
@@ -130,7 +226,7 @@ namespace {
                     continue;
                 }
 
-                const float w = 1.0f - Smooth(half, half + fade, d);
+                float w = 1.0f - Smooth(half, half + fade, d);
                 float dx = ta[0] + (tb[0] - ta[0]) * t, dy = ta[1] + (tb[1] - ta[1]) * t;
                 const float dl = std::sqrt(dx * dx + dy * dy);
                 dx = dl > 1e-4f ? dx / dl : abx;
@@ -138,13 +234,73 @@ namespace {
                 // Faster in the middle of the channel than at its sides.
                 const float across = std::min(d / half, 1.0f);
                 const float speed = (a.speed + (b.speed - a.speed) * t) * (1.0f - 0.35f * across * across);
+                const float along = t * length;
+                const float roughness = !rough ? 0.0f
+                    : std::min(roughBefore ? 1.0f : Smooth(0.0f, ramp, along), roughAfter ? 1.0f : 1.0f - Smooth(length - ramp, length, along));
 
-                const int32_t k = Stored(gy) * kN + Stored(gx);
-                s.fx[k] += w * dx * speed;
-                s.fy[k] += w * dy * speed;
-                s.rough[k] += w * rough;
-                s.sum[k] += w;
-                s.top[k] = std::max(s.top[k], w);
+                if (joins) {
+                    GiveWay(joins, px, py, w, dx, dy);
+                }
+
+                if (branchesFrom) {
+                    GiveWay(branchesFrom, px, py, w, dx, dy);
+                }
+
+                Add(gx, gy, w, dx, dy, speed, roughness);
+            }
+        }
+    }
+
+    // A free end of a river: past its last node a mouth, the current spreading out and slowing into the
+    // open water it runs into (the same water over a wider front: slower, until it's gone); before its first
+    // node an inlet, the water drawn in from the lake it leaves, converging and speeding up toward the node.
+    // Over three widths (at least 24 yd); the banks still turn it (Build).
+    void DrawEnd(const River& r, bool mouth, int32_t originX, int32_t originY) {
+        const uint32_t i = mouth ? r.count - 1 : 0;
+        const Node& e = s.nodes[r.first + i];
+        float tx, ty;
+        Tangent(r, i, tx, ty);
+        const float ox = mouth ? tx : -tx, oy = mouth ? ty : -ty;   // away from the river
+        const float half0 = std::max(e.width * 0.5f, 0.5f);
+        const float reachOut = std::max(3.0f * e.width, 24.0f);
+        constexpr float kSpread = 0.6f;   // the front widens this much per yd out
+        const float widest = half0 + reachOut * kSpread;
+        const float reach = reachOut + widest + std::max(2.0f, widest * 0.5f);
+        const float rough = mouth && Rough(s.nodes[r.first + r.count - 2].kind) ? 1.0f : 0.0f;
+        const CellBox box = BoxOf(e.x - reach, e.y - reach, e.x + reach, e.y + reach, originX, originY);
+
+        for (int32_t gy = box.gy0; gy <= box.gy1; gy++) {
+            const float px = kHalfWorld - (static_cast<float>(gy) + 0.5f) * kShoreCell;
+
+            for (int32_t gx = box.gx0; gx <= box.gx1; gx++) {
+                const float py = kHalfWorld - (static_cast<float>(gx) + 0.5f) * kShoreCell;
+                const float rx = px - e.x, ry = py - e.y;
+                const float out = rx * ox + ry * oy;   // yd out from the node
+                const float side = rx * -oy + ry * ox;  // yd to the side
+
+                if (out <= 0.0f || out >= reachOut) {
+                    continue;
+                }
+
+                const float half = half0 + out * kSpread;
+                const float fade = std::max(2.0f, half * 0.5f);
+
+                if (std::fabs(side) >= half + fade) {
+                    continue;
+                }
+
+                const float w = (1.0f - Smooth(half, half + fade, std::fabs(side))) * (1.0f - Smooth(0.0f, reachOut, out));
+                // Along the river, fanning out from its axis at a mouth, in toward it at an inlet (the side
+                // is measured the other way round at an inlet, so one turn does both).
+                const float fan = kSpread * std::clamp(side / half, -1.0f, 1.0f);
+                float dx = tx - fan * ty;
+                float dy = ty + fan * tx;
+                const float dl = std::sqrt(dx * dx + dy * dy);
+                dx /= dl;
+                dy /= dl;
+                const float across = std::min(std::fabs(side) / half, 1.0f);
+                const float speed = e.speed * (half0 / half) * (1.0f - 0.35f * across * across);
+                Add(gx, gy, w, dx, dy, speed, rough * (1.0f - Smooth(0.0f, reachOut * 0.5f, out)));
             }
         }
     }
@@ -160,6 +316,15 @@ namespace {
         for (const River& r : s.rivers) {
             for (uint32_t i = 0; i + 1 < r.count; i++) {
                 DrawStretch(r, i, shore.originX, shore.originY);
+            }
+
+            // Free ends (not attached to a river handed over): a mouth, an inlet.
+            if (!r.joins || !RiverById(r.joins)) {
+                DrawEnd(r, true, shore.originX, shore.originY);
+            }
+
+            if (!r.branchesFrom || !RiverById(r.branchesFrom)) {
+                DrawEnd(r, false, shore.originX, shore.originY);
             }
         }
 
