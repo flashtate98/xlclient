@@ -35,7 +35,6 @@
 #include <algorithm>
 #include <cmath>
 #include "Engine/Source/Os/TimeManager.h"
-#include "Engine/Source/BlizzardCore/Source/System/Log/Log.h"
 #endif
 
 // STATIC: 0x00AC4220
@@ -257,15 +256,6 @@ bool CharacterCreationZoomCamera(CSimpleModel* frame, C3Vector& eye, C3Vector& t
         aim.y += rightY / rightLength * s_zoomRight * worldHeight;
     }
     const C3Vector closeEye(aim.x + back.x / length * distance, aim.y + back.y / length * distance, aim.z + back.z / length * distance);
-
-    // Diagnostics: one line in Logs/Zoom.log each time the zoom settles on a new value.
-    static float s_logged = -1.0f;
-    if (s_zoom == s_zoomGoal && s_logged != s_zoomGoal) {
-        s_logged = s_zoomGoal;
-        Blizzard::Log::Printf(1, "Logs/Zoom.log",
-            "zoom %.2f fov %.3f eye (%.3f %.3f %.3f) target (%.3f %.3f %.3f) face (%.3f %.3f %.3f) height %.3f distance %.3f\n",
-            s_zoom, fov, eye.x, eye.y, eye.z, target.x, target.y, target.z, face.x, face.y, face.z, worldHeight, distance);
-    }
 
     // Smoothstep, so the move starts and ends gently.
     const float t = s_zoom * s_zoom * (3.0f - 2.0f * s_zoom);
