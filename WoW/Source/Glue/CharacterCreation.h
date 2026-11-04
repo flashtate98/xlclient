@@ -72,6 +72,9 @@ void CharacterCreationSetClothingHidden(bool hidden);
 // up; the camera eases there (instant: jumps). Works on any race, from the size of its model.
 float CharacterCreationZoom();
 void CharacterCreationSetZoom(float zoom, bool instant);
+// Per-race tuning of the zoom: the aim moved up and right by these shares of the character's height, and the
+// closest the camera may come to it (world units; never under 0.45).
+void CharacterCreationSetZoomTuning(float up, float right, float minDistance);
 // The altered form's look (skin, face, hair style, hair colour, facial hair) and Retail rows for the character
 // about to be created; false when it has none (the player never showed that form).
 bool CharacterCreationAlteredFormLook(uint8_t look[5], std::vector<std::pair<uint32_t, uint32_t>>& extras);

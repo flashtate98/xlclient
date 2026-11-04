@@ -104,6 +104,11 @@ bool s_clothingHidden = false;
 float s_zoom = 0.0f;
 float s_zoomGoal = 0.0f;
 uint32_t s_zoomTime = 0;
+// Per-race tuning from the glue (SetCharacterCreateZoomTuning): the aim moved up and right by these shares of
+// the character's height, and the closest the camera may come (world units).
+float s_zoomUp = 0.0f;
+float s_zoomRight = 0.0f;
+float s_zoomMinDistance = 0.0f;
 std::map<int32_t, ParkedForm[2]> s_parkedForms;     // by the race's own ID, then sex
 
 int32_t SelectedBaseRace() {
@@ -172,9 +177,11 @@ constexpr float kZoomFocus = 0.86f;
 // How fast the zoom follows the wheel (per second).
 constexpr float kZoomEase = 9.0f;
 // How fast the aim follows the head up and down (per second); low, to keep idle animations from rocking it.
-constexpr float kZoomSettle = 2.0f;
+constexpr float kZoomSettle = 1.2f;
 // The Head attachment (where helmets go).
 constexpr uint32_t kHeadAttachment = 11;
+// The closest the camera ever comes to the aim point (world units), whatever the race asks for.
+constexpr float kZoomMinDistance = 0.45f;
 
 // The camera hook (g_simpleModelCameraHook): for the create screen's model frame, moves the camera from the
 // scene's own toward the character's face by s_zoom.
@@ -235,8 +242,19 @@ bool CharacterCreationZoomCamera(CSimpleModel* frame, C3Vector& eye, C3Vector& t
     if (!(length > 0.001f) || !(worldHeight > 0.0f)) {
         return false;
     }
-    const float distance = worldHeight * kZoomFrame * 0.5f / half;
-    const C3Vector closeEye(face.x + back.x / length * distance, face.y + back.y / length * distance, face.z + back.z / length * distance);
+    // Never so close that the camera ends up inside the head (small and hunched bodies frame very tight).
+    const float distance = std::max(std::max(s_zoomMinDistance, kZoomMinDistance), worldHeight * kZoomFrame * 0.5f / half);
+    // The per-race nudge: up the world's Z, and right across the view (the line of sight crossed with up).
+    const float rightX = -back.y / length;
+    const float rightY = back.x / length;
+    const float rightLength = std::sqrt(rightX * rightX + rightY * rightY);
+    C3Vector aim = face;
+    aim.z += s_zoomUp * worldHeight;
+    if (rightLength > 0.001f) {
+        aim.x += rightX / rightLength * s_zoomRight * worldHeight;
+        aim.y += rightY / rightLength * s_zoomRight * worldHeight;
+    }
+    const C3Vector closeEye(aim.x + back.x / length * distance, aim.y + back.y / length * distance, aim.z + back.z / length * distance);
 
     // Diagnostics: one line in Logs/Zoom.log each time the zoom settles on a new value.
     static float s_logged = -1.0f;
@@ -250,8 +268,14 @@ bool CharacterCreationZoomCamera(CSimpleModel* frame, C3Vector& eye, C3Vector& t
     // Smoothstep, so the move starts and ends gently.
     const float t = s_zoom * s_zoom * (3.0f - 2.0f * s_zoom);
     eye = C3Vector(eye.x + (closeEye.x - eye.x) * t, eye.y + (closeEye.y - eye.y) * t, eye.z + (closeEye.z - eye.z) * t);
-    target = C3Vector(target.x + (face.x - target.x) * t, target.y + (face.y - target.y) * t, target.z + (face.z - target.z) * t);
+    target = C3Vector(target.x + (aim.x - target.x) * t, target.y + (aim.y - target.y) * t, target.z + (aim.z - target.z) * t);
     return true;
+}
+
+void CharacterCreationSetZoomTuning(float up, float right, float minDistance) {
+    s_zoomUp = up;
+    s_zoomRight = right;
+    s_zoomMinDistance = std::max(0.0f, minDistance);
 }
 
 float CharacterCreationZoom() {

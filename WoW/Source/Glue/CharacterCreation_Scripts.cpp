@@ -628,6 +628,13 @@ static int32_t Script_SetCharacterCreateZoom(lua_State* L) {
     return 0;
 }
 
+// SetCharacterCreateZoomTuning(up, right [, minDistance]): the shown race's zoom nudge, in shares of its height.
+static int32_t Script_SetCharacterCreateZoomTuning(lua_State* L) {
+    CharacterCreationSetZoomTuning(static_cast<float>(lua_tonumber(L, 1)), static_cast<float>(lua_tonumber(L, 2)),
+        static_cast<float>(lua_tonumber(L, 3)));
+    return 0;
+}
+
 static int32_t Script_ZoomCharacterCreateCamera(lua_State* L) {
     if (!lua_isnumber(L, 1)) {
         luaL_error(L, "Usage: ZoomCharacterCreateCamera(steps)");
@@ -641,6 +648,7 @@ static FrameScript_Method s_retailScriptFunctions[] = {
     { "GetCharacterCreateZoom", &Script_GetCharacterCreateZoom },
     { "SetCharacterCreateZoom", &Script_SetCharacterCreateZoom },
     { "ZoomCharacterCreateCamera", &Script_ZoomCharacterCreateCamera },
+    { "SetCharacterCreateZoomTuning", &Script_SetCharacterCreateZoomTuning },
     { "IsCharacterClothingHidden", &Script_IsCharacterClothingHidden },
     { "SetCharacterClothingHidden", &Script_SetCharacterClothingHidden },
     { "HasAlteredForm", &Script_HasAlteredForm },
