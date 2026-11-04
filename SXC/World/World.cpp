@@ -694,6 +694,11 @@ namespace SXC::WorldApi {
         return TerrainHeight(x, y, &z) != WXL_FALSE;
     }
 
+    bool ToWindow(float x, float y, float z, float& outX, float& outY) {
+        const wxl_vec3 p{ x, y, z };
+        return Project(&p, &outX, &outY) != WXL_FALSE;
+    }
+
     int32_t LayerWeights(float x, float y, float* out, int32_t max) {
         Spot at;
 

@@ -39,4 +39,27 @@ namespace SXC::Water {
 
     // Brought up to date for this frame (call once per frame, from the water's first draw).
     const ShoreMap& ShoreField();
+
+    // Why a water cell under a model's bounds counts as the model standing in the water (the Water panel's
+    // "Model cells" markers): the rays' verdict, and whether the shore field took it (specks of a cell or
+    // two stay water).
+    enum class ModelVerdict : uint8_t {
+        None,     // not under a model's bounds, or the down ray hit nothing
+        Gap,      // something above, with a gap under it (a bridge): water
+        Low,      // the first thing above the water is within 2.5 yd of it (a low rock, a hull, a pier)
+        Inside,   // both rays hit the same point, and something stands at the waterline: a solid (a tall rock)
+        Sheet,    // both rays hit the same point, but nothing at the waterline: a single sheet above (planks, a
+                  // vault): water
+    };
+
+    struct ModelCell {
+        float x = 0.0f, y = 0.0f, z = 0.0f;   // the cell's centre on the water's surface
+        ModelVerdict verdict = ModelVerdict::None;
+        float down = 0.0f;                    // yd above the water: where the down ray hit
+        float up = -1.0f;                     // yd above the water: where the up ray hit, < 0 none
+        bool speck = false;                   // counted, but too small: the shore field keeps it water
+    };
+
+    // The cells under models within `range` yd of (x, y) (verdict not None), at most `max`; how many.
+    int32_t ModelCells(float x, float y, float range, ModelCell* out, int32_t max);
 }

@@ -15,8 +15,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 #include "Engine/Source/Gx/CGxDevice/CGxDevice.h"
 #include "Engine/Source/Gx/CGxBuf.h"
 #include "Engine/Source/Gx/CGxDevice/CGxShader.h"
@@ -28,7 +30,10 @@
 #include "SXC/Log.h"
 #include "SXC/Settings/Settings.h"
 #include "SXC/ThirdParty/imgui/imgui.h"
+#include "SXC/World/World.h"
 #include "WoW/Source/DB/DBClient/DBClient.h"
+#include "WoW/Source/UIUtil/Camera.h"
+#include "WoW/Source/Ui/WorldFrame.h"
 #include "WoW/Source/LiquidSystem/Liquid.h"
 #include "WoW/Source/WorldClient/DayNight.h"
 #include "WoW/Source/WorldClient/DayNight__DNInfo.h"
@@ -72,8 +77,71 @@ namespace {
         // The shore (one setting for every water for now).
         bool shoreField = true;          // off: the depth byte alone, as before the shore field
         bool nearMesh = true;            // our own water mesh over the shore field (off: the stock mesh, pinned)
+        bool modelCells = false;         // markers on the water under models: why each counts as standing in it
     };
     Panel s_panel;
+
+    // The "Model cells" markers (the shore field's verdicts under models, SXC::Water::ModelCells) within
+    // 120 yd of the camera, drawn over the world while the panel is open; the one under the mouse explained.
+    void DrawModelCells() {
+        const CGWorldFrame* frame = CGWorldFrame::s_currentWorldFrame;
+
+        if (!frame || !frame->m_camera) {
+            return;
+        }
+
+        static std::vector<SXC::Water::ModelCell> s_cells(16384);
+        const C3Vector& camera = frame->m_camera->m_position;
+        const int32_t count = SXC::Water::ModelCells(camera.x, camera.y, 120.0f, s_cells.data(), static_cast<int32_t>(s_cells.size()));
+        ImDrawList* draw = ImGui::GetForegroundDrawList();
+        const ImVec2 size = ImGui::GetIO().DisplaySize, mouse = ImGui::GetIO().MousePos;
+        const SXC::Water::ModelCell* hovered = nullptr;
+        float best = 10.0f * 10.0f;
+        int32_t shown[5] = {};
+
+        for (int32_t i = 0; i < count; i++) {
+            const SXC::Water::ModelCell& c = s_cells[i];
+            float u = 0.0f, v = 0.0f;
+
+            if (!SXC::WorldApi::ToWindow(c.x, c.y, c.z, u, v) || u < 0.0f || v < 0.0f || u > 1.0f || v > 1.0f) {
+                continue;
+            }
+
+            const ImVec2 at(u * size.x, v * size.y);
+            const float dx = at.x - mouse.x, dy = at.y - mouse.y;
+            // Gap grey and sheet cyan (water, as meant under a bridge), low orange, inside magenta; a speck hollow.
+            const ImU32 colour = c.verdict == SXC::Water::ModelVerdict::Low ? IM_COL32(255, 150, 30, 230)
+                : c.verdict == SXC::Water::ModelVerdict::Inside ? IM_COL32(230, 40, 230, 230)
+                : c.verdict == SXC::Water::ModelVerdict::Sheet ? IM_COL32(40, 220, 240, 220) : IM_COL32(170, 170, 170, 160);
+            const float radius = c.verdict == SXC::Water::ModelVerdict::Gap ? 2.5f : 4.0f;
+
+            if (c.speck) {
+                draw->AddCircle(at, radius, colour, 0, 1.5f);
+            } else {
+                draw->AddCircleFilled(at, radius, colour);
+            }
+
+            shown[static_cast<int32_t>(c.verdict)]++;
+
+            if (dx * dx + dy * dy < best) {
+                best = dx * dx + dy * dy;
+                hovered = &c;
+            }
+        }
+
+        ImGui::Text("On screen: %d low (orange), %d inside (magenta), %d sheet (cyan), %d gap (grey). Hollow: a speck, kept water.",
+                    shown[2], shown[3], shown[4], shown[1]);
+
+        if (hovered && !ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)) {
+            const char* why = hovered->verdict == SXC::Water::ModelVerdict::Low ? "low: something within 2.5 yd above the water"
+                : hovered->verdict == SXC::Water::ModelVerdict::Inside ? "inside: both rays hit the same point and something stands at the waterline: a solid"
+                : hovered->verdict == SXC::Water::ModelVerdict::Sheet ? "sheet: both rays hit the same point, but nothing at the waterline: water"
+                : "gap: open water under it";
+            char up[32];
+            std::snprintf(up, sizeof up, hovered->up < 0.0f ? "nothing" : "%.1f yd up", hovered->up);
+            ImGui::SetTooltip("%s\ndown ray hit %.1f yd above the water, up ray: %s%s", why, hovered->down, up, hovered->speck ? "\na speck: the shore field keeps it water" : "");
+        }
+    }
 
     // The look a water draws with at a world point: the panel's test values, else its LiquidSurface row there.
     const SXC::Water::Look& LookFor(uint32_t liquidType, float x, float y) {
@@ -794,6 +862,13 @@ namespace SXC::Water {
                                               "Shore field (blue water, red land, green depth)", "Shore waves (red crests, white foam)",
                                               "River flow (colour: speed, blue to red; dots drift with it)" };
         ImGui::Combo("Debug view", &s_panel.debugView, kViews, IM_ARRAYSIZE(kViews));
+        ImGui::Checkbox("Model cells", &s_panel.modelCells);
+        ImGui::SetItemTooltip("Markers on the water under models (WMOs, doodads): why the shore field takes a cell as a model standing in the water "
+                              "(it foams like a shore) or not. Hover one for the rays' hits. While this panel is open.");
+
+        if (s_panel.modelCells) {
+            DrawModelCells();
+        }
         ImGui::Checkbox("Screen-space reflections", &s_panel.screenReflections);
         ImGui::Checkbox("Override the wind", &s_panel.windOverride);
 

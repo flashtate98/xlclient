@@ -19,4 +19,8 @@ namespace SXC::WorldApi {
     // The terrain's height at a world spot as the client's collision has it (CMap::GetHeightTerrain);
     // false off the map or in a hole.
     bool GroundHeight(float x, float y, float& z);
+
+    // Where a world point is on the window, 0..1 from the left / top (sxc_world_api::project); false
+    // behind the camera. For debug markers drawn over the world.
+    bool ToWindow(float x, float y, float z, float& outX, float& outY);
 }

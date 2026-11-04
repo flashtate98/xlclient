@@ -51,6 +51,11 @@ namespace SXC::Water {
             std::vector<uint16_t> type = std::vector<uint16_t>(kShoreSize * kShoreSize, 0);
             std::vector<float> coord = std::vector<float>(kShoreSize * kShoreSize, 0.0f);   // the stock depth coordinate
             std::vector<uint8_t> model = std::vector<uint8_t>(kShoreSize * kShoreSize, 0);  // a model stands in the water here
+            // Why (the Water panel's markers): the verdict (ModelVerdict, + 0x80 a speck kept water), and
+            // where the rays hit, yd above the water (up: < 0 none).
+            std::vector<uint8_t> verdict = std::vector<uint8_t>(kShoreSize * kShoreSize, 0);
+            std::vector<float> hitDown = std::vector<float>(kShoreSize * kShoreSize, 0.0f);
+            std::vector<float> hitUp = std::vector<float>(kShoreSize * kShoreSize, -1.0f);
             int32_t chunkX = -1, chunkY = -1;   // the window's first chunk
             bool dirty = false;
             std::chrono::steady_clock::time_point solved;
@@ -168,13 +173,37 @@ namespace SXC::Water {
             return sig;
         }
 
+        // Whether a model stands at the waterline at a cell: eight short rays just above the water, from
+        // 2.5 yd out toward the cell's centre (inward: from inside a solid, rays outward meet only the
+        // backs of its faces). Models only, not the terrain. Both rays straight up and down hit the same
+        // point under a single sheet of collision (a bridge's planks, a vault; Seyri, 2026-11-04: foam
+        // in rectangles under bridges) as on top of a solid; only a solid reaches the water.
+        bool AtWaterline(float x, float y, float surface) {
+            constexpr uint32_t kFlags = 0x100011;
+            constexpr float kOut = 2.5f, kHeight = 0.4f;
+            C3Vector centre(x, y, surface + kHeight);
+
+            for (int32_t d = 0; d < 8; d++) {
+                const float a = static_cast<float>(d) * 0.785398f;
+                C3Vector from(x + std::cos(a) * kOut, y + std::sin(a) * kOut, surface + kHeight), hit;
+                float t = 1.0f;
+
+                if (::World::Intersect(from, centre, &hit, &t, kFlags, nullptr)) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         // Models standing in a chunk's water (Seyri, 2026-10-30: rocks, cliffs, piers and hulls had no
         // shore): the game's own collision, as it places things on the ground (doodads, game objects,
         // WMOs; not the terrain), through the water cells under the models that reach the water's
         // height. Per cell, two rays: down from high above, and up from just under the surface. A
         // model counts where the first thing above the water is within 2.5 yd of it (a low rock, a
-        // hull, a low pier) or is the top itself (the ray rose inside a solid: a tall rock); a bridge
-        // leaves a gap under it and doesn't count. Open sea has no models: no rays.
+        // hull, a low pier) or is the top itself and something stands at the waterline (the ray rose
+        // inside a solid: a tall rock; AtWaterline); a bridge leaves a gap or a single sheet over open
+        // water and doesn't count. Open sea has no models: no rays.
         void SampleModels(int32_t cx, int32_t cy, CMapChunk* chunk) {
             if (!chunk) {
                 return;
@@ -259,8 +288,18 @@ namespace SXC::Water {
                     float u = 1.0f;
                     const bool roof = ::World::Intersect(bottom, top, &hitUp, &u, kFlags, nullptr) != 0;
                     const float firstAbove = roof ? hitUp.z : hitDown.z;
+                    const bool low = firstAbove - surface < kGap;
+                    s.hitDown[k] = hitDown.z - surface;
+                    s.hitUp[k] = roof ? hitUp.z - surface : -1.0f;
+                    ModelVerdict verdict = low ? ModelVerdict::Low : (std::fabs(firstAbove - hitDown.z) < 0.05f ? ModelVerdict::Inside : ModelVerdict::Gap);
 
-                    if (firstAbove - surface < kGap || std::fabs(firstAbove - hitDown.z) < 0.05f) {
+                    if (verdict == ModelVerdict::Inside && !AtWaterline(x, y, surface)) {
+                        verdict = ModelVerdict::Sheet;
+                    }
+
+                    s.verdict[k] = static_cast<uint8_t>(verdict);
+
+                    if (verdict == ModelVerdict::Low || verdict == ModelVerdict::Inside) {
                         s.model[k] = 1;
                     }
                 }
@@ -283,6 +322,7 @@ namespace SXC::Water {
                     s.type[k] = 0;
                     s.coord[k] = 0.0f;
                     s.model[k] = 0;
+                    s.verdict[k] = 0;
 
                     if (!chunk) {
                         s.water[k] = 1;
@@ -371,6 +411,8 @@ namespace SXC::Water {
                     if (solid >= 3) {
                         wet[wj * n + wi] = 0;
                     }
+
+                    s.verdict[k] = static_cast<uint8_t>((s.verdict[k] & 0x7F) | (solid >= 3 ? 0 : 0x80));
                 }
             }
 
@@ -644,6 +686,44 @@ namespace SXC::Water {
             s.map.valid = true;
             s.map.version++;
         }
+    }
+
+    int32_t ModelCells(float x, float y, float range, ModelCell* out, int32_t max) {
+        if (!s.map.valid || !out || max <= 0) {
+            return 0;
+        }
+
+        // World x runs along cell -y, world y along cell -x (SampleChunk's world point, the other way).
+        const float cx = (kHalfWorld - y) / kShoreCell, cy = (kHalfWorld - x) / kShoreCell;
+        const int32_t reach = static_cast<int32_t>(range / kShoreCell) + 1;
+        const int32_t ox = s.chunkX * 16, oy = s.chunkY * 16;
+        int32_t count = 0;
+
+        for (int32_t gy = static_cast<int32_t>(cy) - reach; gy <= static_cast<int32_t>(cy) + reach && count < max; gy++) {
+            for (int32_t gx = static_cast<int32_t>(cx) - reach; gx <= static_cast<int32_t>(cx) + reach && count < max; gx++) {
+                if (gx < ox || gy < oy || gx >= ox + kShoreSize || gy >= oy + kShoreSize) {
+                    continue;
+                }
+
+                const int32_t k = Stored(gy) * kShoreSize + Stored(gx);
+                const ModelVerdict verdict = static_cast<ModelVerdict>(s.verdict[k] & 0x7F);
+
+                if (verdict == ModelVerdict::None || !s.water[k]) {
+                    continue;
+                }
+
+                ModelCell& c = out[count++];
+                c.x = kHalfWorld - (static_cast<float>(gy) + 0.5f) * kShoreCell;
+                c.y = kHalfWorld - (static_cast<float>(gx) + 0.5f) * kShoreCell;
+                c.z = s.surface[k];
+                c.verdict = verdict;
+                c.down = s.hitDown[k];
+                c.up = s.hitUp[k];
+                c.speck = (s.verdict[k] & 0x80) != 0;
+            }
+        }
+
+        return count;
     }
 
     const ShoreMap& ShoreField() {
