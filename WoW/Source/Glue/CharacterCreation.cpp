@@ -109,6 +109,7 @@ uint32_t s_zoomTime = 0;
 float s_zoomUp = 0.0f;
 float s_zoomRight = 0.0f;
 float s_zoomMinDistance = 0.0f;
+float s_zoomFrame = 0.0f;      // 0: kZoomFrame
 std::map<int32_t, ParkedForm[2]> s_parkedForms;     // by the race's own ID, then sex
 
 int32_t SelectedBaseRace() {
@@ -170,7 +171,7 @@ bool CharacterCreationHasAlteredForm() {
 }
 
 // How close the camera comes at full zoom: the share of the character's height that fills the view
-// (0.35: head and shoulders).
+// (0.35: head and shoulders). The glue can set its own (SetCharacterCreateZoomTuning).
 constexpr float kZoomFrame = 0.35f;
 // The face's share of the character's height, for models without a Head attachment and for framing.
 constexpr float kZoomFocus = 0.86f;
@@ -243,7 +244,8 @@ bool CharacterCreationZoomCamera(CSimpleModel* frame, C3Vector& eye, C3Vector& t
         return false;
     }
     // Never so close that the camera ends up inside the head (small and hunched bodies frame very tight).
-    const float distance = std::max(std::max(s_zoomMinDistance, kZoomMinDistance), worldHeight * kZoomFrame * 0.5f / half);
+    const float frameShare = s_zoomFrame > 0.0f ? s_zoomFrame : kZoomFrame;
+    const float distance = std::max(std::max(s_zoomMinDistance, kZoomMinDistance), worldHeight * frameShare * 0.5f / half);
     // The per-race nudge: up the world's Z, and right across the view (the line of sight crossed with up).
     const float rightX = -back.y / length;
     const float rightY = back.x / length;
@@ -272,10 +274,11 @@ bool CharacterCreationZoomCamera(CSimpleModel* frame, C3Vector& eye, C3Vector& t
     return true;
 }
 
-void CharacterCreationSetZoomTuning(float up, float right, float minDistance) {
+void CharacterCreationSetZoomTuning(float up, float right, float minDistance, float frame) {
     s_zoomUp = up;
     s_zoomRight = right;
     s_zoomMinDistance = std::max(0.0f, minDistance);
+    s_zoomFrame = frame > 0.0f ? std::min(frame, 2.0f) : 0.0f;
 }
 
 float CharacterCreationZoom() {

@@ -628,10 +628,11 @@ static int32_t Script_SetCharacterCreateZoom(lua_State* L) {
     return 0;
 }
 
-// SetCharacterCreateZoomTuning(up, right [, minDistance]): the shown race's zoom nudge, in shares of its height.
+// SetCharacterCreateZoomTuning(up, right [, minDistance [, frame]]): the shown race's zoom nudge, in shares of its
+// height; the closest the camera may come (yards); the share of its height the close-up frames (0: the client's).
 static int32_t Script_SetCharacterCreateZoomTuning(lua_State* L) {
     CharacterCreationSetZoomTuning(static_cast<float>(lua_tonumber(L, 1)), static_cast<float>(lua_tonumber(L, 2)),
-        static_cast<float>(lua_tonumber(L, 3)));
+        static_cast<float>(lua_tonumber(L, 3)), static_cast<float>(lua_tonumber(L, 4)));
     return 0;
 }
 
