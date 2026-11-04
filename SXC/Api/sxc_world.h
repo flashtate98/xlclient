@@ -162,6 +162,13 @@ typedef struct sxc_world_api
     /// `out` (at most `max`, each `unit_size` bytes: pass sizeof(sxc_world_unit); fields past what the
     /// client knows stay zero). Returns how many were written.
     int32_t(WXL_CALL* units)(const wxl_vec3* centre, float range, sxc_world_unit* out, int32_t max, uint32_t unit_size);
+
+    // --- appended 2026-11-03 ------------------------------------------------------------------------
+
+    /// project's way back: the ray from the camera through a point of the window (x, y as project
+    /// gives them, 0..1 from the left / top): its origin (the camera) and unit direction. False before
+    /// the world is up. For picking things in the world with the mouse (the river editor).
+    wxl_bool(WXL_CALL* unproject)(float x, float y, wxl_vec3* out_origin, wxl_vec3* out_direction);
 } sxc_world_api;
 
 #ifdef __cplusplus

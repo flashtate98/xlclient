@@ -169,6 +169,37 @@ namespace {
         return WXL_TRUE;
     }
 
+    // Project's way back: the ray from the camera through a point of the window. The projection takes
+    // camera-relative directions (w 0), so a direction lands on (x, y) where clip x - x w and clip y - y w
+    // are both 0: two planes through the camera, the ray their crossing.
+    wxl_bool WXL_CALL Unproject(float x, float y, wxl_vec3* outOrigin, wxl_vec3* outDirection) {
+        const CGWorldFrame* frame = CGWorldFrame::s_currentWorldFrame;
+        const CRect& viewport = frame ? frame->m_viewportNDC : CRect();
+
+        if (!frame || !frame->m_camera || viewport.maxX <= viewport.minX || viewport.maxY <= viewport.minY) {
+            return WXL_FALSE;
+        }
+
+        const float nx = (x - viewport.minX) / (viewport.maxX - viewport.minX) * 2.0f - 1.0f;
+        const float ny = ((1.0f - y) - viewport.minY) / (viewport.maxY - viewport.minY) * 2.0f - 1.0f;
+        const C44Matrix& m = frame->m_viewProjection;
+        const C3Vector a(m.a0 - nx * m.a3, m.b0 - nx * m.b3, m.c0 - nx * m.c3);
+        const C3Vector b(m.a1 - ny * m.a3, m.b1 - ny * m.b3, m.c1 - ny * m.c3);
+        C3Vector d(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
+        const float length = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+
+        if (length < 1e-12f) {
+            return WXL_FALSE;
+        }
+
+        // In front of the camera: clip w > 0.
+        const float sign = d.x * m.a3 + d.y * m.b3 + d.z * m.c3 < 0.0f ? -1.0f : 1.0f;
+        const C3Vector& camera = frame->m_camera->m_position;
+        if (outOrigin) *outOrigin = wxl_vec3{ camera.x, camera.y, camera.z };
+        if (outDirection) *outDirection = wxl_vec3{ d.x * sign / length, d.y * sign / length, d.z * sign / length };
+        return WXL_TRUE;
+    }
+
     int32_t WXL_CALL AreaChain(uint32_t area, uint32_t* out, int32_t max) {
         int32_t n = 0;
 
@@ -690,7 +721,7 @@ namespace SXC::WorldApi {
     const sxc_world_api* Api() {
         static const sxc_world_api s_api = {
             sizeof(sxc_world_api), Snapshot, AreaChain, TerrainAreaAt, TerrainHeight, TerrainSample, TerrainLiquid, LiquidCategory, Trace, AreaName,
-            Project, SetWeather, WeatherTest, Units,
+            Project, SetWeather, WeatherTest, Units, Unproject,
         };
         return &s_api;
     }
