@@ -35,6 +35,7 @@
 #include <algorithm>
 #include <cmath>
 #include "Engine/Source/Os/TimeManager.h"
+#include "Engine/Source/BlizzardCore/Source/System/Log/Log.h"
 #endif
 
 // STATIC: 0x00AC4220
@@ -195,13 +196,15 @@ bool CharacterCreationZoomCamera(CSimpleModel* frame, C3Vector& eye, C3Vector& t
     static float s_height = 0.0f;
     CCharacterComponent* character = CCharacterCreation::m_character;
     CM2Model* model = character ? character->m_data.m_model : nullptr;
-    if (model && model->IsLoaded(0, 0)) {
+    if (model && model->m_scene && model->IsLoaded(0, 0)) {
         const CAaBox box = model->GetBoundingBox();
         if (box.t.z - box.b.z > 0.0f) {
             const float midX = (box.b.x + box.t.x) * 0.5f;
             const float midY = (box.b.y + box.t.y) * 0.5f;
-            const C3Vector feet = C3Vector(midX, midY, box.b.z) * model->m_worldTransform;
-            const C3Vector top = C3Vector(midX, midY, box.t.z) * model->m_worldTransform;
+            // Into the camera's space the way CM2Model places its cameras: model to view (m_matrixF4), then
+            // back out of the view (the scene's m_viewInv).
+            const C3Vector feet = C3Vector(midX, midY, box.b.z) * model->m_matrixF4 * model->m_scene->m_viewInv;
+            const C3Vector top = C3Vector(midX, midY, box.t.z) * model->m_matrixF4 * model->m_scene->m_viewInv;
             const C3Vector rise(top.x - feet.x, top.y - feet.y, top.z - feet.z);
             s_height = std::sqrt(rise.x * rise.x + rise.y * rise.y + rise.z * rise.z);
             s_face = C3Vector(feet.x + rise.x * kZoomFocus, feet.y + rise.y * kZoomFocus, feet.z + rise.z * kZoomFocus);
@@ -219,6 +222,15 @@ bool CharacterCreationZoomCamera(CSimpleModel* frame, C3Vector& eye, C3Vector& t
     }
     const float distance = worldHeight * kZoomFrame * 0.5f / half;
     const C3Vector closeEye(face.x + back.x / length * distance, face.y + back.y / length * distance, face.z + back.z / length * distance);
+
+    // Diagnostics: one line in Logs/Zoom.log each time the zoom settles on a new value.
+    static float s_logged = -1.0f;
+    if (s_zoom == s_zoomGoal && s_logged != s_zoomGoal) {
+        s_logged = s_zoomGoal;
+        Blizzard::Log::Printf(1, "Logs/Zoom.log",
+            "zoom %.2f fov %.3f eye (%.3f %.3f %.3f) target (%.3f %.3f %.3f) face (%.3f %.3f %.3f) height %.3f distance %.3f\n",
+            s_zoom, fov, eye.x, eye.y, eye.z, target.x, target.y, target.z, face.x, face.y, face.z, worldHeight, distance);
+    }
 
     // Smoothstep, so the move starts and ends gently.
     const float t = s_zoom * s_zoom * (3.0f - 2.0f * s_zoom);
