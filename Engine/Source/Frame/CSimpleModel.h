@@ -16,8 +16,15 @@ class CM2Lighting;
 class CM2Model;
 class CM2Scene;
 class CRenderBatch;
+class CSimpleModel;
 class CStatus;
 class XMLNode;
+
+// Not in the original (FlashWOW): lets the game move a model frame's camera just before it draws (the create
+// screen's zoom). The hook gets the camera's eye and target and its field of view (radians) and returns true
+// after changing eye or target; the frame then draws from there.
+typedef bool (*SimpleModelCameraHook)(CSimpleModel* frame, C3Vector& eye, C3Vector& target, float fov);
+extern SimpleModelCameraHook g_simpleModelCameraHook;
 
 class CSimpleModel : public CSimpleFrame {
     public:

@@ -68,6 +68,10 @@ void CharacterCreationSetViewingAlteredForm(bool altered);
 // screen wears nothing (underwear only), so skin markings and tattoos show; Dress() honours it.
 bool CharacterCreationClothingHidden();
 void CharacterCreationSetClothingHidden(bool hidden);
+// Not in the original: FlashWOW create screen zoom. 0 is the scene's own camera, 1 the character's face close
+// up; the camera eases there (instant: jumps). Works on any race, from the size of its model.
+float CharacterCreationZoom();
+void CharacterCreationSetZoom(float zoom, bool instant);
 // The altered form's look (skin, face, hair style, hair colour, facial hair) and Retail rows for the character
 // about to be created; false when it has none (the player never showed that form).
 bool CharacterCreationAlteredFormLook(uint8_t look[5], std::vector<std::pair<uint32_t, uint32_t>>& extras);

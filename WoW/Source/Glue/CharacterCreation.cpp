@@ -32,6 +32,9 @@
 #if defined(WOWDECOMP_RETAIL_MODELS)
 #include <map>
 #include "WoW/Source/Object/ObjectClient/AlteredForm.h"
+#include <algorithm>
+#include <cmath>
+#include "Engine/Source/Os/TimeManager.h"
 #endif
 
 // STATIC: 0x00AC4220
@@ -95,6 +98,11 @@ struct ParkedForm {
 
 bool s_viewingAlteredForm = false;
 bool s_clothingHidden = false;
+// Create screen zoom (CharacterCreationZoom): 0 shows the scene's own camera, 1 the character's head close up.
+// s_zoom eases toward s_zoomGoal every frame.
+float s_zoom = 0.0f;
+float s_zoomGoal = 0.0f;
+uint32_t s_zoomTime = 0;
 std::map<int32_t, ParkedForm[2]> s_parkedForms;     // by the race's own ID, then sex
 
 int32_t SelectedBaseRace() {
@@ -153,6 +161,82 @@ void ShowForm(bool altered) {
 bool CharacterCreationHasAlteredForm() {
     const uint32_t form = AlteredFormRace(SelectedBaseRace());
     return CCharacterCreation::m_existingCharacterIndex < 0 && CCharacterCreation::m_character && form && g_chrRacesDB.GetRecord(form);
+}
+
+// How close the camera comes at full zoom: the share of the character's height that fills the view
+// (0.35: head and shoulders).
+constexpr float kZoomFrame = 0.35f;
+// Where the camera looks at full zoom: this share of the character's height above its feet (the face).
+constexpr float kZoomFocus = 0.86f;
+// How fast the zoom follows the wheel (per second).
+constexpr float kZoomEase = 9.0f;
+
+// The camera hook (g_simpleModelCameraHook): for the create screen's model frame, moves the camera from the
+// scene's own toward the character's face by s_zoom.
+bool CharacterCreationZoomCamera(CSimpleModel* frame, C3Vector& eye, C3Vector& target, float fov) {
+    if (!CCharacterCreation::m_charCustomizeFrame || frame != CCharacterCreation::m_charCustomizeFrame) {
+        return false;
+    }
+
+    const uint32_t now = OsGetAsyncTimeMs();
+    const float elapsed = s_zoomTime ? std::min(0.1f, (now - s_zoomTime) / 1000.0f) : 0.0f;
+    s_zoomTime = now;
+    s_zoom += (s_zoomGoal - s_zoom) * std::min(1.0f, elapsed * kZoomEase);
+    if (std::fabs(s_zoomGoal - s_zoom) < 0.001f) {
+        s_zoom = s_zoomGoal;
+    }
+    if (s_zoom <= 0.0f) {
+        return false;
+    }
+
+    // The character's face and height in the world. While its model reloads (a new race or sex), the last
+    // ones are kept so the camera does not jump back out.
+    static C3Vector s_face(0.0f, 0.0f, 0.0f);
+    static float s_height = 0.0f;
+    CCharacterComponent* character = CCharacterCreation::m_character;
+    CM2Model* model = character ? character->m_data.m_model : nullptr;
+    if (model && model->IsLoaded(0, 0)) {
+        const CAaBox box = model->GetBoundingBox();
+        if (box.t.z - box.b.z > 0.0f) {
+            const float midX = (box.b.x + box.t.x) * 0.5f;
+            const float midY = (box.b.y + box.t.y) * 0.5f;
+            const C3Vector feet = C3Vector(midX, midY, box.b.z) * model->m_worldTransform;
+            const C3Vector top = C3Vector(midX, midY, box.t.z) * model->m_worldTransform;
+            const C3Vector rise(top.x - feet.x, top.y - feet.y, top.z - feet.z);
+            s_height = std::sqrt(rise.x * rise.x + rise.y * rise.y + rise.z * rise.z);
+            s_face = C3Vector(feet.x + rise.x * kZoomFocus, feet.y + rise.y * kZoomFocus, feet.z + rise.z * kZoomFocus);
+        }
+    }
+    const float worldHeight = s_height;
+    const C3Vector face = s_face;
+
+    // Back from the face along the scene camera's own line of sight, far enough to frame kZoomFrame of the height.
+    C3Vector back(eye.x - target.x, eye.y - target.y, eye.z - target.z);
+    const float length = std::sqrt(back.x * back.x + back.y * back.y + back.z * back.z);
+    const float half = std::tan(std::max(0.1f, fov) * 0.5f);
+    if (!(length > 0.001f) || !(worldHeight > 0.0f)) {
+        return false;
+    }
+    const float distance = worldHeight * kZoomFrame * 0.5f / half;
+    const C3Vector closeEye(face.x + back.x / length * distance, face.y + back.y / length * distance, face.z + back.z / length * distance);
+
+    // Smoothstep, so the move starts and ends gently.
+    const float t = s_zoom * s_zoom * (3.0f - 2.0f * s_zoom);
+    eye = C3Vector(eye.x + (closeEye.x - eye.x) * t, eye.y + (closeEye.y - eye.y) * t, eye.z + (closeEye.z - eye.z) * t);
+    target = C3Vector(target.x + (face.x - target.x) * t, target.y + (face.y - target.y) * t, target.z + (face.z - target.z) * t);
+    return true;
+}
+
+float CharacterCreationZoom() {
+    return s_zoomGoal;
+}
+
+void CharacterCreationSetZoom(float zoom, bool instant) {
+    s_zoomGoal = std::max(0.0f, std::min(1.0f, zoom));
+    if (instant) {
+        s_zoom = s_zoomGoal;
+    }
+    g_simpleModelCameraHook = &CharacterCreationZoomCamera;
 }
 
 bool CharacterCreationClothingHidden() {
@@ -293,6 +377,9 @@ void CCharacterCreation::GetRandomRaceAndSex(ComponentData* data) {
 // OFFSET: 0x004DFFC0
 void CCharacterCreation::OnHide() {
     EventUnregister(EVENT_ID_IDLE, &CCharacterCreation::Idle);
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    CharacterCreationSetZoom(0.0f, true);
+#endif
     LoadingScreenMiniDisable();
 }
 

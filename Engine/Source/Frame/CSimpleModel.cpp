@@ -28,6 +28,7 @@
 #include "Engine/Source/Tempest/C44Matrix.h"
 #include "Engine/Source/Tempest/CMath.h"
 #include "Engine/Source/Tempest/CRect.h"
+#include "Engine/Source/Gxu/Gxu.h"
 #include "Engine/Source/lua-5.1/src/lauxlib.h"
 
 // STATIC: 0x00B2CB0C
@@ -408,6 +409,8 @@ void CSimpleModel::UpdateModel() {
     this->m_model->SetWorldTransform(position, this->m_facing, this->m_modelScale * this->m_layoutScale * height);
 }
 
+SimpleModelCameraHook g_simpleModelCameraHook = nullptr;
+
 // VERIFY: 722f8373 manual
 // OFFSET: 0x0095FC30
 void CSimpleModel::RenderModel(void* arg) {
@@ -445,6 +448,22 @@ void CSimpleModel::RenderModel(void* arg) {
         DataMgrGetCoord(camera, 7, &cameraPos);
         DataMgrGetCoord(camera, 8, &cameraTarget);
         CameraSetupWorldProjection(camera, rect, 0);
+
+        // Not in the original (FlashWOW): the game may move the camera (g_simpleModelCameraHook). The view is
+        // rebuilt the way CCamera::SetupWorldProjection builds it, from the moved eye and target.
+        C3Vector eye = cameraPos;
+        C3Vector target = cameraTarget;
+        if (g_simpleModelCameraHook && g_simpleModelCameraHook(simpleModel, eye, target, camera->m_fov.m_data)) {
+            C3Vector origin(0.0f, 0.0f, 0.0f);
+            C3Vector look(target.x - eye.x, target.y - eye.y, target.z - eye.z);
+            C3Vector up(camera->m_rotation.m_sin * camera->m_roll.m_sin, -(camera->m_rotation.m_cos * camera->m_roll.m_sin), camera->m_roll.m_cos);
+            C44Matrix moved;
+            GxuXformCreateLookAtSgCompat(origin, look, up, moved);
+            g_theGxDevicePtr->XformSetView(moved);
+            CShaderEffect::UpdateProjMatrix();
+            cameraPos = eye;
+            cameraTarget = target;
+        }
     } else {
         C2Vector offset;
         offset.x = rect.minX;

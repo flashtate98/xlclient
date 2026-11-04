@@ -612,7 +612,35 @@ static int32_t Script_SetCharacterClothingHidden(lua_State* L) {
     return 0;
 }
 
+// FlashWOW create screen zoom: GetCharacterCreateZoom() -> 0..1; SetCharacterCreateZoom(value [, instant]);
+// ZoomCharacterCreateCamera(steps) moves by steps tenths (the mouse wheel's delta).
+static int32_t Script_GetCharacterCreateZoom(lua_State* L) {
+    lua_pushnumber(L, CharacterCreationZoom());
+    return 1;
+}
+
+static int32_t Script_SetCharacterCreateZoom(lua_State* L) {
+    if (!lua_isnumber(L, 1)) {
+        luaL_error(L, "Usage: SetCharacterCreateZoom(zoom [, instant])");
+        return 0;
+    }
+    CharacterCreationSetZoom(static_cast<float>(lua_tonumber(L, 1)), lua_toboolean(L, 2) != 0);
+    return 0;
+}
+
+static int32_t Script_ZoomCharacterCreateCamera(lua_State* L) {
+    if (!lua_isnumber(L, 1)) {
+        luaL_error(L, "Usage: ZoomCharacterCreateCamera(steps)");
+        return 0;
+    }
+    CharacterCreationSetZoom(CharacterCreationZoom() + static_cast<float>(lua_tonumber(L, 1)) * 0.1f, false);
+    return 0;
+}
+
 static FrameScript_Method s_retailScriptFunctions[] = {
+    { "GetCharacterCreateZoom", &Script_GetCharacterCreateZoom },
+    { "SetCharacterCreateZoom", &Script_SetCharacterCreateZoom },
+    { "ZoomCharacterCreateCamera", &Script_ZoomCharacterCreateCamera },
     { "IsCharacterClothingHidden", &Script_IsCharacterClothingHidden },
     { "SetCharacterClothingHidden", &Script_SetCharacterClothingHidden },
     { "HasAlteredForm", &Script_HasAlteredForm },
