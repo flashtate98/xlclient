@@ -167,10 +167,14 @@ bool CharacterCreationHasAlteredForm() {
 // How close the camera comes at full zoom: the share of the character's height that fills the view
 // (0.35: head and shoulders).
 constexpr float kZoomFrame = 0.35f;
-// Where the camera looks at full zoom: this share of the character's height above its feet (the face).
+// The face's share of the character's height, for models without a Head attachment and for framing.
 constexpr float kZoomFocus = 0.86f;
 // How fast the zoom follows the wheel (per second).
 constexpr float kZoomEase = 9.0f;
+// How fast the aim follows the head up and down (per second); low, to keep idle animations from rocking it.
+constexpr float kZoomSettle = 2.0f;
+// The Head attachment (where helmets go).
+constexpr uint32_t kHeadAttachment = 11;
 
 // The camera hook (g_simpleModelCameraHook): for the create screen's model frame, moves the camera from the
 // scene's own toward the character's face by s_zoom.
@@ -190,24 +194,35 @@ bool CharacterCreationZoomCamera(CSimpleModel* frame, C3Vector& eye, C3Vector& t
         return false;
     }
 
-    // The character's face and height in the world. While its model reloads (a new race or sex), the last
-    // ones are kept so the camera does not jump back out.
+    // Where the camera looks: straight above the character's feet (the point it turns about, so turning the
+    // character leaves the camera still), at the height of its Head attachment (the point helmets hang on).
+    // The height eases, so breathing and idle animations do not rock the camera. Models without a Head
+    // attachment use kZoomFocus of their bounds. While the model reloads (a new race or sex) the last point
+    // is kept, so the camera does not jump back out.
     static C3Vector s_face(0.0f, 0.0f, 0.0f);
     static float s_height = 0.0f;
+    static bool s_haveFace = false;
     CCharacterComponent* character = CCharacterCreation::m_character;
     CM2Model* model = character ? character->m_data.m_model : nullptr;
     if (model && model->m_scene && model->IsLoaded(0, 0)) {
-        const CAaBox box = model->GetBoundingBox();
-        if (box.t.z - box.b.z > 0.0f) {
-            const float midX = (box.b.x + box.t.x) * 0.5f;
-            const float midY = (box.b.y + box.t.y) * 0.5f;
-            // Into the camera's space the way CM2Model places its cameras: model to view (m_matrixF4), then
-            // back out of the view (the scene's m_viewInv).
-            const C3Vector feet = C3Vector(midX, midY, box.b.z) * model->m_matrixF4 * model->m_scene->m_viewInv;
-            const C3Vector top = C3Vector(midX, midY, box.t.z) * model->m_matrixF4 * model->m_scene->m_viewInv;
-            const C3Vector rise(top.x - feet.x, top.y - feet.y, top.z - feet.z);
-            s_height = std::sqrt(rise.x * rise.x + rise.y * rise.y + rise.z * rise.z);
-            s_face = C3Vector(feet.x + rise.x * kZoomFocus, feet.y + rise.y * kZoomFocus, feet.z + rise.z * kZoomFocus);
+        const C3Vector feet = C3Vector(0.0f, 0.0f, 0.0f) * model->m_matrixF4 * model->m_scene->m_viewInv;
+        float headHeight = 0.0f;
+        if (model->HasAttachment(kHeadAttachment)) {
+            const C3Vector head = model->GetAttachmentPosition(kHeadAttachment);
+            headHeight = head.z - feet.z;
+        }
+        if (!(headHeight > 0.0f)) {
+            const CAaBox box = model->GetBoundingBox();
+            const C3Vector top = C3Vector(0.0f, 0.0f, box.t.z) * model->m_matrixF4 * model->m_scene->m_viewInv;
+            headHeight = (top.z - feet.z) * kZoomFocus;
+        }
+        if (headHeight > 0.0f) {
+            const C3Vector goal(feet.x, feet.y, feet.z + headHeight);
+            const float height = headHeight / kZoomFocus;
+            const float follow = s_haveFace ? std::min(1.0f, elapsed * kZoomSettle) : 1.0f;
+            s_face = C3Vector(goal.x, goal.y, s_face.z + (goal.z - s_face.z) * follow);
+            s_height += (height - s_height) * follow;
+            s_haveFace = true;
         }
     }
     const float worldHeight = s_height;
