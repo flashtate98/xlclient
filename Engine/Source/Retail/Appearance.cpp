@@ -507,6 +507,32 @@ void TextureLayers(uint32_t chrModel, const std::vector<uint32_t>& choices, std:
                 painted.push_back(w.first);
                 paint(w.second);
             }
+        // FlashWOW: an unlocked choice drawn for NPCs (the Grimtotem or Mag'har skins, say) paints only its own
+        // texture, because an NPC always wears something over the rest. The option's first ordinary choice
+        // lends it whatever else it paints and this one does not, so an unlocked skin keeps the underwear.
+        if (Unlockable(x, *choice)) {
+            const Row* ordinary = nullptr;
+            const auto list = x.choicesByOption.find(x.choice->Value(*choice, "ChrCustomizationOptionID"));
+            if (list != x.choicesByOption.end())
+                for (const Row* other : list->second) {
+                    const uint32_t reqId = x.choice->Value(*other, "ChrCustomizationReqID");
+                    const Row* req = reqId && x.requirement ? x.requirement->Find(reqId) : nullptr;
+                    if (other->id != id && (!req || x.requirement->Value(*req, "ReqType") == kReqClass)) { ordinary = other; break; }
+                }
+            const auto lent = ordinary ? x.elementsByChoice.find(ordinary->id) : x.elementsByChoice.end();
+            if (lent != x.elementsByChoice.end())
+                for (const Row* element : lent->second) {
+                    const uint32_t materialId = x.element->Value(*element, "ChrCustomizationMaterialID");
+                    const Row* material = materialId ? x.material->Find(materialId) : nullptr;
+                    if (!material) continue;
+                    const uint32_t needs = x.element->Value(*element, "RelatedChrCustomizationChoiceID");
+                    if (needs && std::find(choices.begin(), choices.end(), needs) == choices.end()) continue;
+                    const uint32_t target = x.material->Value(*material, "ChrModelTextureTargetID");
+                    if (std::find(painted.begin(), painted.end(), target) != painted.end()) continue;
+                    painted.push_back(target);
+                    paint(material);
+                }
+        }
     }
     std::stable_sort(layers.begin(), layers.end(), [](const TextureLayer& a, const TextureLayer& b) { return a.layer < b.layer; });
 }
