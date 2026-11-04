@@ -601,7 +601,20 @@ static int32_t Script_GetAlteredFormNames(lua_State* L) {
     return 2;
 }
 
+// FlashWOW "show clothing" toggle: IsCharacterClothingHidden() -> bool; SetCharacterClothingHidden(bool).
+static int32_t Script_IsCharacterClothingHidden(lua_State* L) {
+    lua_pushboolean(L, CharacterCreationClothingHidden());
+    return 1;
+}
+
+static int32_t Script_SetCharacterClothingHidden(lua_State* L) {
+    CharacterCreationSetClothingHidden(lua_toboolean(L, 1) != 0);
+    return 0;
+}
+
 static FrameScript_Method s_retailScriptFunctions[] = {
+    { "IsCharacterClothingHidden", &Script_IsCharacterClothingHidden },
+    { "SetCharacterClothingHidden", &Script_SetCharacterClothingHidden },
     { "HasAlteredForm", &Script_HasAlteredForm },
     { "IsViewingAlteredForm", &Script_IsViewingAlteredForm },
     { "SetViewingAlteredForm", &Script_SetViewingAlteredForm },

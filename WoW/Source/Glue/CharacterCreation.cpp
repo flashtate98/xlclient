@@ -94,6 +94,7 @@ struct ParkedForm {
 };
 
 bool s_viewingAlteredForm = false;
+bool s_clothingHidden = false;
 std::map<int32_t, ParkedForm[2]> s_parkedForms;     // by the race's own ID, then sex
 
 int32_t SelectedBaseRace() {
@@ -152,6 +153,21 @@ void ShowForm(bool altered) {
 bool CharacterCreationHasAlteredForm() {
     const uint32_t form = AlteredFormRace(SelectedBaseRace());
     return CCharacterCreation::m_existingCharacterIndex < 0 && CCharacterCreation::m_character && form && g_chrRacesDB.GetRecord(form);
+}
+
+bool CharacterCreationClothingHidden() {
+    return s_clothingHidden;
+}
+
+void CharacterCreationSetClothingHidden(bool hidden) {
+    if (hidden == s_clothingHidden) {
+        return;
+    }
+    s_clothingHidden = hidden;
+    if (CCharacterCreation::m_character) {
+        CCharacterCreation::Dress();
+        CGlueLoading::StartLoad(CCharacterCreation::m_character, 1);
+    }
 }
 
 bool CharacterCreationViewingAlteredForm() {
@@ -548,6 +564,19 @@ int32_t CCharacterCreation::GetRandomClassID() {
 // VERIFY: b15e5451 auto
 // OFFSET: 0x004E0FD0
 void CCharacterCreation::Dress() {
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: FlashWOW "show clothing" off; everything comes off, weapons included.
+    if (s_clothingHidden) {
+        for (uint32_t i = 0; i < NUM_ITEM_SLOTS; i++) {
+            CCharacterCreation::m_character->RemoveItem(static_cast<ITEM_SLOT>(i));
+        }
+        CCharacterComponent::RemoveHandItem(CCharacterCreation::m_character->m_data.m_model, INVSLOT_MAINHAND, SHEATHE_NONE, false);
+        CCharacterComponent::RemoveHandItem(CCharacterCreation::m_character->m_data.m_model, INVSLOT_OFFHAND, SHEATHE_NONE, false);
+        CCharacterComponent::RemoveHandItem(CCharacterCreation::m_character->m_data.m_model, INVSLOT_OFFHAND, SHEATHE_NONE, true);
+        CCharacterComponent::RemoveHandItem(CCharacterCreation::m_character->m_data.m_model, INVSLOT_RANGED, SHEATHE_NONE, false);
+        return;
+    }
+#endif
     if (CCharacterCreation::m_existingCharacterIndex >= 0) {
         CharacterSelectionDisplay* display = CCharacterSelection::GetCharacterDisplay(CCharacterCreation::m_existingCharacterIndex);
 
