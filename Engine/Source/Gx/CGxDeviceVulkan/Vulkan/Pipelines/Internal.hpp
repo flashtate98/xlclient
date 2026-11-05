@@ -248,6 +248,7 @@ namespace gxvk::vk::pipelines::detail
         uint32_t              entryCount = 0;
         uint32_t              passGen    = 0;                 ///< the generation the entries were built for
         Bound                 bound;
+        Bound                 boundSecond;                    ///< SXC: a second view's secondary buffer (Vulkan/View.cpp), recorded alongside
 
         LayoutEntry  layouts[kMaxLayouts];
         uint32_t     layoutCount = 0;

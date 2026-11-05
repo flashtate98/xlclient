@@ -53,6 +53,7 @@ layout(set = 2, binding = 1) uniform sampler2D sceneW;
 layout(set = 2, binding = 3) uniform sampler2DArray waveSlopes;
 layout(set = 2, binding = 4) uniform sampler2DArray waveDisp;   // per cascade: dx, dy, height (yd): how the surface moves
 layout(set = 2, binding = 7) uniform sampler2DArray rippleField;  // the ripple field's heights (yd), three layers in turn
+layout(set = 2, binding = 9) uniform sampler2D mirrorImage;       // the world mirrored at scene.mirror.y, as the screen lies (SXC/View)
 #include "WaterMove.glsl"
 
 // The waves at a world point: the slopes summed over the cascades (the finer ones fading with distance),
@@ -226,6 +227,46 @@ vec3 ToScene(vec3 view)
     vec2 ndc = clip.xy / max(clip.w, 1e-4);
     vec2 pixel = scene.viewport.xy + vec2(0.5 + 0.5 * ndc.x, 0.5 - 0.5 * ndc.y) * scene.viewport.zw;
     return vec3(pixel * scene.extent.zw, clip.w);
+}
+
+// The sky's dome in a direction (world, unit) as the client draws it this frame (DNSky): between its rows
+// (scene.domeRows: elevation sines, zenith first) and around them (24 vertices a row, vertex i toward
+// x = sin, y = cos of i / 24 of a turn), as its triangles blend the vertex colours.
+vec3 DomeRow(int row, int i0, int i1, float f)
+{
+    if (row == 0)
+    {
+        return scene.domeColour[0].rgb;
+    }
+
+    if (row == 6)
+    {
+        return scene.domeColour[121].rgb;
+    }
+
+    int base = 1 + (row - 1) * 24;
+    return mix(scene.domeColour[base + i0].rgb, scene.domeColour[base + i1].rgb, f);
+}
+
+vec3 DomeColour(vec3 d)
+{
+    float e = clamp(d.z, -1.0, 1.0);
+    float turn = atan(d.x, d.y) / 6.2831853;
+    float u = (turn < 0.0 ? turn + 1.0 : turn) * 24.0;
+    int i0 = int(floor(u)) % 24;
+    int i1 = (i0 + 1) % 24;
+    float f = fract(u);
+    float rows[7] = float[7](scene.domeRows[0].x, scene.domeRows[0].y, scene.domeRows[0].z, scene.domeRows[0].w,
+                             scene.domeRows[1].x, scene.domeRows[1].y, scene.domeRows[1].z);
+    int r = 0;
+
+    for (int k = 0; k < 5; k++)
+    {
+        r = e < rows[k + 1] ? k + 1 : r;
+    }
+
+    float t = clamp((rows[r] - e) / max(rows[r] - rows[r + 1], 1e-4), 0.0, 1.0);
+    return mix(DomeRow(r, i0, i1, f), DomeRow(r + 1, i0, i1, f), t);
 }
 
 // Screen-space reflection: the reflected ray marched through the scene's depth from the surface point; the
@@ -542,15 +583,40 @@ void main()
     float cosV = clamp(dot(N, V), 0.0, 1.0);
     float fresnel = below ? 1.0 - window : min((vLook[1].x + (1.0 - vLook[1].x) * pow(1.0 - cosV, 5.0)) * vLook[1].y, 1.0);
     vec3 R = reflect(-V, N);
-    vec3 sky = mix(regs.p[8].rgb, regs.p[7].rgb, sqrt(clamp(R.z, 0.0, 1.0)));
+    // Where the screen shows no sky (above it, the zenith above all), the dome as the sky draws it this
+    // frame; without one, a ramp of its zenith and horizon.
+    vec3 sky = scene.domeRows[1].w > 0.5 ? DomeColour(R) : mix(regs.p[8].rgb, regs.p[7].rgb, sqrt(clamp(R.z, 0.0, 1.0)));
     vec3 reflected = scatter;
+
+    // The mirror (SXC/View, kb: second-camera): the world drawn again from the camera mirrored at this
+    // water's height, as the screen lies, so it is read where the pixel is, moved by the waves' tilt as the
+    // scene behind is. Only on water at the mirror's height (other waters take the screen-space reflection).
+    float mirrorShare = 0.0;
+    vec3 mirrorColour = vec3(0.0);
+
+    if (!below && scene.mirror.x > 0.5)
+    {
+        mirrorShare = 1.0 - smoothstep(0.75, 2.0, abs(world.z - scene.mirror.y));
+
+        if (mirrorShare > 0.0)
+        {
+            vec2 at = clamp(here + vec2(tilt.x, -tilt.y) * 0.05, scene.extent.zw, vec2(1.0) - scene.extent.zw);
+            mirrorColour = textureLod(mirrorImage, at, 0.0).rgb;
+        }
+    }
 
     vec4 ssr = vec4(0.0);
 
-    if (!below && regs.p[14].x > 0.5)
+    if (!below && regs.p[14].x > 0.5 && mirrorShare < 1.0)
     {
         ssr = ScreenReflection(vView.xyz, normalize(WorldDirToView(R)), R.z);
         reflected = mix(sky, ssr.rgb, ssr.a);
+    }
+
+    if (mirrorShare > 0.0)
+    {
+        reflected = mix(reflected, mirrorColour, mirrorShare);
+        ssr.a = max(ssr.a, mirrorShare);   // the bodies are in the mirror: no analytic glint over them
     }
     else if (below && regs.p[14].x > 0.5)
     {
@@ -682,11 +748,16 @@ void main()
     vec3 foamColour = clamp(regs.v[34].rgb + regs.v[35].rgb * max(toSun.z, 0.0), 0.0, 1.0) * 0.9 + lamps * 0.3;
     vec3 surface = mix(mix(seen, reflected, fresnel) + highlight, foamColour, foam);
 
-    // The fog on the water's own light; the scene seen through it carries its own fog already.
+    // The fog on the water's own light; the scene seen through it carries its own fog already, and so does
+    // the scene in the mirror (a screen-space hit: fogged for its own way from the camera, which is longer
+    // than the way to the water; fogged again, distant land in the mirror went grey: Seyri, 2026-11-04).
+    // The sky in the mirror is the water's light and takes the fog.
     float open = window * (1.0 - fresnel) * (1.0 - foam);
-    vec3 clear = behind * through * open;
+    float hitShare = (1.0 - mirrorShare) * (ssrOutcome == 3 ? ssr.a : 0.0);
+    float mirrored = below ? 0.0 : (1.0 - foam) * fresnel * (mirrorShare + hitShare);
+    vec3 clear = behind * through * open + (below ? vec3(0.0) : (1.0 - foam) * fresnel * (mirrorColour * mirrorShare + ssr.rgb * hitShare));
     vec3 own = surface - clear;
-    float coverage = 1.0 - max(through.r, max(through.g, through.b)) * open;
+    float coverage = max(1.0 - max(through.r, max(through.g, through.b)) * open - mirrored, 0.0);
     // The liquid's own fog, as the stock vsLiquidWater computes it: c4 = (scale, offset, power) of the view
     // depth (1 no fog .. 0 all fog), the colour in pixel c4 (Liquid::SetShaderConstants). Not the device's
     // linear fog (GxRs_FogStart / End): the liquid pass leaves those as they stood, its end a few yards out,
@@ -766,6 +837,17 @@ void main()
     {
         // The surface movement's easing from the depth byte: black still (the shore), white moving fully.
         fogged = vec3(vEase);
+    }
+    else if (debugView == 15)
+    {
+        // The mirror alone where this water takes it (magenta: another water, or no mirror this frame).
+        fogged = mirrorShare > 0.0 ? mirrorColour : vec3(1.0, 0.0, 1.0);
+    }
+    else if (debugView == 14)
+    {
+        // The sky the water falls back on where the screen shows none: the dome in the mirror direction
+        // (magenta: no dome this frame, the ramp stands in).
+        fogged = scene.domeRows[1].w > 0.5 ? DomeColour(R) : vec3(1.0, 0.0, 1.0);
     }
     else if (debugView == 13)
     {

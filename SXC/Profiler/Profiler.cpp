@@ -40,6 +40,7 @@ namespace {
         { "grass", 0 },
         { "liquids", 0 },
         { "fog (ours)", 0 },
+        { "mirror (ours): its pass", 0 },
         { "weather", 0 },
         { "see-through, particles, spells", 0 },
         { "unit shadows (client)", 0 },

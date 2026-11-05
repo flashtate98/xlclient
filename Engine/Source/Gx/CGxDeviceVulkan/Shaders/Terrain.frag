@@ -31,6 +31,7 @@ layout(constant_id = 0) const bool kBigAlpha = false; // layer 0 takes what the 
 layout(constant_id = 1) const bool kUnlit    = false; // layers may opt out of the diffuse light (p1 per layer)
 layout(constant_id = 2) const bool kNineTaps = false; // shadow mode 3: the first cascade with nine taps, the cascades chained
 layout(constant_id = 3) const bool kUnderlay = false; // the lowered underlay of a raised chunk: not the covers' surface
+layout(constant_id = 4) const bool kSecondView = false; // a second view's copy (the water's mirror): not the screen's grids
 
 layout(location = 0) in vec4 color0;   // diffuse light
 layout(location = 1) in vec4 color1;   // the sun's highlight
@@ -524,7 +525,7 @@ void main()
 
     // SXC: the covers' surface here into the surface grid, and this pixel's depth for the projected
     // textures (step 5e; the underlay lies below the surface).
-    if (!kUnderlay && cover.enable.x > 0.5)
+    if (!kUnderlay && !kSecondView && cover.enable.x > 0.5)
     {
         CoverWriteSurface(coverWorld.xyz, coverTint.w);
         CoverWriteDepth(abs(coverWorld.z - coverTint.w) > 0.005);   // raised, or a print sunk below it

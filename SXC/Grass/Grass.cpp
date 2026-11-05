@@ -1000,14 +1000,14 @@ namespace SXC::Grass {
             }
 
             std::vector<Run>& runs = RunsFor(g.texture).runs;
-            runs.push_back(Run{ m.firstIndex, m.indexCount, m.vertexOffset, c.first + g.offset, g.count, 0 });
+            runs.push_back(Run{ m.firstIndex, m.indexCount, m.vertexOffset, c.first + g.offset, g.count, 0, distance });
             s_stats.plants += g.count;
             s_stats.runs++;
 
             const uint32_t copies = s_playerKnown ? CopiesFor(g, distance) : 0;
 
             for (uint32_t k = 1; k <= copies; k++) {
-                runs.push_back(Run{ m.firstIndex, m.indexCount, m.vertexOffset, c.first + g.offset, g.count, k });
+                runs.push_back(Run{ m.firstIndex, m.indexCount, m.vertexOffset, c.first + g.offset, g.count, k, distance });
             }
 
             s_stats.copies += copies * g.count;

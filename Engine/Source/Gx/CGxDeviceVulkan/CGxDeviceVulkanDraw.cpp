@@ -9,6 +9,7 @@
 #include "Engine/Source/Gx/CGxDeviceVulkan/CGxDeviceVulkan.h"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Frame.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Pipelines.hpp"
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/View.hpp"  // SXC: a second view's copies
 #include "Engine/Source/Gx/CGxBuf.h"
 #include "Engine/Source/Gx/CGxPool.h"
 #include "Engine/Source/Gx/CGxTex.h"
@@ -207,10 +208,19 @@ void CGxDeviceVulkan::Draw(CGxBatch* batch, int32_t count) {
         underlay.terrainVertex = (d.terrainVertex & ~(pipelines::terrain::kVertexTess | pipelines::terrain::kVertexBigAlpha)) | pipelines::terrain::kVertexSunk;
         underlay.terrainUnderlay = false;
         pipelines::Record(cmd, frame::RenderPass(), frame::PassGeneration(), frame::Serial(), frame::Slot(), underlay);
+
+        if (gxvk::vk::view::Recording() && !colourTarget && !this->m_textureTarget[GxBuffers_Depth].m_texture) {
+            gxvk::vk::view::Copy(underlay, reinterpret_cast<const float*>(&this->m_projNative));
+        }
     }
 
     if (!pipelines::Record(cmd, frame::RenderPass(), frame::PassGeneration(), frame::Serial(), frame::Slot(), d)) {
         return;
+    }
+
+    // SXC: a second view (the water's mirror) copies the scene's draws while it records.
+    if (gxvk::vk::view::Recording() && !colourTarget && !this->m_textureTarget[GxBuffers_Depth].m_texture) {
+        gxvk::vk::view::Copy(d, reinterpret_cast<const float*>(&this->m_projNative));
     }
 
     // SXC: the frame profiler's draw count.

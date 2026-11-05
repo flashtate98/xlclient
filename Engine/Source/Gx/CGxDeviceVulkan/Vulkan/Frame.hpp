@@ -164,6 +164,22 @@ namespace gxvk::vk::frame
     /// SXC: why the last BeginEffect refused ("" when it didn't), for the effects' status lines.
     const char* EffectRefusal();
 
+    /**
+     * SXC: a second view (Vulkan/View.cpp): the open frame slot's secondary command buffer, begun to
+     * draw into `target` (a render target of the scene's colour format, with the depth buffer of its
+     * size) while the frame's own pass goes on. Record() into it with RenderPass(): the pass sets of one
+     * colour format share their pipelines. Null when the frame or the target can't be had.
+     */
+    VkCommandBuffer BeginSecondary(const texture::Image& target);
+
+    /**
+     * SXC: ends the secondary buffer and runs it in a pass of its own over `target` (colour cleared to
+     * `clear`, depth cleared), in frame order: after everything recorded so far, before what follows.
+     * The open pass ends; the next Pass() resumes the current target. The target rests in
+     * SHADER_READ_ONLY_OPTIMAL after.
+     */
+    bool RunSecondary(const texture::Image& target, VkCommandBuffer secondary, const float clear[4]);
+
     /// SXC: a framebuffer an effect made for this frame, destroyed once the frame completes.
     void RetireFramebuffer(VkFramebuffer framebuffer, uint64_t lastUsed);
 

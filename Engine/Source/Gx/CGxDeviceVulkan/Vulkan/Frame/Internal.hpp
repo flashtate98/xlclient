@@ -72,6 +72,8 @@ namespace gxvk::vk::frame::detail
     {
         VkCommandBuffer cmd            = nullptr;   ///< the main buffer: the render passes and the draws
         VkCommandBuffer pre            = nullptr;   ///< the pre-pass buffer: uploads ahead of the draws
+        VkCommandBuffer second         = nullptr;   ///< SXC: a second view's draws (secondary; made on first use)
+        bool            secondOpen     = false;     ///< SXC: begun and not yet run (ended with the frame if never run)
         VkSemaphore     imageAvailable = VK_NULL_HANDLE;
         VkFence         fence          = VK_NULL_HANDLE;
         uint64_t        serial         = 0;

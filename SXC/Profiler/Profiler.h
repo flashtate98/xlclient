@@ -32,6 +32,7 @@ namespace SXC::Profiler {
         kGrass,         // detail doodads: the stock bake and our instanced grass
         kLiquids,
         kFog,           // our volumetric fog
+        kMirror,        // our mirror (SXC/View): its pass on the GPU (the copies are recorded with the draws they copy)
         kWeather,
         kTransparent,   // the sorted see-through draw lists, particles, spell visuals
         kUnitShadows,   // the client's own: units drawn into their shadow textures (CShadowQuery)

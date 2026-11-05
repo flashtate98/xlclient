@@ -30,6 +30,11 @@ namespace gxvk::vk::water
         float move      = 1.0f;   ///< x the surface's displacement near the camera (0 flat)
         uint32_t bodies = 0;      ///< the sky's bodies reflected: direction (unit), angular radius (rad), colour
         float body[4][7] = {};
+        bool  dome = false;       ///< the sky's dome as drawn: each row's elevation (sine), the vertices' colours
+        float domeRows[8] = {};
+        float domeColours[122][4] = {};
+        bool  mirror  = false;    ///< the mirror (Vulkan/View.cpp) is drawn at this plane (world z) this frame
+        float mirrorZ = 0.0f;
     };
 
     /// The look grid (SXC/Water/Surface.h): per terrain chunk around the player an index into a palette of

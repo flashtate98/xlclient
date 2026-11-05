@@ -151,7 +151,7 @@ namespace gxvk::vk::pipelines
         s = State();
     }
 
-    void ForgetBound() { s.bound = Bound(); }  // SXC:
+    void ForgetBound() { s.bound = Bound(); s.boundSecond = Bound(); }  // SXC: (either may hold the main buffer's)
 
     bool Record(VkCommandBuffer cmd, VkRenderPass pass, uint32_t passGeneration, uint64_t serial, uint32_t slot, const Draw& draw)
     {
@@ -291,7 +291,9 @@ namespace gxvk::vk::pipelines
         }
 
         const loader::Device& d = *s.dapi;
-        Bound& b = s.bound;
+        // SXC: a second view's draws go to their own buffer between the frame's: each keeps what it bound.
+        Bound& b = s.boundSecond.cmd == cmd && s.boundSecond.serial == serial ? s.boundSecond
+                   : s.bound.cmd == cmd || !s.bound.cmd || s.bound.serial != serial ? s.bound : s.boundSecond;
         if (b.cmd != cmd || b.serial != serial)
         {
             b        = Bound();

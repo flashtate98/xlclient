@@ -8,6 +8,7 @@
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Memory.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Pipelines.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Ripples.hpp"
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/View.hpp"   // SXC: the mirror
 
 #include "Engine/Source/Gx/CGxDeviceVulkan/Shaders/WaterSpirv.inc"
 
@@ -53,6 +54,9 @@ namespace
         float underGlow[4];    ///< the underwater medium's glow (rgb), w 1 while it draws
         float rippleGrid[4];   ///< the ripple field's window: first cell x, y, cells per side, the cell (yd)
         float rippleLook[4];   ///< its current layer, 1 when stepped this frame, the strength, how far it shows (yd)
+        float domeRows[8];     ///< the sky's dome: its seven rows' elevation (sine), [7] 1 when drawn
+        float domeColours[122][4];   ///< its vertices' colours: the zenith, four rings of 24, the fog ring, the nadir
+        float mirror[4];       ///< the mirror (Vulkan/View.cpp): 1 when drawn this frame, the plane's height (world z), 0, 0
     };
 
     // The waves (Shaders/WaterWaves.glsl): N x N per cascade, three cascades.
@@ -96,6 +100,7 @@ namespace
         uint64_t        captured = 0;               ///< the serial whose scene the images hold
         bool            written  = false;           ///< drawSet points at the current images
         VkImageView     rippleView = VK_NULL_HANDLE; ///< the ripple field drawSet points at (rewritten when it appears)
+        VkImageView     mirrorView = VK_NULL_HANDLE; ///< SXC: the mirror drawSet points at (Vulkan/View.cpp; null: the stand-in)
         // The swimmers' query (WaterQuery.comp): asked at this slot's capture, read when it comes round.
         VkDescriptorSet querySet = VK_NULL_HANDLE;
         memory::Buffer  query;                      ///< QueryBuffer (Readback memory)
@@ -339,20 +344,21 @@ namespace
         // (both stages; the fragment stage reads 4 too: which side of the surface a pixel starts on), 7 the
         // ripple field (fragment), 8 the rivers' flow on the shore field's cells. The swimmers' query and the
         // underwater medium (compute) read 2 and 4..6 as the vertex stage does.
-        VkDescriptorSetLayoutBinding draw[9] = {};
-        for (uint32_t i = 0; i < 9; ++i)
+        // SXC: 9 the mirror (Vulkan/View.cpp: the world drawn mirrored at the water, fragment).
+        VkDescriptorSetLayoutBinding draw[10] = {};
+        for (uint32_t i = 0; i < 10; ++i)
         {
             draw[i].binding         = i;
             draw[i].descriptorType  = i == 2 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             draw[i].descriptorCount = 1;
-            draw[i].stageFlags      = i == 7 ? VK_SHADER_STAGE_FRAGMENT_BIT
+            draw[i].stageFlags      = i == 7 || i == 9 ? VK_SHADER_STAGE_FRAGMENT_BIT
                                     : i == 2 || i >= 4 ? VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT
                                     : i == 4 ? VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT
                                              : VK_SHADER_STAGE_FRAGMENT_BIT;
         }
         VkDescriptorSetLayoutCreateInfo drawInfo = {};
         drawInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        drawInfo.bindingCount = 9;
+        drawInfo.bindingCount = 10;
         drawInfo.pBindings    = draw;
         if (!Check(d.CreateDescriptorSetLayout(s.device, &drawInfo, nullptr, &s.drawLayout), "vkCreateDescriptorSetLayout (set 2)")) return false;
 
@@ -378,7 +384,7 @@ namespace
 
         VkDescriptorPoolSize sizes[3] = {};
         sizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[0].descriptorCount = 10 * kSlots;
+        sizes[0].descriptorCount = 11 * kSlots;
         sizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         sizes[1].descriptorCount = 2 * kSlots;
         sizes[2].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -484,7 +490,10 @@ namespace
     {
         // The ripple field when there is one, else a stand-in of the same kind (a 2D array; the draws don't read it).
         const VkImageView rippleView = gxvk::vk::ripples::View();
-        VkDescriptorImageInfo images[9] = {
+        // The mirror once it has been drawn (its contents are this frame's by the time the water reads them),
+        // else the scene copy stands in (the draws don't read it then: scene.mirror.x is 0).
+        const VkImageView mirrorView = gxvk::vk::view::Kept();
+        VkDescriptorImageInfo images[10] = {
             { s.linearClamp, s.colour.view, VK_IMAGE_LAYOUT_GENERAL },
             { s.nearestClamp, s.depth.view, VK_IMAGE_LAYOUT_GENERAL },
             {},
@@ -495,10 +504,12 @@ namespace
             { rippleView != VK_NULL_HANDLE ? gxvk::vk::ripples::Sampler() : s.linearRepeat,
               rippleView != VK_NULL_HANDLE ? rippleView : s.waveImages[6].view, VK_IMAGE_LAYOUT_GENERAL },
             { s.linearRepeat, s.flow.view, VK_IMAGE_LAYOUT_GENERAL },
+            mirrorView != VK_NULL_HANDLE ? VkDescriptorImageInfo{ s.linearClamp, mirrorView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL }
+                                         : VkDescriptorImageInfo{ s.linearClamp, s.colour.view, VK_IMAGE_LAYOUT_GENERAL },
         };
         VkDescriptorBufferInfo params = { slot.params.handle, 0, sizeof(Params) };
-        VkWriteDescriptorSet writes[9] = {};
-        for (uint32_t i = 0; i < 9; ++i)
+        VkWriteDescriptorSet writes[10] = {};
+        for (uint32_t i = 0; i < 10; ++i)
         {
             writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[i].dstSet          = slot.drawSet;
@@ -508,9 +519,10 @@ namespace
             if (i == 2) writes[i].pBufferInfo = &params;
             else writes[i].pImageInfo = &images[i];
         }
-        s.dapi->UpdateDescriptorSets(s.device, 9, writes, 0, nullptr);
+        s.dapi->UpdateDescriptorSets(s.device, 10, writes, 0, nullptr);
         slot.written    = true;
         slot.rippleView = rippleView;
+        slot.mirrorView = mirrorView;
     }
 
     /// The shore field into its image when the CPU's version moved (in the pre-pass, ahead of the draws);
@@ -951,6 +963,19 @@ namespace
         p.shoreLook[2] = in.shore.wavelength;
         p.shoreLook[3] = in.shore.reach;
         std::memcpy(p.underGlow, in.shore.underGlow, sizeof p.underGlow);
+        if (in.waves.dome)
+        {
+            std::memcpy(p.domeRows, in.waves.domeRows, sizeof p.domeRows);
+            std::memcpy(p.domeColours, in.waves.domeColours, sizeof p.domeColours);
+            p.domeRows[7] = 1.0f;
+        }
+        // The mirror, when this frame drew it into the image the set names.
+        const VkImageView mirror = gxvk::vk::view::Image(frame::Serial());
+        if (in.waves.mirror && mirror != VK_NULL_HANDLE && mirror == s.slots[frame::Slot()].mirrorView)
+        {
+            p.mirror[0] = 1.0f;
+            p.mirror[1] = in.waves.mirrorZ;
+        }
         gxvk::vk::ripples::Look(p.rippleGrid, p.rippleLook);
         p.rippleLook[2] = in.rippleStrength;
         p.rippleLook[3] = in.rippleDistance;
@@ -995,8 +1020,9 @@ namespace
         Share(in, p, serial);
         Slot& slot = s.slots[frame::Slot()];
 
-        // The ripple field appeared since the set was written: written again (its frame is done).
-        if (slot.written && slot.rippleView != gxvk::vk::ripples::View())
+        // The ripple field appeared since the set was written, or the mirror (made, or made again at another
+        // size): written again (its frame is done; nothing this frame has bound it yet).
+        if (slot.written && (slot.rippleView != gxvk::vk::ripples::View() || slot.mirrorView != gxvk::vk::view::Kept()))
         {
             WriteDrawSet(slot);
         }

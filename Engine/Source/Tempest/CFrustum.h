@@ -53,6 +53,13 @@ class CFrustum {
     /* 00E8 */ float aspect;
     /* 00EC */ float minz;
     /* 00F0 */ float maxz;
+    // SXC: a second volume the tests also accept (the water's mirror, SXC/View: the view frustum reflected at
+    // the water), carried along by the copies and the transforms; off by default.
+    C3Vector orCorners[NUM_CORNERS];
+    C4Plane orPlanes[NUM_PLANES];
+    bool hasOr = false;
+    void SetOr(const C3Vector* corners);   // its planes from its corners, facing inward whatever their winding
+    void ClearOr();
 
     CFrustum();
     CFrustum(const C3Vector* corners);

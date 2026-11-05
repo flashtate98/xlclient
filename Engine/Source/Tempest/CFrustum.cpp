@@ -4,6 +4,82 @@
 #include "Engine/Source/Tempest/CAaSphere.h"
 #include "Engine/Source/Tempest/CFrustum.h"
 
+// SXC: a frustum's six planes from its corners (as CalcPlanesFromCorners), facing inward.
+namespace {
+    void PlanesFrom(const C3Vector* corners, C4Plane* planes) {
+        planes[P_TOP].From3Pos(corners[NEAR_UL], corners[FAR_UL], corners[FAR_UR]);
+        planes[P_BOTTOM].From3Pos(corners[NEAR_LL], corners[FAR_LR], corners[FAR_LL]);
+        planes[P_LEFT].From3Pos(corners[NEAR_LL], corners[FAR_LL], corners[FAR_UL]);
+        planes[P_RIGHT].From3Pos(corners[NEAR_LR], corners[FAR_UR], corners[FAR_LR]);
+        planes[P_FAR].From3Pos(corners[FAR_UL], corners[FAR_LL], corners[FAR_UR]);
+        planes[P_NEAR].n.x = -planes[P_FAR].n.x;
+        planes[P_NEAR].n.y = -planes[P_FAR].n.y;
+        planes[P_NEAR].n.z = -planes[P_FAR].n.z;
+        planes[P_NEAR].d = -(planes[P_NEAR].n.z * corners[NEAR_UR].z + planes[P_NEAR].n.y * corners[NEAR_UR].y + planes[P_NEAR].n.x * corners[NEAR_UR].x);
+
+        // A mirrored set of corners winds the other way: every plane faces out. Turned round if the middle
+        // of the corners lies outside.
+        C3Vector middle(0.0f, 0.0f, 0.0f);
+
+        for (uint32_t i = 0; i < NUM_CORNERS; i++) {
+            middle.x += corners[i].x / NUM_CORNERS;
+            middle.y += corners[i].y / NUM_CORNERS;
+            middle.z += corners[i].z / NUM_CORNERS;
+        }
+
+        if (planes[P_TOP].n.x * middle.x + planes[P_TOP].n.y * middle.y + planes[P_TOP].n.z * middle.z + planes[P_TOP].d < 0.0f) {
+            for (uint32_t i = 0; i < NUM_PLANES; i++) {
+                planes[i].n.x = -planes[i].n.x;
+                planes[i].n.y = -planes[i].n.y;
+                planes[i].n.z = -planes[i].n.z;
+                planes[i].d = -planes[i].d;
+            }
+        }
+    }
+
+    bool BoxOutside(const C4Plane* planes, const CAaBox& box) {
+        const C3Vector* extremes[2] = { &box.t, &box.b };
+
+        for (uint32_t i = 0; i < NUM_PLANES; i++) {
+            const C4Plane& plane = planes[i];
+            const C3Vector* x = extremes[*reinterpret_cast<const uint32_t*>(&plane.n.x) >> 31];
+            const C3Vector* y = extremes[*reinterpret_cast<const uint32_t*>(&plane.n.y) >> 31];
+            const C3Vector* z = extremes[*reinterpret_cast<const uint32_t*>(&plane.n.z) >> 31];
+
+            if (z->z * plane.n.z + y->y * plane.n.y + x->x * plane.n.x + plane.d < -0.019444443f) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    bool SphereOutside(const C4Plane* planes, const CAaSphere& sphere) {
+        for (uint32_t i = 0; i < NUM_PLANES; i++) {
+            const C4Plane& plane = planes[i];
+
+            if (plane.n.x * sphere.c.x + plane.n.z * sphere.c.z + plane.n.y * sphere.c.y + plane.d < -sphere.r) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+}
+
+void CFrustum::SetOr(const C3Vector* corners) {
+    for (uint32_t i = 0; i < NUM_CORNERS; i++) {
+        this->orCorners[i] = corners[i];
+    }
+
+    PlanesFrom(this->orCorners, this->orPlanes);
+    this->hasOr = true;
+}
+
+void CFrustum::ClearOr() {
+    this->hasOr = false;
+}
+
 // VERIFY: e0dd73d2 auto
 // OFFSET: 0x00983990
 void CFrustum::Extents(CAaBox& box) {
@@ -22,7 +98,7 @@ WorldCullStatus CFrustum::Cull(const CAaBox& box) {
         const C3Vector* z = extremes[*reinterpret_cast<const uint32_t*>(&plane.n.z) >> 31];
 
         if (z->z * plane.n.z + y->y * plane.n.y + x->x * plane.n.x + plane.d < -0.019444443f) {
-            return WorldCull_outside;
+            return this->hasOr && !BoxOutside(this->orPlanes, box) ? WorldCull_notOutside : WorldCull_outside;  // SXC: or the second volume
         }
     }
 
@@ -61,6 +137,14 @@ void CFrustum::Translate(const C3Vector& v) {
 
     this->lookPos += v;
     this->lookAt += v;
+
+    if (this->hasOr) {  // SXC: the second volume with it
+        for (uint32_t i = 0; i < NUM_CORNERS; i++) {
+            this->orCorners[i] += v;
+        }
+
+        PlanesFrom(this->orCorners, this->orPlanes);
+    }
 }
 
 // VERIFY: b3982b68 manual
@@ -72,7 +156,7 @@ WorldCullStatus CFrustum::Cull(const CAaSphere& sphere) {
         const C4Plane& plane = this->planes[i];
 
         if (plane.n.x * sphere.c.x + plane.n.z * sphere.c.z + plane.n.y * sphere.c.y + plane.d < limit) {
-            return WorldCull_outside;
+            return this->hasOr && !SphereOutside(this->orPlanes, sphere) ? WorldCull_notOutside : WorldCull_outside;  // SXC: or the second volume
         }
     }
 
@@ -119,6 +203,14 @@ void CFrustum::Transform(const C44Matrix& m) {
 
     this->lookPos *= m;
     this->lookAt *= m;
+
+    if (this->hasOr) {  // SXC: the second volume with it
+        for (uint32_t i = 0; i < NUM_CORNERS; i++) {
+            this->orCorners[i] *= m;
+        }
+
+        PlanesFrom(this->orCorners, this->orPlanes);
+    }
 }
 
 // VERIFY: 75e79820 auto
@@ -203,6 +295,18 @@ CFrustum& CFrustum::operator=(const CFrustum& source) {
         this->aspect = source.aspect;
         this->minz = source.minz;
         this->maxz = source.maxz;
+
+        this->hasOr = source.hasOr;  // SXC: the second volume
+
+        if (source.hasOr) {
+            for (uint32_t i = 0; i < NUM_CORNERS; i++) {
+                this->orCorners[i] = source.orCorners[i];
+            }
+
+            for (uint32_t i = 0; i < NUM_PLANES; i++) {
+                this->orPlanes[i] = source.orPlanes[i];
+            }
+        }
     }
 
     return *this;

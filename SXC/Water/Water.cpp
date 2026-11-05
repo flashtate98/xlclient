@@ -30,6 +30,7 @@
 #include "SXC/Log.h"
 #include "SXC/Settings/Settings.h"
 #include "SXC/ThirdParty/imgui/imgui.h"
+#include "SXC/View/View.h"
 #include "SXC/World/World.h"
 #include "WoW/Source/DB/DBClient/DBClient.h"
 #include "WoW/Source/UIUtil/Camera.h"
@@ -275,6 +276,34 @@ namespace {
         row[1] = c.g / 255.0f;
         row[2] = c.b / 255.0f;
         row[3] = 1.0f;
+    }
+
+    // The sky's dome as DNSky::Render draws it this frame (DNSky::GenSphere's sphere: the zenith, rows of 24
+    // vertices, the nadir; SetColors' colours, recomputed with the day, the sun's side and lightning), for
+    // the reflections wherever the screen shows no sky (above the screen: the zenith). The rows' elevations
+    // are read from the vertices: the sphere is shifted down, so they aren't the table's angles.
+    void DomeOf(SXC::Water::Waves& waves) {
+        const DayNight::DNSky& dome = DayNight::g_sky;
+        const DayNight::DNInfo* info = DayNight::GetInfo();
+        constexpr uint32_t kRing = 24, kVerts = 2 + 5 * kRing;
+        waves.dome = false;
+
+        if (!info || !info->m_showSky || dome.m_sphThetaTess != kRing || dome.m_nVerts != kVerts || !dome.m_geoVerts.m_data || !dome.m_clrVerts.m_data) {
+            return;
+        }
+
+        for (uint32_t row = 0; row < 7; row++) {
+            const uint32_t v = row == 0 ? 0 : (row == 6 ? kVerts - 1 : 1 + (row - 1) * kRing);
+            const C3Vector& p = dome.m_geoVerts.m_data[v];
+            const float length = std::sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
+            waves.domeRows[row] = length > 1e-4f ? p.z / length : (row == 0 ? 1.0f : -1.0f);
+        }
+
+        for (uint32_t v = 0; v < kVerts; v++) {
+            SkyRow(waves.domeColours[v], dome.m_clrVerts.m_data[v]);
+        }
+
+        waves.dome = true;
     }
 }
 
@@ -615,6 +644,9 @@ namespace SXC::Water {
             waves.body[b][6] = seen[b].colour[2];
         }
 
+        DomeOf(waves);
+        waves.mirror = SXC::View::Mirror(waves.mirrorZ);   // the world mirrored at the water (drawn once the world's opaque part is)
+
         // The looks of terrain water by place (none while the panel tests its values over every water).
         const SXC::Water::LookGrid& grid = SXC::Water::SurfaceGrid();
 
@@ -860,7 +892,9 @@ namespace SXC::Water {
                                               "Folding / foam", "Reflection alone", "Scene behind", "Screen mapping check (black: right)",
                                               "Reflection search outcome (blue: sky on screen)", "Depth conversion self-test (black: right)", "Movement easing (white: moves)",
                                               "Shore field (blue water, red land, green depth)", "Shore waves (red crests, white foam)",
-                                              "River flow (colour: speed, blue to red; dots drift with it)" };
+                                              "River flow (colour: speed, blue to red; dots drift with it)",
+                                              "Sky fallback (the dome mirrored; magenta: none)",
+                                              "Mirror alone (magenta: not this water)" };
         ImGui::Combo("Debug view", &s_panel.debugView, kViews, IM_ARRAYSIZE(kViews));
         ImGui::Checkbox("Model cells", &s_panel.modelCells);
         ImGui::SetItemTooltip("Markers on the water under models (WMOs, doodads): why the shore field takes a cell as a model standing in the water "
@@ -869,6 +903,8 @@ namespace SXC::Water {
         if (s_panel.modelCells) {
             DrawModelCells();
         }
+
+        SXC::View::DrawPanel();
         ImGui::Checkbox("Screen-space reflections", &s_panel.screenReflections);
         ImGui::Checkbox("Override the wind", &s_panel.windOverride);
 

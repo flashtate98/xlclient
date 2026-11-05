@@ -126,6 +126,7 @@ namespace gxvk::vk::loader
         PFN_vkEndCommandBuffer       EndCommandBuffer       = nullptr;
         PFN_vkCmdBeginRenderPass     CmdBeginRenderPass     = nullptr;
         PFN_vkCmdEndRenderPass       CmdEndRenderPass       = nullptr;
+        PFN_vkCmdExecuteCommands     CmdExecuteCommands     = nullptr;   ///< SXC: a second view's draws (Vulkan/View.cpp)
 
         // --- Frame/: synchronisation ------------------------------------------------------------
         //

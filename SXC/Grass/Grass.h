@@ -30,6 +30,7 @@ namespace SXC::Grass {
         uint32_t firstInstance;
         uint32_t instanceCount;
         uint32_t copy;
+        float distance;   // yd from the player to the run's chunk (the mirror takes the near ones: SXC/View)
     };
 
     // What the device offers (null: no instanced grass on this renderer).

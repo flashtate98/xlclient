@@ -33,6 +33,7 @@
 #include "Engine/Source/Gxu/Gxu.h"
 #include "WoW/Source/Ui/WorldFrame.h"
 #include "SXC/Sky/Sky.h"  // SXC:
+#include "SXC/View/View.h"  // SXC: the mirror takes the sky as directions
 #include "SXC/Water/Medium.h"  // SXC: the underwater medium
 #include "Engine/Source/ShaderEffect/Types.h"
 
@@ -1831,6 +1832,7 @@ void DayNight::RenderSky(CPortalView* view) {
     GxXformSetViewport(minX, maxX, minY, maxY, s_skyMinZ, s_skyMaxZ);
     GxRsSet(GxRs_ScissorTest, 1);
     g_theGxDevicePtr->SetScissor(rect);
+    SXC::View::Sky(true);  // SXC: the mirror takes the sky as directions
 
     bool drawObjects = true;
 
@@ -1879,6 +1881,7 @@ void DayNight::RenderSky(CPortalView* view) {
         }
     }
 
+    SXC::View::Sky(false);  // SXC:
     GxRsSet(GxRs_ScissorTest, 0);
     GxXformSetViewport(minX, maxX, minY, maxY, minZ, maxZ);
 }

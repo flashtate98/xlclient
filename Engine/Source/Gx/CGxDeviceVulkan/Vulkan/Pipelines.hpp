@@ -92,8 +92,10 @@ namespace gxvk::vk::pipelines
         constexpr uint32_t kVertexShadow = 1u << 2, kVertexEnv = 1u << 3, kVertexColor = 1u << 4, kVertexSpecular = 1u << 5, kVertexPointLights = 1u << 6;
         constexpr uint32_t kVertexTess = 1u << 7, kVertexSunk = 1u << 8, kVertexBigAlpha = 1u << 9;
         // Fragment: bits 0-1 layers - 1, 2-3 shadow group (0 none, 1 one cascade, 2 all), 4 big alpha,
-        // 5 unlit layers, 6 nine taps (shadow mode 3), 7 layer 0 a cube map (a reflective layer).
+        // 5 unlit layers, 6 nine taps (shadow mode 3), 7 layer 0 a cube map (a reflective layer), 8 a second
+        // view's copy (Vulkan/View.cpp: writes nothing into the covers' grids).
         constexpr uint32_t kFragmentBigAlpha = 1u << 4, kFragmentUnlit = 1u << 5, kFragmentNineTaps = 1u << 6, kFragmentCube = 1u << 7;
+        constexpr uint32_t kFragmentSecondView = 1u << 8;
         inline uint32_t Layers(uint32_t options) { return (options & 3u) + 1u; }
         inline uint32_t ShadowGroup(uint32_t fragment) { return (fragment >> 2) & 3u; }
         /// The first slot of the layers' height textures (`_h`, one per layer; white where a layer has none).
@@ -144,6 +146,7 @@ namespace gxvk::vk::pipelines
         uint32_t firstInstance = 0;
         uint32_t instanceCount = 0;
         uint32_t copy          = 0;
+        float    distance      = 0.0f;   ///< SXC: yd from the player to the run's chunk (a second view takes the near ones)
     };
 
     /// One draw, as the device reads it off the engine.

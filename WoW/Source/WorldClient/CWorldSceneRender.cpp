@@ -29,6 +29,7 @@
 #include "Engine/Source/ShaderEffect/ShadowCache.h"
 #include "Engine/Source/Tempest/C44Matrix.h"
 #include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler
+#include "SXC/View/View.h"  // SXC: a second view of the world
 #include "WarcraftXL/Profile.h"
 
 // VERIFY: 78b69e1a manual
@@ -179,6 +180,7 @@ void CWorldScene::Render(const C3Vector& cameraPos, float time) {
     }
 
     GxSceneClear(GxBufferBit_Color | GxBufferBit_Depth, clearColor);
+    SXC::View::WorldBegin();  // SXC: a second view (the water's mirror) copies the world's draws from here
     { prof::Scope p(prof::kSceneObjects); CWorldScene::s_unk_B2EB68.Render(); }
 
     if (CWorldScene::camTargetEntity) {

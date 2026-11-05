@@ -200,6 +200,11 @@ namespace gxvk::vk::frame::detail
         EndPass();
         StagingFrameEnd(slot);
         timings::FrameClosing();   // SXC: the profiler's GPU times
+        if (slot.secondOpen)   // SXC: a second view begun and never run (Vulkan/View.cpp)
+        {
+            d.EndCommandBuffer(slot.second);
+            slot.secondOpen = false;
+        }
 
         VkResult r = d.EndCommandBuffer(slot.pre);
         if (r == VK_SUCCESS) r = d.EndCommandBuffer(slot.cmd);
@@ -396,6 +401,92 @@ namespace gxvk::vk::frame
         out.depthView    = depth.sampleView;
         out.depthAspects = VK_IMAGE_ASPECT_DEPTH_BIT | (s.depthFormat == VK_FORMAT_D24_UNORM_S8_UINT ? VK_IMAGE_ASPECT_STENCIL_BIT : 0u);
         out.serial       = s.serial;
+        return true;
+    }
+
+    VkCommandBuffer BeginSecondary(const texture::Image& target)
+    {
+        if (!EnsureFrame()) return nullptr;
+        const detail::Target t{ &target, 0 };
+        const texture::Image* image  = nullptr;
+        VkFormat              format = VK_FORMAT_UNDEFINED;
+        VkExtent2D            extent = { 0, 0 };
+        if (!TargetView(t, image, format, extent)) return nullptr;
+        const uint32_t fbi = FramebufferFor(t, format, extent);
+        const PassSet* passes = PassesFor(format);
+        if (fbi == UINT32_MAX || !passes) return nullptr;
+
+        FrameSlot& slot = s.slots[s.fi];
+        if (!slot.second)
+        {
+            VkCommandBufferAllocateInfo alloc = {};
+            alloc.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            alloc.commandPool        = s.pool;
+            alloc.level              = VK_COMMAND_BUFFER_LEVEL_SECONDARY;
+            alloc.commandBufferCount = 1;
+            if (s.dapi->AllocateCommandBuffers(s.device, &alloc, &slot.second) != VK_SUCCESS)
+            {
+                slot.second = nullptr;
+                return nullptr;
+            }
+        }
+
+        VkCommandBufferInheritanceInfo inherit = {};
+        inherit.sType       = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO;
+        inherit.renderPass  = passes->pass[0];
+        inherit.subpass     = 0;
+        inherit.framebuffer = s.fbs[fbi].fb;
+        VkCommandBufferBeginInfo begin = {};
+        begin.sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        begin.flags            = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT | VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT;
+        begin.pInheritanceInfo = &inherit;
+        if (slot.secondOpen) s.dapi->EndCommandBuffer(slot.second);   // never run: ended before it is begun again
+        if (s.dapi->BeginCommandBuffer(slot.second, &begin) != VK_SUCCESS) return nullptr;
+        slot.secondOpen = true;
+        s.fbs[fbi].lastUsed = s.serial;
+        return slot.second;
+    }
+
+    bool RunSecondary(const texture::Image& target, VkCommandBuffer secondary, const float clear[4])
+    {
+        FrameSlot& slot = s.slots[s.fi];
+        if (!s.open || !secondary || secondary != slot.second || !slot.secondOpen) return false;
+        slot.secondOpen = false;
+        if (s.dapi->EndCommandBuffer(secondary) != VK_SUCCESS) return false;
+        const detail::Target t{ &target, 0 };
+        const texture::Image* image  = nullptr;
+        VkFormat              format = VK_FORMAT_UNDEFINED;
+        VkExtent2D            extent = { 0, 0 };
+        if (!TargetView(t, image, format, extent)) return false;
+        const uint32_t fbi = FramebufferFor(t, format, extent);
+        const PassSet* passes = PassesFor(format);
+        if (fbi == UINT32_MAX || !passes) return false;
+
+        // A clear asked for the current target before its pass opened lands first, as SetTarget does.
+        if (s.clearColourPending || s.clearDepthPending) BeginPass();
+        EndPass();
+        Framebuffer& fb    = s.fbs[fbi];
+        DepthBuffer& depth = s.depths[fb.depth];
+        VkClearValue clears[2] = {};
+        for (uint32_t i = 0; i < 4; ++i) clears[0].color.float32[i] = clear[i];
+        clears[1].depthStencil.depth = 1.0f;
+        VkRenderPassBeginInfo begin = {};
+        begin.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        begin.renderPass        = passes->pass[3];
+        begin.framebuffer       = fb.fb;
+        begin.renderArea.extent = extent;
+        begin.clearValueCount   = 2;
+        begin.pClearValues      = clears;
+        const VkCommandBuffer cmd = s.slots[s.fi].cmd;
+        s.dapi->CmdBeginRenderPass(cmd, &begin, VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS);
+        s.dapi->CmdExecuteCommands(cmd, 1, &secondary);
+        s.dapi->CmdEndRenderPass(cmd);
+        const_cast<texture::Image*>(image)->layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        depth.initialised = true;
+        depth.lastUsed    = s.serial;
+        fb.lastUsed       = s.serial;
+        ++s.stats.targetPasses;
+        ++s.stats.passes;
         return true;
     }
 

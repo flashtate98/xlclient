@@ -31,6 +31,16 @@ namespace SXC::Water {
         // toward it, its angular radius (rad), its colour.
         uint32_t bodies = 0;
         float body[4][7] = {};
+        // The sky's dome as the client draws it this frame (DayNight's DNSky: the zenith, four rings of 24, the
+        // fog ring at the horizon, the nadir), reflected wherever the screen shows no sky: each row's
+        // elevation (its sine) and the vertices' colours (0..1). `dome` false when no sky is drawn.
+        bool dome = false;
+        float domeRows[8] = {};
+        float domeColours[122][4] = {};
+        // The mirror (SXC/View: the world drawn mirrored at the water's height, kb: second-camera): drawn
+        // this frame at `mirrorZ` (world z); the water reads it where it lies at that height.
+        bool mirror = false;
+        float mirrorZ = 0.0f;
         // The look grid (SXC/Water/Surface.h's LookGrid): 64 x 64 chunk indices into up to 64 packed looks of
         // 20 floats; null when there is none (the draws then take their own look).
         const uint8_t* lookIndex = nullptr;

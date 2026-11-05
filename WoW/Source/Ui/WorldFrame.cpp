@@ -2,6 +2,7 @@
 #include "SXC/Fog/Fog.h"  // SXC:
 #include "SXC/Water/Medium.h"  // SXC: the underwater medium
 #include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler
+#include "SXC/View/View.h"  // SXC: a second view of the world (the water's mirror)
 #include "Engine/Source/Base/ConvertUTF.h"
 #include <cstring>
 #include <typeinfo>
@@ -1777,6 +1778,7 @@ void CGWorldFrame::OnWorldRender() {
     prof::Leave(prof::kGrass);
 
     if (World::SceneCamLiquidStatus(nullptr)) {
+        SXC::View::WorldEnd();  // SXC: the world's opaque part is drawn (no mirror under water: a no-op)
         { prof::Scope p(prof::kWeather); CWorldScene::RenderBarriers(this->m_elapsedSec); }
         { prof::Scope p(prof::kModels); scene->Draw(M2PASS_1); }
         { prof::Scope p(prof::kWeather); CWorldScene::RenderWeather(); }
@@ -1785,6 +1787,7 @@ void CGWorldFrame::OnWorldRender() {
         { prof::Scope p(prof::kLiquids); SXC::Water::MediumComposite(); }  // SXC: the underwater medium, over the world and the surface
     } else {
         { prof::Scope p(prof::kModels); scene->Draw(M2PASS_2); }
+        { prof::Scope p(prof::kMirror); SXC::View::WorldEnd(); }  // SXC: the world's opaque part is drawn: the mirror's copies run
         { prof::Scope p(prof::kLiquids); CWorldScene::RenderLiquidPass(); }
         { prof::Scope p(prof::kLiquids); SXC::Water::MediumComposite(); }  // SXC: the waterline: a crest over the lens, the wet lens
         { prof::Scope p(prof::kFog); SXC::Fog::Composite(); }  // SXC: volumetric fog, over the opaque world and the water

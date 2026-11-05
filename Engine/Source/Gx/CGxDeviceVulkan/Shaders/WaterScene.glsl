@@ -22,4 +22,10 @@ layout(std140, set = 2, binding = 2) uniform WaterScene {
     vec4 underGlow;   // the underwater medium's glow (rgb; SXC/Water/Medium.h), w 1 while it draws
     vec4 rippleGrid;  // the ripple field (Vulkan/Ripples.cpp): its window's first cell x, y, cells per side, the cell (yd)
     vec4 rippleLook;  // its current layer, 1 when stepped this frame, the strength, how far it shows (yd)
+    // The sky's dome as the client draws it this frame (DayNight's DNSky): the seven rows' elevations (their
+    // sines, zenith first; domeRows[1].w 1 when drawn), and the vertices' colours: the zenith, four rings of
+    // 24, the fog ring at the horizon, the nadir.
+    vec4 domeRows[2];
+    vec4 domeColour[122];
+    vec4 mirror;      // the world drawn mirrored at the water (SXC/View; binding 9): x 1 when drawn this frame, y its plane (world z)
 } scene;

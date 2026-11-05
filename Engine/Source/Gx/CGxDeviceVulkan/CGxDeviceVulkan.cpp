@@ -35,6 +35,8 @@
 #include "SXC/Log.h"
 #include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler
 #include "SXC/Water/Water.h"  // SXC: our water
+#include "SXC/View/View.h"  // SXC: a second view (the water's mirror)
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/View.hpp"
 
 namespace context   = gxvk::vk::context;
 namespace frame     = gxvk::vk::frame;
@@ -270,6 +272,31 @@ void CGxDeviceVulkan::ICreateDrawPath() {
         SXC::Water::SetDevice(gxvk::vk::lights::Ready(), &CGxDeviceVulkan::SxcWaterCapture,  // SXC: our water reads the lights' set
                               &gxvk::vk::water::Status);
         SXC::Water::SetMediumRenderer(&CGxDeviceVulkan::SxcMediumRender, &gxvk::vk::medium::Status);  // SXC: the underwater medium
+        // SXC: a second view of the world (the water's mirror): the scene's draws copied through its projection.
+        static const SXC::View::Device s_view = {
+            [](const float mirror[16], const float plane[4], const float sky[16], const float proj[16], uint32_t divisor, bool grass, float grassReach) {
+                gxvk::vk::view::BeginInput in;
+                memcpy(in.mirror, mirror, sizeof(in.mirror));
+                memcpy(in.plane, plane, sizeof(in.plane));
+                memcpy(in.sky, sky, sizeof(in.sky));
+                memcpy(in.proj, proj, sizeof(in.proj));
+                in.divisor = divisor;
+                in.grass = grass;
+                in.grassReach = grassReach;
+                return gxvk::vk::view::Begin(in);
+            },
+            [] { gxvk::vk::view::End(); },
+            [](uint32_t& copied, uint32_t& left, uint32_t& noProjection, uint32_t& width, uint32_t& height) {
+                const gxvk::vk::view::Stats st = gxvk::vk::view::GetStats();
+                copied = st.copied;
+                left = st.left;
+                noProjection = st.noProjection;
+                width = st.width;
+                height = st.height;
+            },
+            [](bool on) { gxvk::vk::view::Sky(on); },
+        };
+        SXC::View::SetDevice(&s_view);
         // SXC: the instanced grass.
         static const SXC::Grass::Device s_grass = { gxvk::vk::grass::Mesh, gxvk::vk::grass::Allocate, gxvk::vk::grass::Write, gxvk::vk::grass::Release,
                                                     &CGxDeviceVulkan::SxcGrassDraw, gxvk::vk::grass::PlantsInUse };
@@ -360,6 +387,11 @@ bool CGxDeviceVulkan::SxcGrassDraw(CGxTex* texture, const SXC::Grass::Run* runs,
     if (!cmd || !gxvk::vk::pipelines::Record(cmd, gxvk::vk::frame::RenderPass(), gxvk::vk::frame::PassGeneration(), gxvk::vk::frame::Serial(),
                                              gxvk::vk::frame::Slot(), d)) {
         return false;
+    }
+
+    // A second view (the water's mirror) takes the grass too.
+    if (gxvk::vk::view::Recording() && !device->m_textureTarget[GxBuffers_Color].m_texture && !device->m_textureTarget[GxBuffers_Depth].m_texture) {
+        gxvk::vk::view::Copy(d, reinterpret_cast<const float*>(&device->m_projNative));
     }
 
     // The frame profiler's draw count: a draw per run.
@@ -676,6 +708,11 @@ bool CGxDeviceVulkan::SxcWaterCapture(const SXC::Water::Waves& waves, bool* firs
     in.waves.move = waves.move;
     in.waves.bodies = waves.bodies < 4 ? waves.bodies : 4;
     std::memcpy(in.waves.body, waves.body, sizeof in.waves.body);
+    in.waves.dome = waves.dome;
+    std::memcpy(in.waves.domeRows, waves.domeRows, sizeof in.waves.domeRows);
+    std::memcpy(in.waves.domeColours, waves.domeColours, sizeof in.waves.domeColours);
+    in.waves.mirror = waves.mirror;
+    in.waves.mirrorZ = waves.mirrorZ;
     in.looks.index = waves.lookIndex;
     in.looks.palette = waves.lookPalette;
     in.looks.count = waves.lookCount;
@@ -764,7 +801,8 @@ void CGxDeviceVulkan::IDestroyVulkan() {
     SXC::Grass::SetDevice(nullptr);           // SXC: the instanced grass (its buffers go below)
     SXC::Water::SetDevice(false, nullptr, nullptr); // SXC: our water (the stock materials draw until the path is back)
     SXC::Water::SetMediumRenderer(nullptr, nullptr);  // SXC: the underwater medium
-    SXC::Profiler::SetGpu(nullptr);           // SXC: the frame profiler's GPU times (the pools go below)
+    SXC::View::SetDevice(nullptr);            // SXC: second views (the mirror's target goes below)
+    SXC::Profiler::SetGpu(nullptr);          // SXC: the frame profiler's GPU times (the pools go below)
     frame::ReleaseSwapchain();
     this->IReleasePools();
     this->IReleaseTextures();
@@ -773,6 +811,7 @@ void CGxDeviceVulkan::IDestroyVulkan() {
     gxvk::vk::water::Shutdown();  // SXC:
     gxvk::vk::medium::Shutdown();  // SXC:
     gxvk::vk::ripples::Shutdown();  // SXC:
+    gxvk::vk::view::Shutdown();  // SXC:
     frame::Destroy();
     pipelines::Shutdown();
     present::Shutdown();

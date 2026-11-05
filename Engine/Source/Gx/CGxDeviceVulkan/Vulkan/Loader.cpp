@@ -246,6 +246,7 @@ namespace gxvk::vk::loader
         GXVK_DEVICE_PROC(EndCommandBuffer);
         GXVK_DEVICE_PROC(CmdBeginRenderPass);
         GXVK_DEVICE_PROC(CmdEndRenderPass);
+        GXVK_DEVICE_PROC(CmdExecuteCommands);   // SXC:
 
         // CreateSemaphore is the one field whose name collides with a windows.h macro; Loader.hpp
         // undefines it, which is why the line below reads normally and the string the macro builds

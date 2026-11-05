@@ -104,6 +104,7 @@
 #include "SXC/Grass/Grass.h"  // SXC: the instanced grass
 #include "SXC/Water/Medium.h"  // SXC: the underwater medium
 #include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler
+#include "SXC/View/View.h"  // SXC: the mirror's frustum, culled for too
 
 static const float dirLightScaleAmount = 0.5f;
 
@@ -2149,6 +2150,21 @@ void CWorldScene::CullHorizon(CRect* rect) {
     CWorldScene::frustumIndex++;
     CWorldScene::frustumStack[CWorldScene::frustumIndex] = CWorldScene::frustumStack[CWorldScene::frustumIndex - 1];
     CWorldScene::FrustumSet(corners, *rect);
+
+    // SXC: the water's mirror sees the distant terrain's frustum reflected at the water too (as far as the view).
+    float mirrorZ = 0.0f;
+    bool mirrorFull = false;
+
+    if (SXC::View::Planned(mirrorZ, mirrorFull) && mirrorFull) {
+        C3Vector mirrored[8];
+
+        for (uint32_t i = 0; i < 8; i++) {
+            mirrored[i] = C3Vector(corners[i].x, corners[i].y, 2.0f * mirrorZ - corners[i].z);
+        }
+
+        CWorldScene::frustumStack[CWorldScene::frustumIndex].SetOr(mirrored);
+    }
+
     CMap::s_lowDetail.CullHorizonAreas(&CWorldScene::s_activeWorldView);
     CWorldScene::frustumIndex--;
 
@@ -2871,6 +2887,49 @@ void CWorldScene::Update(C3Vector* camPos, C3Vector* camTarget) {
 
     CWorldScene::frustumIndex = 0;
     CWorldScene::frustumStack[0].CalcPlanesFromCorners(CWorldScene::s_frustumCorners);
+
+    // SXC: the water's mirror (SXC/View) sees this frustum reflected at the water: what lies in that is
+    // culled in too (the culling takes either volume), out to the mirror's reach, and the candidates are
+    // gathered over both boxes. Looking down at a lake, the mirror shows what is above and behind the
+    // camera, which the camera's culling left out (Seyri, 2026-11-05).
+    CWorldScene::frustumStack[0].ClearOr();
+    float mirrorZ = 0.0f;
+
+    if (SXC::View::PlanMirror(*camPos, mirrorZ)) {
+        const float reach = SXC::View::MirrorReach();
+        C3Vector mirrored[8];
+
+        for (uint32_t i = 0; i < 8; i++) {
+            C3Vector c = CWorldScene::s_frustumCorners[i];
+
+            if (i >= 4) {
+                const C3Vector& n = CWorldScene::s_frustumCorners[i - 4];
+                const float dx = c.x - n.x, dy = c.y - n.y, dz = c.z - n.z;
+                const float length = sqrt(dx * dx + dy * dy + dz * dz);
+
+                if (length > reach) {
+                    const float k = reach / length;
+                    c = C3Vector(n.x + dx * k, n.y + dy * k, n.z + dz * k);
+                }
+            }
+
+            mirrored[i] = C3Vector(c.x, c.y, 2.0f * mirrorZ - c.z);
+        }
+
+        CWorldScene::frustumStack[0].SetOr(mirrored);
+        const CAaBox reflected = CAaBox::Bounding(mirrored, 8);
+        CAaBox& box = CWorldScene::boundingBox;
+        box.b.x = reflected.b.x < box.b.x ? reflected.b.x : box.b.x;
+        box.b.y = reflected.b.y < box.b.y ? reflected.b.y : box.b.y;
+        box.b.z = reflected.b.z < box.b.z ? reflected.b.z : box.b.z;
+        box.t.x = reflected.t.x > box.t.x ? reflected.t.x : box.t.x;
+        box.t.y = reflected.t.y > box.t.y ? reflected.t.y : box.t.y;
+        box.t.z = reflected.t.z > box.t.z ? reflected.t.z : box.t.z;
+        CWorldScene::s_frustumChunkRect.minX = CMath::fint_(-(box.t.y - HALF_WORLD_SIZE) * OO_COORD_TO_CHUNK - 0.5f);
+        CWorldScene::s_frustumChunkRect.minY = CMath::fint_(-(box.t.x - HALF_WORLD_SIZE) * OO_COORD_TO_CHUNK - 0.5f);
+        CWorldScene::s_frustumChunkRect.maxX = CMath::fint_(-(box.b.y - HALF_WORLD_SIZE) * OO_COORD_TO_CHUNK - 0.5f);
+        CWorldScene::s_frustumChunkRect.maxY = CMath::fint_(-(box.b.x - HALF_WORLD_SIZE) * OO_COORD_TO_CHUNK - 0.5f);
+    }
 
     CMapChunk::farCornerIndex = 0;
 
