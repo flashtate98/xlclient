@@ -53,6 +53,7 @@ namespace {
         { "present, tools overlay", 0 },
         { "waiting: frame rate cap", kCpuOnly },
         { "lights (ours): scan", kCpuOnly },
+        { "lights (ours): scan: merge, pick", kCpuOnly },
         { "lights (ours): shadow assignment", kCpuOnly },
         { "lights (ours): shadow checks", kCpuOnly },
         { "lights (ours): shadow gathering", kCpuOnly },
@@ -515,7 +516,13 @@ namespace SXC::Profiler {
 
         const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_ScrollY;
 
-        if (!ImGui::BeginTable("##profile", 5, flags, ImVec2(0.0f, ImGui::GetContentRegionAvail().y))) {
+        // The table scrolls within what's left of the panel, and never past the screen's bottom (a panel
+        // reaching below it showed rows nobody could scroll to, Seyri 2026-11-05); at least a few rows.
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        const float screenLeft = viewport->WorkPos.y + viewport->WorkSize.y - ImGui::GetCursorScreenPos().y - ImGui::GetStyle().WindowPadding.y;
+        const float height = std::max(std::min(ImGui::GetContentRegionAvail().y, screenLeft), ImGui::GetTextLineHeightWithSpacing() * 6.0f);
+
+        if (!ImGui::BeginTable("##profile", 5, flags, ImVec2(0.0f, height))) {
             return;
         }
 

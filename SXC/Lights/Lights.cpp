@@ -82,9 +82,14 @@ namespace {
     struct FileRows {
         uint32_t generation = 0;
         std::string name;
+        uint32_t nameHash = 0;   // the shared's name hash the entry was made for (compared instead of the name; 0: the name)
         const std::vector<uint32_t>* rows = nullptr;
         bool suppress = false;
         bool glows = false;      // a row with a glow
+        bool lands = false;      // a row moves its light to the ground or the water (up to kSurfaceReach)
+        float rowOffset = 0.0f;  // the rows' largest offset (yd, model space)
+        float reach = -1.0f;     // how far from its origin the file's lights can be (model space; -1 not yet known)
+        bool carries = true;     // it has rows or point lights of its own (known with reach)
     };
     std::unordered_map<const CM2Shared*, FileRows> s_files;
 
@@ -99,24 +104,37 @@ namespace {
     }
 
     // (s_files is trimmed only at the start of a frame's gathering: the lights keep pointers to its names.)
-    const FileRows& RowsFor(const CM2Shared* shared) {
+    FileRows& RowsFor(const CM2Shared* shared) {
         FileRows& f = s_files[shared];
 
-        if (f.generation != s_tableGeneration || f.name != shared->m_fileName) {
+        // The name compared by its hash, not as a string per model per frame.
+        const uint32_t hash = shared->m_fileNameHash;
+
+        if (f.generation != s_tableGeneration || f.nameHash != hash || (hash == 0 && f.name != shared->m_fileName)) {
             f.generation = s_tableGeneration;
             f.name = shared->m_fileName;
             const auto it = s_byPath.find(Normalize(shared->m_fileName));
             f.rows = it != s_byPath.end() ? &it->second : nullptr;
             f.suppress = false;
             f.glows = false;
+            f.lands = false;
+            f.rowOffset = 0.0f;
+            f.reach = -1.0f;
 
             if (f.rows) {
+                constexpr uint32_t kLands = SXC_LIGHTS_TO_WATER | SXC_LIGHTS_TO_GROUND;
+
                 for (uint32_t r : *f.rows) {
-                    f.suppress = f.suppress || (s_rows[r].a.flags & SXC_LIGHTS_SUPPRESS_MODEL_LIGHTS) != 0;
-                    f.glows = f.glows || s_rows[r].a.glow_id != 0;
+                    const sxc_lights_assignment& a = s_rows[r].a;
+                    f.suppress = f.suppress || (a.flags & SXC_LIGHTS_SUPPRESS_MODEL_LIGHTS) != 0;
+                    f.glows = f.glows || a.glow_id != 0;
+                    f.lands = f.lands || (a.flags & kLands) != 0;
+                    f.rowOffset = std::fmax(f.rowOffset, std::sqrt(a.offset[0] * a.offset[0] + a.offset[1] * a.offset[1] + a.offset[2] * a.offset[2]));
                 }
             }
         }
+
+        f.nameHash = hash;
 
         return f;
     }
@@ -275,6 +293,7 @@ namespace {
     // while the source holds still (found again when it moves or turns, and every few seconds, as the map
     // streams in), like the lights' shadows.
     constexpr float kSurfaceReach = 60.0f;  // yd along the direction
+    constexpr float kVisitSlack = 8.0f;     // yd past a file's reach before Visit skips a model (what hangs on it: a torch in a hand)
     constexpr float kSurfaceGap = 0.1f;     // yd short of the surface (a light on it lights it)
     constexpr float kSurfaceMarch = 0.5f;   // yd between the water probes
     constexpr uint32_t kSurfaceRecheckMs = 5000;
@@ -547,6 +566,22 @@ namespace {
 
         // A model faded out to nothing: a despawned object the client keeps disabled for two minutes
         // (CGObject_C::Disable, ClntObjMgr's ExpireOldObjects); its lights and emitters went with it.
+        // A model whose file carries no light or emitter (most of a scene's models), known from an earlier
+        // frame (CM2Model::m_sxcLights, in the line the walk reads anyway): only what hangs on it is
+        // walked. The scan's cost was reaching every model's file data and its table entry each frame
+        // (Darkshire 3.7 ms with the lights' own work at 0.02, 2026-11-05).
+        const uint16_t tag = static_cast<uint16_t>((s_tableGeneration - 1) % 0x7FFFu + 1);
+
+        if (model->m_sxcLights == (tag | 0x8000u)) {
+            s_stats.models++;
+
+            for (CM2Model* child = model->m_attachList; child; child = child->m_attachNext) {
+                Visit(scene, child, camera, reach, depth + 1, lights);
+            }
+
+            return;
+        }
+
         if (model->m_alpha <= 0.001f) {
             return;
         }
@@ -557,8 +592,50 @@ namespace {
         const M2Data* data = model->m_shared && model->IsLoaded(0, 0) ? model->m_shared->m_data : nullptr;
 
         if (data) {
+            FileRows& fileRows = RowsFor(model->m_shared);
+
+            // The file's facts, once: whether it carries anything (rows, or point lights of its own), and
+            // its reach: its bounds and the farthest of its lights, attachments and emitters, plus the
+            // rows' offsets.
+            if (fileRows.reach < 0.0f) {
+                float r = std::fmax(data->m_bounds.m_radius, 0.0f);
+                bool carries = fileRows.rows != nullptr;
+
+                for (uint32_t i = 0; i < data->m_lights.m_count; i++) {
+                    r = std::fmax(r, Length(data->m_lights[i].m_position));
+                    carries = carries || data->m_lights[i].m_type == 1;
+                }
+
+                for (uint32_t i = 0; i < data->m_attachments.m_count; i++) {
+                    r = std::fmax(r, Length(data->m_attachments[i].m_position));
+                }
+
+                for (uint32_t i = 0; i < data->m_particles.m_count; i++) {
+                    r = std::fmax(r, Length(data->m_particles[i].m_position));
+                }
+
+                fileRows.reach = r + fileRows.rowOffset;
+                fileRows.carries = carries;
+            }
+
+            model->m_sxcLights = static_cast<uint16_t>(tag | (fileRows.carries ? 0u : 0x8000u));
+
+            // A model too far for any of its lights (or what hangs on it), plus kSurfaceReach for rows moved
+            // to the ground or water: skipped before the work.
+            if (depth == 0) {
+                const auto& w = model->m_worldTransform;
+                const float scale = std::sqrt(w.a0 * w.a0 + w.a1 * w.a1 + w.a2 * w.a2);
+                const C3Vector origin(w.d0, w.d1, w.d2);
+                const float limit = reach + fileRows.reach * (std::isfinite(scale) && scale > 0.0f ? scale : 1.0f) +
+                                    (fileRows.lands ? kSurfaceReach : 0.0f) + kVisitSlack;
+                const C3Vector d = origin - camera;
+
+                if (Finite(origin) && d.x * d.x + d.y * d.y + d.z * d.z > limit * limit) {
+                    return;
+                }
+            }
+
             const Placement at{ scene, model, model->m_frameStamp == scene->m_frameStamp };
-            const FileRows& fileRows = RowsFor(model->m_shared);
             const bool suppress = fileRows.suppress;
             s_stats.suppressed += suppress ? 1 : 0;
 
@@ -2050,6 +2127,7 @@ namespace SXC::Lights {
         s_emitterStamp = scene->m_frameStamp ? scene->m_frameStamp : 1;
 
         s_stats.in_range = static_cast<uint32_t>(s_found.size());
+        SXC::Profiler::Enter(SXC::Profiler::kLightsMerge);
         Merge(set.merge_distance);
 
         // The nearest kMaxPool, kept in the scan's order (stable between frames: the grid doesn't reshuffle).
@@ -2111,6 +2189,7 @@ namespace SXC::Lights {
         }
 
         s_stats.active = static_cast<uint32_t>(s_lights.size());
+        SXC::Profiler::Leave(SXC::Profiler::kLightsMerge);
         SXC::Profiler::Leave(SXC::Profiler::kLightsScan);
         { SXC::Profiler::Scope p(SXC::Profiler::kLightsShadows); AssignShadows(nowMs); }
         { SXC::Profiler::Scope p(SXC::Profiler::kLightsGrid); BuildGrid(camera, range, cell, perCell); }

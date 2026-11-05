@@ -45,7 +45,8 @@ namespace SXC::Profiler {
         kPresent,      // the present pass and the tools overlay (ImGui); on the CPU also the acquire's wait
         kFrameCap,      // the CPU waiting for the frame rate cap (maxfps)
         // Ours, CPU only (their GPU work is in the pass they run in, or in the pre-pass).
-        kLightsScan,    // our lights: the scene's models walked, merged, the nearest picked
+        kLightsScan,    // our lights: the scene's models walked, their lights placed
+        kLightsMerge,   // our lights: near lights merged, the nearest picked, inside or outside
         kLightsShadows, // our lights: the shadow assignment (the rest of it)
         kShadowChecks,  // our lights: the signature checks (has a light's surroundings changed?)
         kShadowGather,  // our lights: the triangles of the maps drawn this frame gathered

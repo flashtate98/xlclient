@@ -3736,6 +3736,7 @@ CM2Model::CM2Model() {
     this->m_refCount = 1;
     this->m_fFlags = (this->m_fFlags & 0xFF800000) | 0x340;
     this->m_flags = 0;
+    this->m_sxcLights = 0;  // SXC: no verdict yet (SXC/Lights)
     this->m_scenePrev = nullptr;
     this->m_sceneNext = nullptr;
     this->m_callbackPrev = nullptr;
