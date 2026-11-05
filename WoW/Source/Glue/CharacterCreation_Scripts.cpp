@@ -739,34 +739,9 @@ static int32_t Script_SetCustomizationPanelChoice(lua_State* L) {
         return 0;
     }
     // A driven option takes its 3.3.5 selector's value % count: jump to the first value that gives the choice and
-    // that the selector's rows allow. Failing that, step the selector the short way round until it lands on the
-    // choice (or comes back to where it started).
-    if (CharacterCreationSetStockChoice(static_cast<CHAR_CUSTOMIZATION_TYPE>(first.stock), static_cast<uint32_t>(count), static_cast<uint32_t>(target))) {
-        return 0;
-    }
-    const int32_t forward = (target - static_cast<int32_t>(first.index) + count) % count;
-    const int32_t delta = forward <= count - forward ? 1 : -1;
-    const CHAR_CUSTOMIZATION_TYPE type = static_cast<CHAR_CUSTOMIZATION_TYPE>(first.stock);
-    const auto stockValue = [type]() -> uint32_t {
-        const CharacterPreferences& prefs = CCharacterCreation::m_character->m_data.m_preferences;
-        switch (type) {
-            case CHAR_CUSTOMIZATION_SKIN: return prefs.m_skinID;
-            case CHAR_CUSTOMIZATION_FACE: return prefs.m_faceId;
-            case CHAR_CUSTOMIZATION_HAIR_STYLE: return prefs.m_hairStyleId;
-            case CHAR_CUSTOMIZATION_HAIR_COLOR: return prefs.m_hairColorId;
-            default: return prefs.m_facialHairId;
-        }
-    };
-    const uint32_t start = stockValue();
-    for (int32_t step = 0; step < 256; ++step) {
-        CCharacterCreation::CycleCharCustomization(type, delta);
-        if (!PanelOptions(options) || index >= static_cast<int32_t>(options.size()) || options[index].id != first.id) {
-            break;
-        }
-        if (static_cast<int32_t>(options[index].index) == target || stockValue() == start) {
-            break;
-        }
-    }
+    // that the selector's rows allow. None does for a choice the class may not take (the Death Knight skin
+    // colours on other classes); the choice stays as it is then.
+    CharacterCreationSetStockChoice(static_cast<CHAR_CUSTOMIZATION_TYPE>(first.stock), static_cast<uint32_t>(count), static_cast<uint32_t>(target));
     return 0;
 }
 
