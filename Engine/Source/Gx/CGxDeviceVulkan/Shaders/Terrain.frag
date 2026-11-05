@@ -534,9 +534,16 @@ void main()
     // The shadow: the alpha map's baked one, or the cascades'.
     float shadow = alpha.w;
 
+#if SHADOW >= 1
+    // SXC: how much the cascades count here: none where the ground (its shape, not the bumps) turns from
+    // the sun. The stock darkens all the light in their shadow, so a unit's shadow showed through its hill
+    // on the far slope (Seyri, 2026-11-05); the baked shadow stays as it was.
+    float facing = cover.sunShadow.x > 0.5 ? smoothstep(0.0, cover.sunShadow.y, dot(regs.v[24].xyz, nv)) : 1.0;
+#endif
+
 #if SHADOW == 1
     // Mode 1: one cascade fading out toward its edge, never brighter than the baked shadow.
-    float fade = clamp(max(abs(texcoord4.x), abs(texcoord4.y)) * -3.4482758 + 3.41379309, 0.0, 1.0);
+    float fade = clamp(max(abs(texcoord4.x), abs(texcoord4.y)) * -3.4482758 + 3.41379309, 0.0, 1.0) * facing;
 
     if (fade > 0.0)
     {
@@ -574,6 +581,8 @@ void main()
         float first = fade0 > 0.0 ? fade0 * (Taps(s5, texcoord4.xy, texcoord4.z, false) * 0.2 - 1.0) + 1.0 : 1.0;
         shadow = min(rest, first);
     }
+
+    shadow = mix(1.0, shadow, facing);
 #endif
 
     // Lit: the layers x (the shadow's 0.7..1) x twice the diffuse light, plus the highlight in the

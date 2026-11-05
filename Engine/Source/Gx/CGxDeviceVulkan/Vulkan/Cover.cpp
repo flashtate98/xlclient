@@ -72,6 +72,7 @@ namespace
         float shoreCamera[4]; ///< the camera's world position (the waves' movement fades with its distance)
         float shoreCaustic[4]; ///< the caustics on the floor: strength, yd per cell, yd they reach, 0
         float shoreSun[4];     ///< toward the sun (world, unit), how cloudy (0..1)
+        float sunShadow[4];    ///< the cascades fade on ground turned from the sun: on, the fade's width (in N.L), 0, 0
         float texInfo[kMaxTextures / 4][4]; ///< per texture k (at [k / 4][k % 4]): its slot x 4 (0 none), + 2 gloss mask
         float entries[kMaxEntries * kEntryRows][4];
     };
@@ -781,6 +782,15 @@ namespace gxvk::vk::cover
             std::memcpy(p.shoreCaustic, shore.caustic, sizeof p.shoreCaustic);
             std::memcpy(p.shoreSun, shore.sun, sizeof p.shoreSun);
         }
+        // The sun's shadow map on ground turned from the sun: the stock darkens it too, so units' shadows
+        // show through hills onto their far slopes (Seyri, 2026-11-05). Ours fades the cascades there.
+        static SXC::Settings::Bool s_facing("Terrain", "ShadowFacing", true, "Sun shadows: not on ground turned from the sun",
+                                            "Fade the sun's shadow map where the ground faces away from the sun, so units' shadows "
+                                            "no longer fall through hills onto their far slopes. Off: as the stock client.");
+        static SXC::Settings::Float s_facingWidth("Terrain", "ShadowFacingWidth", 0.05f, 0.01f, 0.3f, "Sun shadows: fade width",
+                                                  "How gradually the shadow fades as the ground turns from the sun (in N.L: 0.05 is about 3 degrees).");
+        p.sunShadow[0] = s_facing.Get() ? 1.0f : 0.0f;
+        p.sunShadow[1] = s_facingWidth.Get();
         // Per texture: the slot showing it (a loaded one), and its gloss flag.
         for (uint32_t k = 0; k < kMaxTextures; ++k)
             p.texInfo[k / 4][k % 4] = on && f.textureGloss && f.textureGloss[k] ? 2.0f : 0.0f;

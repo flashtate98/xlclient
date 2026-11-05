@@ -39,6 +39,7 @@ layout(std140, set = 2, binding = 0) uniform CoverBlock {
     vec4 shoreCamera; // the camera's world position (the waves' movement fades with its distance)
     vec4 shoreCaustic; // the caustics on the floor: strength, yd per cell, yd they reach, 0
     vec4 shoreSun;    // toward the sun (world, unit); w how cloudy (the storm blend: the caustics fade)
+    vec4 sunShadow;   // the cascades fade on ground turned from the sun: on, the fade's width (in N.L), 0, 0
     vec4 texInfo[256]; // texture k + 1 at [k / 4][k % 4]: its slot x 4 (0 = none: drawn plain), + 2 its alpha is a gloss mask
     vec4 entries[127 * 5];
 } cover;
