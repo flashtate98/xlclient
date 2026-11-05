@@ -1123,6 +1123,33 @@ static void Refresh(CCharacterComponent* character) {
     RetailCharacterTextures(character);
 }
 
+bool RetailCustomizationPanel(const CCharacterComponent* character, std::vector<RetailPanelOption>& options) {
+    options.clear();
+    uint32_t retailRace = 0;
+    const uint32_t chrModel = RetailModelOf(character, retailRace);
+    if (!chrModel) return false;
+    std::vector<ResolvedOption> resolved;
+    std::vector<uint32_t> choices;
+    Resolve(character, chrModel, resolved, choices);
+    int32_t row = 0;
+    for (const auto& option : resolved) {
+        const bool isRow = option.Row();
+        if (isRow || (option.driven && !option.name.empty())) {
+            RetailPanelOption panel;
+            panel.id = option.id;
+            panel.name = option.name;
+            Retail::Appearance::OptionDetails(option.id, panel.category, panel.type);
+            panel.index = option.index;
+            panel.row = isRow ? row : -1;
+            panel.stock = option.driven ? option.stock : -1;
+            panel.choices = option.offered;
+            options.push_back(std::move(panel));
+        }
+        if (isRow) ++row;
+    }
+    return true;
+}
+
 bool RetailCustomizationOptions(const CCharacterComponent* character, std::vector<RetailCustomizationOption>& options) {
     options.clear();
     uint32_t retailRace = 0;

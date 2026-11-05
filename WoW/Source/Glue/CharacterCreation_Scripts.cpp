@@ -11,6 +11,8 @@
 #include "WoW/Common/ComponentCore/CharacterComponent.h"
 #if defined(WOWDECOMP_RETAIL_MODELS)
 #include "WoW/Common/ComponentCore/RetailCharacter.h"
+#include "Engine/Source/Retail/Appearance.h"
+#include <string>
 #include "WoW/Source/Object/ObjectClient/AlteredForm.h"
 #include "Engine/Source/ConsoleBase/IConsole.h"
 #include "WoW/Source/Glue/CGlueLoading.h"
@@ -645,7 +647,117 @@ static int32_t Script_ZoomCharacterCreateCamera(lua_State* L) {
     return 0;
 }
 
+// FlashWOW customization panel (1-based, like the stock functions). Every option the player can change, the
+// five the 3.3.5 selectors drive included, with the category it is listed under.
+//   GetCustomizationPanelCount() -> number of options (0 for stock bodies)
+//   GetCustomizationPanelOption(index) -> name, choice, choiceCount, category, isCheckbox, isStock
+//   GetCustomizationPanelChoices(index) -> name1, swatch1, name2, swatch2, ... (swatch: 0xRRGGBB, or -1 for none;
+//       name: "" for unnamed choices)
+//   SetCustomizationPanelChoice(index, choice)
+static bool PanelOptions(std::vector<RetailPanelOption>& options) {
+    return CCharacterCreation::m_character && RetailCustomizationPanel(CCharacterCreation::m_character, options);
+}
+
+static int32_t Script_GetCustomizationPanelCount(lua_State* L) {
+    std::vector<RetailPanelOption> options;
+    PanelOptions(options);
+    lua_pushnumber(L, static_cast<double>(options.size()));
+    return 1;
+}
+
+static int32_t Script_GetCustomizationPanelOption(lua_State* L) {
+    std::vector<RetailPanelOption> options;
+    PanelOptions(options);
+    const int32_t index = lua_isnumber(L, 1) ? static_cast<int32_t>(lua_tonumber(L, 1)) - 1 : -1;
+    if (index < 0 || index >= static_cast<int32_t>(options.size())) {
+        return 0;
+    }
+    const RetailPanelOption& option = options[index];
+    lua_pushstring(L, option.name.c_str());
+    lua_pushnumber(L, static_cast<double>(option.index + 1));
+    lua_pushnumber(L, static_cast<double>(option.choices.size()));
+    lua_pushnumber(L, static_cast<double>(option.category));
+    lua_pushboolean(L, option.type == 1);
+    lua_pushboolean(L, option.stock >= 0);
+    return 6;
+}
+
+static int32_t Script_GetCustomizationPanelChoices(lua_State* L) {
+    std::vector<RetailPanelOption> options;
+    PanelOptions(options);
+    const int32_t index = lua_isnumber(L, 1) ? static_cast<int32_t>(lua_tonumber(L, 1)) - 1 : -1;
+    if (index < 0 || index >= static_cast<int32_t>(options.size())) {
+        return 0;
+    }
+    const auto& choices = options[index].choices;
+    if (!lua_checkstack(L, static_cast<int>(choices.size() * 2 + 4))) {
+        return 0;
+    }
+    for (const uint32_t choice : choices) {
+        std::string name;
+        uint32_t rgb = 0;
+        const bool swatch = Retail::Appearance::ChoiceDetails(choice, name, rgb);
+        lua_pushstring(L, name.c_str());
+        lua_pushnumber(L, swatch ? static_cast<double>(rgb) : -1.0);
+    }
+    return static_cast<int32_t>(choices.size() * 2);
+}
+
+static int32_t Script_SetCustomizationPanelChoice(lua_State* L) {
+    if (!lua_isnumber(L, 1) || !lua_isnumber(L, 2)) {
+        luaL_error(L, "Usage: SetCustomizationPanelChoice(index, choice)");
+        return 0;
+    }
+    const int32_t index = static_cast<int32_t>(lua_tonumber(L, 1)) - 1;
+    const int32_t target = static_cast<int32_t>(lua_tonumber(L, 2)) - 1;
+    std::vector<RetailPanelOption> options;
+    if (!PanelOptions(options) || index < 0 || index >= static_cast<int32_t>(options.size())) {
+        return 0;
+    }
+    const RetailPanelOption first = options[index];
+    const int32_t count = static_cast<int32_t>(first.choices.size());
+    if (target < 0 || target >= count || target == static_cast<int32_t>(first.index)) {
+        return 0;
+    }
+    if (first.row >= 0) {
+        if (RetailCustomizationCycle(CCharacterCreation::m_character, static_cast<uint32_t>(first.row), target - static_cast<int32_t>(first.index))) {
+            CGlueLoading::StartLoad(CCharacterCreation::m_character, 1);
+        }
+        return 0;
+    }
+    // A driven option moves with its 3.3.5 selector, which skips the values its rows do not allow; step it
+    // the short way round until it lands on the choice (or comes back to where it started).
+    const int32_t forward = (target - static_cast<int32_t>(first.index) + count) % count;
+    const int32_t delta = forward <= count - forward ? 1 : -1;
+    const CHAR_CUSTOMIZATION_TYPE type = static_cast<CHAR_CUSTOMIZATION_TYPE>(first.stock);
+    const auto stockValue = [type]() -> uint32_t {
+        const CharacterPreferences& prefs = CCharacterCreation::m_character->m_data.m_preferences;
+        switch (type) {
+            case CHAR_CUSTOMIZATION_SKIN: return prefs.m_skinID;
+            case CHAR_CUSTOMIZATION_FACE: return prefs.m_faceId;
+            case CHAR_CUSTOMIZATION_HAIR_STYLE: return prefs.m_hairStyleId;
+            case CHAR_CUSTOMIZATION_HAIR_COLOR: return prefs.m_hairColorId;
+            default: return prefs.m_facialHairId;
+        }
+    };
+    const uint32_t start = stockValue();
+    for (int32_t step = 0; step < 256; ++step) {
+        CCharacterCreation::CycleCharCustomization(type, delta);
+        if (!PanelOptions(options) || index >= static_cast<int32_t>(options.size()) || options[index].id != first.id) {
+            break;
+        }
+        if (static_cast<int32_t>(options[index].index) == target || stockValue() == start) {
+            break;
+        }
+    }
+    return 0;
+}
+
 static FrameScript_Method s_retailScriptFunctions[] = {
+    { "GetCustomizationPanelCount", &Script_GetCustomizationPanelCount },
+    { "GetCustomizationPanelOption", &Script_GetCustomizationPanelOption },
+    { "GetCustomizationPanelChoices", &Script_GetCustomizationPanelChoices },
+    { "SetCustomizationPanelChoice", &Script_SetCustomizationPanelChoice },
     { "GetCharacterCreateZoom", &Script_GetCharacterCreateZoom },
     { "SetCharacterCreateZoom", &Script_SetCharacterCreateZoom },
     { "ZoomCharacterCreateCamera", &Script_ZoomCharacterCreateCamera },

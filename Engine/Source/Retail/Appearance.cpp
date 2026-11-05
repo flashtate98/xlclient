@@ -187,6 +187,33 @@ bool DemonHunterOnly(uint32_t choiceId) {
     return x.ready && DemonHunterOnly(x, choiceId);
 }
 
+bool OptionDetails(uint32_t optionId, uint32_t& category, uint32_t& type) {
+    category = 0;
+    type = 0;
+    Index& x = Ready();
+    const Row* option = x.ready ? x.option->Find(optionId) : nullptr;
+    if (!option) return false;
+    category = x.option->Value(*option, "ChrCustomizationCategoryID");
+    type = x.option->Value(*option, "OptionType");
+    return true;
+}
+
+bool ChoiceDetails(uint32_t choiceId, std::string& name, uint32_t& rgb) {
+    name.clear();
+    rgb = 0;
+    uint32_t base = 0;
+    if (EyeTint(choiceId, base, rgb)) return true;
+    Index& x = Ready();
+    const Row* choice = x.ready ? x.choice->Find(choiceId) : nullptr;
+    if (!choice) return false;
+    name = x.choice->Text(*choice, "Name_lang");
+    // A swatch of 0 (or with no alpha) is "none": the NPC skins and most styles have none.
+    const uint32_t swatch = x.choice->Value(*choice, "SwatchColor", 0);
+    if (!(swatch & 0xFF000000u) && !(swatch & 0x00FFFFFFu)) return false;
+    rgb = swatch & 0x00FFFFFFu;
+    return rgb != 0;
+}
+
 bool ClassImplied(uint32_t optionId) {
     Index& x = Ready();
     if (!x.ready) return false;

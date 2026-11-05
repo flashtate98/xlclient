@@ -37,6 +37,12 @@ namespace Retail::Appearance
     bool ClassImplied(uint32_t optionId);
     bool DemonHunterOnly(uint32_t choiceId);
 
+    // FlashWOW customization panel. OptionDetails: an option's ChrCustomizationCategoryID (the tab it goes
+    // under) and OptionType (1: a checkbox). ChoiceDetails: a choice's name (often empty) and, when it has
+    // one, its swatch colour (0xRRGGBB; false without). A Death Knight eye tint has no name and its tint.
+    bool OptionDetails(uint32_t optionId, uint32_t& category, uint32_t& type);
+    bool ChoiceDetails(uint32_t choiceId, std::string& name, uint32_t& rgb);
+
     // FlashWOW Death Knight eye colours: the Death Knight eye choice in other colours. They are not in the
     // tables; each is the Death Knight choice's ID packed with a colour index, offered right after it to
     // Death Knights, and drawn as that choice with its glow textures tinted. EyeTint gives the table

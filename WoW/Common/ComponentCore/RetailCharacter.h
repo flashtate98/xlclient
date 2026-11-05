@@ -61,6 +61,22 @@ struct RetailCustomizationOption {
 };
 bool RetailCustomizationOptions(const CCharacterComponent* character, std::vector<RetailCustomizationOption>& options);
 
+// FlashWOW customization panel: every option the player can change, the five the 3.3.5 selectors drive
+// included, in OrderIndex order. `row` is the option's index for RetailCustomizationCycle (-1 for a driven
+// one); `stock` is the 3.3.5 selector that drives it (CHAR_CUSTOMIZATION_TYPE; -1 for a row). False for stock
+// bodies.
+struct RetailPanelOption {
+    uint32_t id = 0;
+    std::string name;
+    uint32_t category = 0;           // ChrCustomizationCategoryID
+    uint32_t type = 0;               // OptionType; 1 is a checkbox
+    uint32_t index = 0;              // the choice taken, 0-based
+    int32_t row = -1;
+    int32_t stock = -1;
+    std::vector<uint32_t> choices;   // offered, in order
+};
+bool RetailCustomizationPanel(const CCharacterComponent* character, std::vector<RetailPanelOption>& options);
+
 // Steps option `index` (0-based, as listed above) by `delta` choices, wrapping, or with `randomize` picks
 // a random choice for every listed option; then refreshes geosets and textures. False for stock bodies.
 bool RetailCustomizationCycle(CCharacterComponent* character, uint32_t index, int32_t delta, bool randomize = false);
