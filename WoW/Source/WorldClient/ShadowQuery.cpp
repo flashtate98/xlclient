@@ -34,6 +34,7 @@
 #include "WoW/Source/WorldClient/MapObjDef.h"
 #include "WoW/Source/WorldClient/MapObjGroup.h"
 #include "WoW/Source/WorldClient/CMapBaseObjLink.h"
+#include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler
 
 // STATIC: 0x00D25300
 uint8_t CShadowQuery::s_stamp;
@@ -271,6 +272,7 @@ void CShadowQuery::AllocBuffers() {
 // VERIFY: 3e3dfd04 manual
 // OFFSET: 0x007BD200
 int32_t CShadowQuery::QueryCallback(CShadowCacheQueryData& data, uint32_t frame) {
+    SXC::Profiler::Scope p(SXC::Profiler::kSunGather);  // SXC: the frame profiler
     CShadowQuery::AllocBuffers();
 
     if (!++CShadowQuery::s_stamp) {
@@ -758,6 +760,11 @@ void CShadowQuery::QueryMapObjDefs(CShadowCacheQueryData& data, int32_t firstBan
             }
 
             for (int32_t band = firstBand; band <= lastBand; band++) {
+                // SXC: a band kept from an earlier frame (flags 0) gathers nothing (ShadowCache.cpp).
+                if (!data.m_queryFlags[band]) {
+                    continue;
+                }
+
                 if (data.m_extents[band].Intersects(defGroup->m_bbox) && data.m_bandFrustums[band].Cull(defGroup->m_bbox) && (!data.m_useCullFrustum[band] || data.m_cullFrustums[band].CullInv(defGroup->m_bbox) != WorldCull_notOutside)) {
                     ShadowQueryBuffers& buffers = CShadowQuery::s_bandBuffers[band];
 
@@ -778,7 +785,7 @@ void CShadowQuery::QueryMapObjDefs(CShadowCacheQueryData& data, int32_t firstBan
                 }
 
                 for (int32_t band = firstBand; band <= lastBand; band++) {
-                    if (doodad->m_shadowStamps[band] == CShadowQuery::s_stamp) {
+                    if (doodad->m_shadowStamps[band] == CShadowQuery::s_stamp || !data.m_queryFlags[band]) {  // SXC: not for a kept band
                         continue;
                     }
 

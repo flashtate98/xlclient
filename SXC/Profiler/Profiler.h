@@ -35,7 +35,11 @@ namespace SXC::Profiler {
         kMirror,        // our mirror (SXC/View): its pass on the GPU (the copies are recorded with the draws they copy)
         kWeather,
         kTransparent,   // the sorted see-through draw lists, particles, spell visuals
-        kUnitShadows,   // the client's own: units drawn into their shadow textures (CShadowQuery)
+        kUnitShadows,   // the client's sun shadows (CShadowQuery, CShadowCache), not in the rows below
+        kSunUnits,      // the sun's dynamic map: units (query flags 3), every frame
+        kSunIndoor,     // the dynamic map's second pass inside portals (units, doodads, WMOs by the mode)
+        kSunBands,      // the three bands (by tiles after moving below Very High, all of them each frame at it)
+        kSunGather,     // the casters gathered for any of the above: M2s walked, WMO groups and terrain queried (CPU)
         kGlow,          // the client's full-screen glow (FFX)
         kSceneObjects,  // the world's Gxu scene objects, drawn after the clear
         kPresent,      // the present pass and the tools overlay (ImGui); on the CPU also the acquire's wait
