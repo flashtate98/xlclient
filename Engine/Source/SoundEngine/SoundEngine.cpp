@@ -2438,7 +2438,10 @@ static void ProcessDeleteList(int32_t force) {
 
         sound->m_deleteDelay -= elapsed;
 
-        if (force || (sound->m_deleteDelay <= 0 && sound->IsReadyForRelease())) {
+        // SXC: force 2 (StopAllSounds) skips the delay but not the readiness: a stream released before its
+        // stream thread let go made FMOD::SoundI::release sleep until it did, on the main thread (19 and
+        // 30 s at logout, the watchdog 2026-11-03). One not ready stays here for the per-frame pass.
+        if (force == 1 || ((force == 2 || sound->m_deleteDelay <= 0) && sound->IsReadyForRelease())) {
             if (sound->m_channel) {
                 bool isPlaying = false;
                 sound->m_channel->isPlaying(&isPlaying);
@@ -2741,7 +2744,7 @@ void SE2::StopAllSounds(int32_t restart) {
         s_soundListCritSect.Leave();
 
         SE2::HeartBeat(nullptr, nullptr);
-        ProcessDeleteList(1);
+        ProcessDeleteList(2);  // SXC: not forced past readiness (ProcessDeleteList)
 
         int32_t remaining = 0;
 
