@@ -1698,7 +1698,13 @@ void CGlueMgr::Suspend() {
 // VERIFY: 39c0975e manual
 // OFFSET: 0x004DBBC0
 void CGlueMgr::Shutdown() {
-    while (CGlueMgr::m_pendingServerAlert || CGlueMgr::m_latestAgreements.m_data.Count()) {
+    // SXC: the login screen's server alert (an HTTP download from SERVER_ALERT_URL, Blizzard's old
+    // launcher address) is waited for at most kAlertWaitMs: it never finished, and every quit waited
+    // ~10 s for it (the watchdog: 43 quits, 2026-11-03..05). Its callback only writes statics.
+    constexpr uint32_t kAlertWaitMs = 250;
+    const uint32_t start = OsGetAsyncTimeMs();
+
+    while ((CGlueMgr::m_pendingServerAlert && OsGetAsyncTimeMs() - start < kAlertWaitMs) || CGlueMgr::m_latestAgreements.m_data.Count()) {
         if (CGlueMgr::m_latestAgreements.m_data.Count()) {
             CGlueMgr::m_latestAgreements.m_data.Clear();
         }

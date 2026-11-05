@@ -4,8 +4,11 @@
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Lights.hpp" // SXC:
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Water.hpp"  // SXC:
 
+#include <cstdio>
 #include <cstring>
 #include <new>
+#include <vector>
+#include <windows.h>
 
 namespace gxvk::vk::pipelines::detail
 {
@@ -16,6 +19,45 @@ using namespace gxvk::vk::pipelines::detail;
 
 namespace
 {
+    /// SXC: the pipeline cache kept between sessions. Pipelines compiled at first use stalled frames up
+    /// to 3.3 s in the driver's compiler (the water, the mirror's copies; the watchdog, 2026-11-03..05),
+    /// every session again. Vulkan checks the data's header against the driver and the GPU itself.
+    const char* const kCacheFile = "Cache\\vulkan-pipelines.bin";
+
+    std::vector<uint8_t> ReadCacheFile()
+    {
+        std::vector<uint8_t> data;
+        FILE* f = std::fopen(kCacheFile, "rb");
+        if (!f) return data;
+        std::fseek(f, 0, SEEK_END);
+        const long size = std::ftell(f);
+        std::fseek(f, 0, SEEK_SET);
+        if (size > 0 && size < 512L * 1024L * 1024L)
+        {
+            data.resize(static_cast<size_t>(size));
+            if (std::fread(data.data(), 1, data.size(), f) != data.size()) data.clear();
+        }
+        std::fclose(f);
+        return data;
+    }
+
+    /// Written to a temporary file first, then moved over the old one (a crash mid-write leaves the old).
+    void WriteCacheFile(const loader::Device& d, VkDevice device, VkPipelineCache cache)
+    {
+        size_t size = 0;
+        if (d.GetPipelineCacheData(device, cache, &size, nullptr) != VK_SUCCESS || !size) return;
+        std::vector<uint8_t> data(size);
+        if (d.GetPipelineCacheData(device, cache, &size, data.data()) != VK_SUCCESS) return;
+        CreateDirectoryA("Cache", nullptr);
+        const char* const temp = "Cache\\vulkan-pipelines.tmp";
+        FILE* f = std::fopen(temp, "wb");
+        if (!f) return;
+        const bool written = std::fwrite(data.data(), 1, size, f) == size;
+        std::fclose(f);
+        if (written) MoveFileExA(temp, kCacheFile, MOVEFILE_REPLACE_EXISTING);
+        Write(Debug, "vulkan: pipelines: cache saved (%u KiB)", static_cast<uint32_t>(size / 1024));
+    }
+
     /// The set-0 images of a draw for a layout: the draw's texture at each slot of the mask, or the
     /// white image of the slot's kind when the draw has none there. SXC: also when a texture is bound
     /// of the other kind (a 2D image under a cube sampler or the reverse), which the module cannot
@@ -113,9 +155,21 @@ namespace gxvk::vk::pipelines
             return false;
         }
 
+        // SXC: the last session's cache when there is one (the driver ignores data that isn't its own;
+        // one refusing it outright gets an empty cache).
+        const std::vector<uint8_t> saved = ReadCacheFile();
         VkPipelineCacheCreateInfo cache = {};
         cache.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
-        if (d.CreatePipelineCache(s.device, &cache, nullptr, &s.cache) != VK_SUCCESS) s.cache = VK_NULL_HANDLE;
+        cache.initialDataSize = saved.size();
+        cache.pInitialData = saved.empty() ? nullptr : saved.data();
+        if (d.CreatePipelineCache(s.device, &cache, nullptr, &s.cache) != VK_SUCCESS)
+        {
+            cache.initialDataSize = 0;
+            cache.pInitialData = nullptr;
+            if (d.CreatePipelineCache(s.device, &cache, nullptr, &s.cache) != VK_SUCCESS) s.cache = VK_NULL_HANDLE;
+        }
+        Write(Debug, "vulkan: pipelines: cache %s (%u KiB from %s)", s.cache != VK_NULL_HANDLE ? "ready" : "unavailable",
+              static_cast<uint32_t>(saved.size() / 1024), kCacheFile);
 
         if (!memory::CreateBuffer(kConstantBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, memory::Where::Stream, s.constant) || !s.constant.block.mapped)
         {
@@ -145,7 +199,11 @@ namespace gxvk::vk::pipelines
         gxvk::vk::cover::Shutdown();  // SXC: after the pipeline layouts over its set layout
         gxvk::vk::lights::Shutdown();
         memory::DestroyBuffer(s.constant);
-        if (s.cache != VK_NULL_HANDLE) d.DestroyPipelineCache(s.device, s.cache, nullptr);
+        if (s.cache != VK_NULL_HANDLE)
+        {
+            WriteCacheFile(d, s.device, s.cache);  // SXC: for the next session (above)
+            d.DestroyPipelineCache(s.device, s.cache, nullptr);
+        }
         DestroyPrograms();
         delete[] s.entries;
         s = State();
