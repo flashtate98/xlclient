@@ -440,6 +440,11 @@ static int32_t Script_GetCreateBackgroundModel(lua_State* L) {
 // OFFSET: 0x004E1880
 static int32_t Script_GetAvailableRaces(lua_State* L) {
     uint32_t count = CCharacterCreation::m_races.Count();
+    // FlashWOW: three values each is past the 20 slots Lua guarantees a C function once there are more than six;
+    // pushing past them overwrites the heap after the Lua stack.
+    if (!lua_checkstack(L, static_cast<int>(count * 3 + 4))) {
+        return 0;
+    }
 
     for (uint32_t i = 0; i < count; i++) {
         lua_pushstring(L, CGUnit_C::GetDisplayRaceNameFromRecord(g_chrRacesDB.GetRecord(CCharacterCreation::m_races.m_data[i]), CCharacterCreation::m_character->m_data.m_preferences.m_sexID, nullptr));
@@ -459,6 +464,11 @@ static int32_t Script_GetAvailableRaces(lua_State* L) {
 // OFFSET: 0x004E19A0
 static int32_t Script_GetClassesForRace(lua_State* L) {
     uint32_t count = CCharacterCreation::m_classes.Count();
+    // FlashWOW: three values each is past the 20 slots Lua guarantees a C function once there are more than six;
+    // pushing past them overwrites the heap after the Lua stack.
+    if (!lua_checkstack(L, static_cast<int>(count * 3 + 4))) {
+        return 0;
+    }
 
     for (uint32_t i = 0; i < count; i++) {
         ChrClassesRec* classRec = i < CCharacterCreation::m_classes.Count() ? CCharacterCreation::m_classes.m_data[i] : nullptr;
