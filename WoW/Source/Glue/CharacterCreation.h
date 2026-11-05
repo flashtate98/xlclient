@@ -66,6 +66,10 @@ bool CharacterCreationViewingAlteredForm();
 void CharacterCreationSetViewingAlteredForm(bool altered);
 // Not in the original: FlashWOW "show clothing" toggle. While clothing is hidden the character on the create
 // screen wears nothing (underwear only), so skin markings and tattoos show; Dress() honours it.
+// Not in the original: FlashWOW customization panel. Sets a 3.3.5 selector straight to the value that shows
+// choice `target` of the `count` its Retail option offers (value % count), the first such value its CharSections
+// rows allow. False when none does.
+bool CharacterCreationSetStockChoice(CHAR_CUSTOMIZATION_TYPE type, uint32_t count, uint32_t target);
 bool CharacterCreationClothingHidden();
 void CharacterCreationSetClothingHidden(bool hidden);
 // Not in the original: FlashWOW create screen zoom. 0 is the scene's own camera, 1 the character's face close

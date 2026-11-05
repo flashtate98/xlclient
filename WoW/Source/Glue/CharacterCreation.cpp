@@ -35,6 +35,7 @@
 #include <algorithm>
 #include <cmath>
 #include "Engine/Source/Os/TimeManager.h"
+#include "WoW/Common/ComponentCore/ComponentUtils.h"
 #endif
 
 // STATIC: 0x00AC4220
@@ -281,6 +282,65 @@ void CharacterCreationSetZoom(float zoom, bool instant) {
         s_zoom = s_zoomGoal;
     }
     g_simpleModelCameraHook = &CharacterCreationZoomCamera;
+}
+
+bool CharacterCreationSetStockChoice(CHAR_CUSTOMIZATION_TYPE type, uint32_t count, uint32_t target) {
+    CCharacterComponent* character = CCharacterCreation::m_character;
+    if (!character || !count || target >= count) {
+        return false;
+    }
+    CharacterPreferences& prefs = character->m_data.m_preferences;
+    st_race* lookup = CCharacterComponent::s_chrVarArray;
+    const int32_t race = prefs.m_raceID;
+    const int32_t sex = prefs.m_sexID;
+    const int32_t cls = prefs.m_classId;
+    // The Retail body takes the choice value % count, so any value with that remainder that the 3.3.5 rows allow
+    // will do; the first one wins.
+    for (uint32_t value = target; value < 256; value += count) {
+        const int32_t v = static_cast<int32_t>(value);
+        switch (type) {
+            case CHAR_CUSTOMIZATION_SKIN: {
+                if (!ComponentValidateSkin(lookup, race, sex, cls, v, COMPONENT_CONTEXT_0)) continue;
+                // The face must exist in the new skin colour too; keep it if it does, else take the first that does.
+                int32_t face = static_cast<int32_t>(prefs.m_faceId);
+                if (!ComponentValidateFace(lookup, race, sex, cls, v, face, COMPONENT_CONTEXT_0)) {
+                    face = -1;
+                    for (int32_t f = 0; f < 256 && face < 0; ++f)
+                        if (ComponentValidateFace(lookup, race, sex, cls, v, f, COMPONENT_CONTEXT_0)) face = f;
+                    if (face < 0) continue;
+                }
+                character->SetSkinColor(v, true, true, nullptr);
+                if (face != static_cast<int32_t>(prefs.m_faceId)) character->SetFace(face, true, nullptr);
+                CCharacterCreation::m_prevSkinIndex = prefs.m_skinID;
+                CCharacterCreation::m_prevFaceIndex = prefs.m_faceId;
+                break;
+            }
+            case CHAR_CUSTOMIZATION_FACE:
+                if (!ComponentValidateFace(lookup, race, sex, cls, prefs.m_skinID, v, COMPONENT_CONTEXT_0)) continue;
+                character->SetFace(v, true, nullptr);
+                CCharacterCreation::m_prevFaceIndex = prefs.m_faceId;
+                break;
+            case CHAR_CUSTOMIZATION_HAIR_STYLE:
+                if (!ComponentValidateHair(lookup, race, sex, cls, prefs.m_hairColorId, v, COMPONENT_CONTEXT_0)) continue;
+                character->SetHairStyle(v, nullptr);
+                CCharacterCreation::m_prevHairStyleIndex = prefs.m_hairStyleId;
+                break;
+            case CHAR_CUSTOMIZATION_HAIR_COLOR:
+                if (!ComponentValidateHair(lookup, race, sex, cls, v, prefs.m_hairStyleId, COMPONENT_CONTEXT_0)) continue;
+                character->SetHairColor(v, true, nullptr);
+                CCharacterCreation::m_prevHairColorIndex = prefs.m_hairColorId;
+                break;
+            default:
+                if (!ComponentValidateFacialFeature(lookup, CCharacterComponent::s_characterFacialHairStylesList, race, sex, cls,
+                        prefs.m_hairColorId, v, COMPONENT_CONTEXT_0)) continue;
+                character->SetBeardStyle(v, true, nullptr);
+                CCharacterCreation::m_prevFacialHairIndex = prefs.m_facialHairId;
+                break;
+        }
+        CGlueLoading::StartLoad(character, 1);
+        return true;
+    }
+    return false;
 }
 
 bool CharacterCreationClothingHidden() {

@@ -42,6 +42,10 @@ namespace Retail::Appearance
     // one, its swatch colour (0xRRGGBB; false without). A Death Knight eye tint has no name and its tint.
     bool OptionDetails(uint32_t optionId, uint32_t& category, uint32_t& type);
     bool ChoiceDetails(uint32_t choiceId, std::string& name, uint32_t& rgb);
+    // Whether any choice of the option would change the look with these choices taken: an option whose every
+    // choice only applies alongside choices not taken (Eye Style, which shows only with certain eye colours)
+    // does nothing for now. Options without elements count as showing.
+    bool OptionShows(uint32_t optionId, const std::vector<uint32_t>& selected);
 
     // FlashWOW Death Knight eye colours: the Death Knight eye choice in other colours. They are not in the
     // tables; each is the Death Knight choice's ID packed with a colour index, offered right after it to

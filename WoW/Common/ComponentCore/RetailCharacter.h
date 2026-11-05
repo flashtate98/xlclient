@@ -74,6 +74,7 @@ struct RetailPanelOption {
     int32_t row = -1;
     int32_t stock = -1;
     std::vector<uint32_t> choices;   // offered, in order
+    bool shows = true;               // Retail::Appearance::OptionShows with the choices taken
 };
 bool RetailCustomizationPanel(const CCharacterComponent* character, std::vector<RetailPanelOption>& options);
 

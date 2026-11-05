@@ -198,6 +198,24 @@ bool OptionDetails(uint32_t optionId, uint32_t& category, uint32_t& type) {
     return true;
 }
 
+bool OptionShows(uint32_t optionId, const std::vector<uint32_t>& selected) {
+    Index& x = Ready();
+    if (!x.ready) return true;
+    const auto list = x.choicesByOption.find(optionId);
+    if (list == x.choicesByOption.end()) return true;
+    bool anyElement = false;
+    for (const Row* choice : list->second) {
+        const auto elements = x.elementsByChoice.find(choice->id);
+        if (elements == x.elementsByChoice.end()) continue;
+        for (const Row* element : elements->second) {
+            anyElement = true;
+            const uint32_t needs = x.element->Value(*element, "RelatedChrCustomizationChoiceID");
+            if (!needs || std::find(selected.begin(), selected.end(), needs) != selected.end()) return true;
+        }
+    }
+    return !anyElement;
+}
+
 bool ChoiceDetails(uint32_t choiceId, std::string& name, uint32_t& rgb) {
     name.clear();
     rgb = 0;

@@ -1143,6 +1143,7 @@ bool RetailCustomizationPanel(const CCharacterComponent* character, std::vector<
             panel.row = isRow ? row : -1;
             panel.stock = option.driven ? option.stock : -1;
             panel.choices = option.offered;
+            panel.shows = Retail::Appearance::OptionShows(option.id, choices);
             options.push_back(std::move(panel));
         }
         if (isRow) ++row;
