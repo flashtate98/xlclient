@@ -18,6 +18,8 @@
 #include "WoW/Source/WorldClient/DayNight.h"
 #include "WoW/Source/WorldClient/DayNight__DNInfo.h"
 #include "Engine/Source/Os/Time.h"
+#include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler
+#include "SXC/Settings/Settings.h"  // SXC: [Weather] HeightQueriesPerFrame
 
 // STATIC: 0x00ADF1F8
 float s_weatherDensity = 0.66f;
@@ -42,9 +44,37 @@ WeatherGridCell::WeatherGridCell() {
     }
 }
 
+// SXC: the weather grid's new height queries per frame (CMap::QueryHeight, a collision query: ~0.15 ms
+// each in Stormwind, 2026-11-05; uncapped, new cells by the dozen stalled frames, 11 ms in the rain).
+// Past the budget a cell answers "no ground" uncached and is asked again in a later frame: a drop may
+// fall through a roof for a moment while the grid fills. Refilled in Weather::Update; 0: no cap.
+static int32_t s_heightQueriesLeft = 0;
+
+static SXC::Settings::Int& HeightQueriesPerFrame() {
+    static SXC::Settings::Int s_setting("Weather", "HeightQueriesPerFrame", 8, 0, 1000, "Weather: height queries a frame",
+                                        "How many new ground heights the rain, snow and sand may look up a frame (each a collision "
+                                        "query into the world, slow in big cities). 0: no limit, as the stock client.");
+    return s_setting;
+}
+
+static bool TakeHeightQuery() {
+    if (HeightQueriesPerFrame().Get() <= 0) {
+        return true;
+    }
+
+    if (s_heightQueriesLeft <= 0) {
+        return false;
+    }
+
+    s_heightQueriesLeft--;
+    return true;
+}
+
 // VERIFY: 4502f4fc auto
 // OFFSET: 0x00783BD0
 static float __stdcall GetHeightOrDefault(const C3Vector* position) {
+    SXC::Profiler::Scope p(SXC::Profiler::kWeatherHeights);  // SXC: the frame profiler (a grid miss)
+    SXC::Profiler::CountDraw(1);
     float height;
 
     if (CMap::QueryHeight(*position, 200.0f, &height)) {
@@ -76,6 +106,11 @@ float WeatherGridCell::GetHeight(const C3Vector* position) {
     float* height = &this->m_heights[cellY * 32 + cellX];
 
     if (*height == FLT_MAX) {
+        // SXC: over the frame's budget: no ground for now, not cached (asked again later).
+        if (!TakeHeightQuery()) {
+            return position->z - 200.0f;
+        }
+
         *height = GetHeightOrDefault(position);
     }
 
@@ -93,7 +128,14 @@ float WeatherGrid::GetSubCellHeight(const C2iVector* cell, float z) {
         return *height;
     }
 
+    // SXC: over the frame's budget: no ground for now, not cached (asked again later).
+    if (!TakeHeightQuery()) {
+        return z - 200.0f;
+    }
+
     float result;
+    SXC::Profiler::Scope p(SXC::Profiler::kWeatherHeights);  // SXC: the frame profiler (a grid miss)
+    SXC::Profiler::CountDraw(1);
 
     if (CMap::QueryHeight(position, 200.0f, &result)) {
         *height = result;
@@ -583,6 +625,7 @@ void Weather::Render() {
 // VERIFY: 2ffa4bed manual
 // OFFSET: 0x0078D170
 void Weather::Update() {
+    s_heightQueriesLeft = HeightQueriesPerFrame().Get();  // SXC: the frame's height queries (above)
     this->UpdatePosDeltas();
     WOWGUID activePlayer = ClntObjMgrGetActivePlayer();
 

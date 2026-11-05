@@ -34,6 +34,9 @@ namespace SXC::Profiler {
         kFog,           // our volumetric fog
         kMirror,        // our mirror (SXC/View): its pass on the GPU (the copies are recorded with the draws they copy)
         kWeather,
+        kWeatherFill,    // rain packets' vertex buffers filled (draws: packets, ktris: k drops)
+        kWeatherSpawn,   // rain drops spawned, each landing found by a raycast over the weather grid
+        kWeatherHeights, // the weather grid's height misses: CMap::QueryHeight (draws: queries)
         kTransparent,   // the sorted see-through draw lists, particles, spell visuals
         kUnitShadows,   // the client's sun shadows (CShadowQuery, CShadowCache), not in the rows below
         kSunUnits,      // the sun's dynamic map: units (query flags 3), every frame

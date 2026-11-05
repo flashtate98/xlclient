@@ -20,6 +20,7 @@
 #include "WoW/Source/WorldClient/World.h"
 #include "Engine/Source/Gx/CGxVertexPT.h"
 #include "Engine/Source/ShaderEffect/Types.h"
+#include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler
 
 // STATIC: 0x00ADF220
 static float s_maxWindTilt = 45.0f;
@@ -98,6 +99,8 @@ float Rain::GetWindTiltFactor() {
 // VERIFY: 79ce2133 auto
 // OFFSET: 0x007842D0
 void __stdcall Rain::RealizePacket(Packet<RainParticleBuffer>* packet) {
+    SXC::Profiler::Scope p(SXC::Profiler::kWeatherFill);  // SXC: the frame profiler (a packet, its drops)
+    SXC::Profiler::CountDraw(packet->m_currParticle);
     RainDropVertex* vertices = reinterpret_cast<RainDropVertex*>(g_theGxDevicePtr->BufLock(packet->m_vertexBufHandle));
 
     for (uint32_t i = 0; i < packet->m_currParticle; i++) {
@@ -135,6 +138,8 @@ void __stdcall Rain::RealizePacket(Packet<RainParticleBuffer>* packet) {
 // VERIFY: 7ae1056b manual
 // OFFSET: 0x007843E0
 void __stdcall Rain::RealizePacket(Packet<RainPatterParticleBuffer>* packet) {
+    SXC::Profiler::Scope p(SXC::Profiler::kWeatherFill);  // SXC: the frame profiler (a packet, its splashes)
+    SXC::Profiler::CountDraw(packet->m_currParticle);
     CGxVertexPCT* vertices = reinterpret_cast<CGxVertexPCT*>(g_theGxDevicePtr->BufLock(packet->m_vertexBufHandle));
 
     for (uint32_t i = 0; i < packet->m_currParticle; i++) {
@@ -252,6 +257,7 @@ void Rain::InitDrop(RainDropParticle* drop, float time) {
 // VERIFY: 46e19b2b manual
 // OFFSET: 0x00785640
 void Rain::UpdatePacket(Packet<RainParticleBuffer>* packet, Packet<RainPatterParticleBuffer>* patter, float count) {
+    SXC::Profiler::Scope p(SXC::Profiler::kWeatherSpawn);  // SXC: the frame profiler
     float tickSec = FrameTime::s_tickTimeSec;
     float available = static_cast<float>(6144 - packet->m_currParticle);
 
