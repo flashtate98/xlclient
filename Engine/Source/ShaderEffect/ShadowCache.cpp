@@ -631,6 +631,12 @@ void CShadowCache::GatherBands(CShadowCacheQueryData& data, const C3Vector& pos,
             data.m_texBounds[i][2] = 0.0f;
             data.m_texBounds[i][3] = 1.0f;
 
+            // SXC: a kept band is drawn whole. The callback clips a band to the camera's view (g_shadowCull:
+            // the casters and the scissor) unless its query flags are 8; a kept band clipped so lasts past
+            // the view it was drawn for (turning showed the scene unshadowed until the band was due).
+            const bool kept = cache && i > 0;
+            data.m_queryFlags[i] = kept ? 8 : 0;
+
             CShadowCache::s_frustumCallback(data.m_frustums[i], data.m_matrices[i], band.m_dir, data, i);
             data.m_frustums[i].Extents(data.m_extents[i]);
 
@@ -641,7 +647,6 @@ void CShadowCache::GatherBands(CShadowCacheQueryData& data, const C3Vector& pos,
             }
 
             // SXC: a kept band is skipped (no casters, not drawn: its texture and matrix stay) until due.
-            const bool kept = cache && i > 0;
             bool draw = true;
 
             if (kept) {
