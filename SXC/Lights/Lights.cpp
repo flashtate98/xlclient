@@ -1011,6 +1011,134 @@ namespace {
         return BoxReaches(box, centre, r);
     }
 
+    // The light's sphere in a placement's own space (placements turn, move and scale evenly: WMOs and
+    // doodads), so triangles are tested where they are and only the reaching ones are moved into the world.
+    // Moving every vertex of every group and doodad in reach first was most of a map's cost (Stormwind:
+    // milliseconds a map for a few hundred triangles, 2026-11-05).
+    void LocalSphere(const C44Matrix& placement, const C3Vector& centre, float radius, C3Vector& localCentre, float& localRadius) {
+        const C44Matrix inverse = placement.Inverse();
+        localCentre = centre * inverse;
+        const float scale = Length(Dir(C3Vector(1.0f, 0.0f, 0.0f), placement));
+        localRadius = radius / (scale > 1e-4f && std::isfinite(scale) ? scale : 1.0f);
+    }
+
+    // A WMO group's triangles that can cast (not collision-only, not see-through), indexed by a coarse
+    // grid in the group's own space, built the first time a light needs the group. A light then tests
+    // the triangles of the cells its sphere reaches, not every triangle of the group: the walk through a
+    // Stormwind group's tens of thousands of triangles per light was most of a map's cost (2.7 of 3.5 ms
+    // gathering while walking, 2026-11-05). Rebuilt when the group's arrays change.
+    struct GroupIndex {
+        const void* vertices = nullptr;
+        const void* indices = nullptr;
+        int32_t vertexCount = 0;
+        int32_t triangleCount = 0;
+        C3Vector min;
+        float cell = 8.0f;
+        int32_t nx = 1, ny = 1, nz = 1;
+        std::vector<uint32_t> start;    // per cell: its first entry in tris (cells + 1)
+        std::vector<uint32_t> tris;     // triangle numbers by cell
+        std::vector<uint32_t> stamp;    // per triangle: the query it was last tested in
+        uint32_t query = 0;
+    };
+    std::unordered_map<const CMapObjGroup*, GroupIndex> s_groupIndex;
+    constexpr int32_t kGroupCellsPerAxis = 32;
+
+    GroupIndex& IndexFor(const CMapObj* obj, const CMapObjGroup* group) {
+        if (s_groupIndex.size() > 8192) {
+            s_groupIndex.clear();
+        }
+
+        GroupIndex& x = s_groupIndex[group];
+
+        if (x.vertices == group->m_vertexList && x.indices == group->m_indices && x.vertexCount == group->m_vertexListCount &&
+            x.triangleCount == std::min(group->m_indicesCount / 3, group->m_polyListSize)) {
+            return x;
+        }
+
+        x = GroupIndex{};
+        x.vertices = group->m_vertexList;
+        x.indices = group->m_indices;
+        x.vertexCount = group->m_vertexListCount;
+        x.triangleCount = std::min(group->m_indicesCount / 3, group->m_polyListSize);
+        const C3Vector* v = group->m_vertexList;
+        const uint32_t vertices = static_cast<uint32_t>(std::max(group->m_vertexListCount, 0));
+        C3Vector lo(1e30f, 1e30f, 1e30f), hi(-1e30f, -1e30f, -1e30f);
+
+        for (uint32_t i = 0; i < vertices; i++) {
+            lo = C3Vector(std::fmin(lo.x, v[i].x), std::fmin(lo.y, v[i].y), std::fmin(lo.z, v[i].z));
+            hi = C3Vector(std::fmax(hi.x, v[i].x), std::fmax(hi.y, v[i].y), std::fmax(hi.z, v[i].z));
+        }
+
+        if (!vertices) {
+            lo = hi = C3Vector(0.0f, 0.0f, 0.0f);
+        }
+
+        const float extent = std::fmax(hi.x - lo.x, std::fmax(hi.y - lo.y, hi.z - lo.z));
+        x.min = lo;
+        x.cell = std::fmax(4.0f, extent / kGroupCellsPerAxis);
+        x.nx = std::min(kGroupCellsPerAxis, static_cast<int32_t>((hi.x - lo.x) / x.cell) + 1);
+        x.ny = std::min(kGroupCellsPerAxis, static_cast<int32_t>((hi.y - lo.y) / x.cell) + 1);
+        x.nz = std::min(kGroupCellsPerAxis, static_cast<int32_t>((hi.z - lo.z) / x.cell) + 1);
+        const size_t cells = static_cast<size_t>(x.nx) * x.ny * x.nz;
+        x.start.assign(cells + 1, 0);
+        x.stamp.assign(static_cast<size_t>(std::max(x.triangleCount, 0)), 0);
+
+        // The cells a casting triangle's box covers, counted, then filled (two passes).
+        const auto cover = [&](int32_t t, int32_t c[6]) {
+            const SMOPoly& poly = group->m_polyList[t];
+
+            if (poly.m_materialId == 0xFF || (obj->m_materialList && obj->m_materialList[poly.m_materialId].m_blendMode >= 2)) {
+                return false;
+            }
+
+            const uint16_t* i = &group->m_indices[t * 3];
+
+            if (i[0] >= vertices || i[1] >= vertices || i[2] >= vertices) {
+                return false;
+            }
+
+            const C3Vector& a = v[i[0]];
+            const C3Vector& b = v[i[1]];
+            const C3Vector& d = v[i[2]];
+            const float lx = std::fmin(a.x, std::fmin(b.x, d.x)), ly = std::fmin(a.y, std::fmin(b.y, d.y)), lz = std::fmin(a.z, std::fmin(b.z, d.z));
+            const float hx = std::fmax(a.x, std::fmax(b.x, d.x)), hy = std::fmax(a.y, std::fmax(b.y, d.y)), hz = std::fmax(a.z, std::fmax(b.z, d.z));
+            c[0] = std::clamp(static_cast<int32_t>((lx - x.min.x) / x.cell), 0, x.nx - 1);
+            c[1] = std::clamp(static_cast<int32_t>((ly - x.min.y) / x.cell), 0, x.ny - 1);
+            c[2] = std::clamp(static_cast<int32_t>((lz - x.min.z) / x.cell), 0, x.nz - 1);
+            c[3] = std::clamp(static_cast<int32_t>((hx - x.min.x) / x.cell), 0, x.nx - 1);
+            c[4] = std::clamp(static_cast<int32_t>((hy - x.min.y) / x.cell), 0, x.ny - 1);
+            c[5] = std::clamp(static_cast<int32_t>((hz - x.min.z) / x.cell), 0, x.nz - 1);
+            return true;
+        };
+        const auto cellOf = [&](int32_t cx, int32_t cy, int32_t cz) { return (static_cast<size_t>(cz) * x.ny + cy) * x.nx + cx; };
+        int32_t c[6];
+
+        for (int32_t t = 0; t < x.triangleCount; t++) {
+            if (!cover(t, c)) continue;
+
+            for (int32_t cz = c[2]; cz <= c[5]; cz++)
+                for (int32_t cy = c[1]; cy <= c[4]; cy++)
+                    for (int32_t cx = c[0]; cx <= c[3]; cx++) x.start[cellOf(cx, cy, cz) + 1]++;
+        }
+
+        for (size_t k = 1; k <= cells; k++) {
+            x.start[k] += x.start[k - 1];
+        }
+
+        x.tris.resize(x.start[cells]);
+        std::vector<uint32_t> fill(x.start.begin(), x.start.end() - 1);
+
+        for (int32_t t = 0; t < x.triangleCount; t++) {
+            if (!cover(t, c)) continue;
+
+            for (int32_t cz = c[2]; cz <= c[5]; cz++)
+                for (int32_t cy = c[1]; cy <= c[4]; cy++)
+                    for (int32_t cx = c[0]; cx <= c[3]; cx++) x.tris[fill[cellOf(cx, cy, cz)]++] = static_cast<uint32_t>(t);
+        }
+
+        return x;
+    }
+
     uint32_t Mix(uint32_t h, uint64_t v) {
         for (int i = 0; i < 8; i++, v >>= 8) {
             h = (h ^ static_cast<uint32_t>(v & 0xFF)) * 16777619u;
@@ -1065,21 +1193,23 @@ namespace {
     // rest through its placement. Its alpha-keyed textures' readiness goes into the signature (a map drawn
     // before they loaded is drawn again).
     uint32_t AddModel(Gathered& g, CM2Model* model, const C44Matrix& placement, uint32_t h) {
+        SXC::Profiler::Scope p(SXC::Profiler::kShadowModels);
         const M2Data* data = model->m_shared->m_data;
         const M2SkinProfile* skin = model->m_shared->m_skinData;
-        static std::vector<C3Vector> world;
         static std::vector<uint8_t> sectionDone;
-        world.clear();
         sectionDone.assign(skin->m_skinSections.m_count, 0);
+        C3Vector localCentre;
+        float localRadius = 0.0f;
 
         if (g.out) {
-            world.resize(skin->m_vertices.m_count);
-
-            for (uint32_t v = 0; v < skin->m_vertices.m_count; v++) {
-                const uint16_t global = skin->m_vertices[v];
-                world[v] = global < data->m_vertices.m_count ? data->m_vertices[global].m_position * placement : C3Vector(0.0f, 0.0f, 0.0f);
-            }
+            LocalSphere(placement, g.centre, g.radius, localCentre, localRadius);
         }
+
+        // A skin vertex's position in the model's space (the origin for one out of range).
+        const auto local = [&](uint16_t v) {
+            const uint16_t global = v < skin->m_vertices.m_count ? skin->m_vertices[v] : 0xFFFF;
+            return global < data->m_vertices.m_count ? data->m_vertices[global].m_position : C3Vector(0.0f, 0.0f, 0.0f);
+        };
 
         for (uint32_t b = 0; b < skin->m_batches.m_count; b++) {
             const M2Batch& batch = skin->m_batches[b];
@@ -1121,16 +1251,22 @@ namespace {
             for (uint32_t k = section.m_indexStart; k + 2 < end; k += 3) {
                 const uint16_t i0 = skin->m_indices[k], i1 = skin->m_indices[k + 1], i2 = skin->m_indices[k + 2];
 
-                if (i0 >= world.size() || i1 >= world.size() || i2 >= world.size() || !TriangleReaches(world[i0], world[i1], world[i2], g.centre, g.radius)) {
+                if (i0 >= skin->m_vertices.m_count || i1 >= skin->m_vertices.m_count || i2 >= skin->m_vertices.m_count) {
+                    continue;
+                }
+
+                const C3Vector l0 = local(i0), l1 = local(i1), l2 = local(i2);
+
+                if (!TriangleReaches(l0, l1, l2, localCentre, localRadius)) {
                     continue;
                 }
 
                 if (texture) {
                     const C2Vector uv[3] = { data->m_vertices[skin->m_vertices[i0]].m_texcoord[0], data->m_vertices[skin->m_vertices[i1]].m_texcoord[0],
                                              data->m_vertices[skin->m_vertices[i2]].m_texcoord[0] };
-                    g.Add(world[i0], world[i1], world[i2], texture, uv);
+                    g.Add(l0 * placement, l1 * placement, l2 * placement, texture, uv);
                 } else {
-                    g.Add(world[i0], world[i1], world[i2]);
+                    g.Add(l0 * placement, l1 * placement, l2 * placement);
                 }
             }
         }
@@ -1190,11 +1326,11 @@ namespace {
     // What a light's map is drawn from (into g.out when set); the surroundings' signature either way.
     uint32_t Gather(Gathered& g) {
         uint32_t h = 2166136261u;
-        static std::vector<C3Vector> world;
         static std::unordered_set<const void*> doodads;
         doodads.clear();
         g.doodads = &doodads;
         const bool withDoodads = s_settings.shadow_doodads != WXL_FALSE;
+        SXC::Profiler::Enter(SXC::Profiler::kShadowWmo);
 
         for (CMapObjDef* def = CMap::mapObjDefHash.m_fulllist.Head(); def; def = CMap::mapObjDefHash.m_fulllist.Next(def)) {
             if ((static_cast<uint32_t>(def->m_flags) & 0x20) || !BoxReaches(def->m_bbox, g.centre, g.radius)) {
@@ -1207,6 +1343,13 @@ namespace {
             if (!obj || !obj->m_isGroupLoaded) {
                 h = Mix(h, 1);
                 continue;
+            }
+
+            C3Vector localCentre;
+            float localRadius = 0.0f;
+
+            if (g.out) {
+                LocalSphere(def->m_mat, g.centre, g.radius, localCentre, localRadius);
             }
 
             for (CMapBaseObjLink* link = def->m_mapObjDefGroupLinkList.Head(); link; link = def->m_mapObjDefGroupLinkList.Next(link)) {
@@ -1227,33 +1370,49 @@ namespace {
                     continue;
                 }
 
-                world.resize(static_cast<size_t>(group->m_vertexListCount));
+                // The triangles of the cells the light's sphere reaches (GroupIndex; casting ones only), each once.
+                const C3Vector* local = group->m_vertexList;
+                GroupIndex& index = IndexFor(obj, group);
 
-                for (int32_t v = 0; v < group->m_vertexListCount; v++) {
-                    world[v] = group->m_vertexList[v] * def->m_mat;
+                if (++index.query == 0) {
+                    std::fill(index.stamp.begin(), index.stamp.end(), 0u);
+                    index.query = 1;
                 }
 
-                const int32_t triangles = std::min(group->m_indicesCount / 3, group->m_polyListSize);
+                const auto clampCell = [&](float value, float origin, int32_t n) {
+                    return std::clamp(static_cast<int32_t>(std::floor((value - origin) / index.cell)), 0, n - 1);
+                };
+                const int32_t x0 = clampCell(localCentre.x - localRadius, index.min.x, index.nx), x1 = clampCell(localCentre.x + localRadius, index.min.x, index.nx);
+                const int32_t y0 = clampCell(localCentre.y - localRadius, index.min.y, index.ny), y1 = clampCell(localCentre.y + localRadius, index.min.y, index.ny);
+                const int32_t z0 = clampCell(localCentre.z - localRadius, index.min.z, index.nz), z1 = clampCell(localCentre.z + localRadius, index.min.z, index.nz);
 
-                for (int32_t t = 0; t < triangles; t++) {
-                    const SMOPoly& poly = group->m_polyList[t];
+                for (int32_t cz = z0; cz <= z1; cz++) {
+                    for (int32_t cy = y0; cy <= y1; cy++) {
+                        for (int32_t cx = x0; cx <= x1; cx++) {
+                            const size_t cell = (static_cast<size_t>(cz) * index.ny + cy) * index.nx + cx;
 
-                    if (poly.m_materialId == 0xFF || (obj->m_materialList && obj->m_materialList[poly.m_materialId].m_blendMode >= 2)) {
-                        continue;
-                    }
+                            for (uint32_t e = index.start[cell]; e < index.start[cell + 1]; e++) {
+                                const uint32_t t = index.tris[e];
 
-                    const uint16_t* i = &group->m_indices[t * 3];
+                                if (index.stamp[t] == index.query) {
+                                    continue;
+                                }
 
-                    if (i[0] >= world.size() || i[1] >= world.size() || i[2] >= world.size()) {
-                        continue;
-                    }
+                                index.stamp[t] = index.query;
+                                const uint16_t* i = &group->m_indices[t * 3];
 
-                    if (TriangleReaches(world[i[0]], world[i[1]], world[i[2]], g.centre, g.radius)) {
-                        g.Add(world[i[0]], world[i[1]], world[i[2]]);
+                                if (TriangleReaches(local[i[0]], local[i[1]], local[i[2]], localCentre, localRadius)) {
+                                    g.Add(local[i[0]] * def->m_mat, local[i[1]] * def->m_mat, local[i[2]] * def->m_mat);
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
+
+        SXC::Profiler::Leave(SXC::Profiler::kShadowWmo);
+        SXC::Profiler::Enter(SXC::Profiler::kShadowTerrain);
 
         for (CMapChunk* chunk = CMap::s_mapChunkList.Head(); chunk; chunk = CMap::s_mapChunkList.Next(chunk)) {
             if (!chunk->m_height || !chunk->m_header) {
@@ -1309,6 +1468,8 @@ namespace {
             }
         }
 
+        SXC::Profiler::Leave(SXC::Profiler::kShadowTerrain);
+
         // The game objects (this frame's, collected by AssignShadows), as the doodads: where one stands goes
         // into the signature too (one put down or moved: the map again).
         for (const CasterObject& o : s_objects) {   // empty without doodads casting
@@ -1339,15 +1500,12 @@ namespace {
     void GatherDoodad(Gathered& g, const CMapBaseObjLink* link, uint32_t& h) {
         CMapDoodadDef* def = static_cast<CMapDoodadDef*>(link->m_owner);
 
-        if (!def || !g.doodads->insert(def).second) {
+        // The cheap tests before the set (a city's groups link hundreds of doodads each).
+        if (!def || !def->m_model || !BoxReaches(def->m_bbox, g.centre, g.radius) || Holds(def->m_bbox, g.centre, 0.1f) || !g.doodads->insert(def).second) {
             return;
         }
 
         CM2Model* model = def->m_model;
-
-        if (!model || !BoxReaches(def->m_bbox, g.centre, g.radius) || Holds(def->m_bbox, g.centre, 0.1f)) {
-            return;
-        }
 
         const bool ready = model->m_shared && model->m_shared->m_data && model->m_shared->m_skinData && model->IsLoaded(0, 0);
         h = Mix(h, reinterpret_cast<uintptr_t>(def));
@@ -1381,6 +1539,7 @@ namespace {
         s_objects.clear();
 
         if (s_settings.shadow_doodads != WXL_FALSE) {
+            SXC::Profiler::Scope p(SXC::Profiler::kShadowObjects);
             ClntObjMgrEnumVisibleObjects(&CollectObject, &s_objects);
         }
 
@@ -1482,6 +1641,7 @@ namespace {
                     sig.centre = s.pos;
                     sig.radius = s.radius;
                     SXC::Profiler::Scope p(SXC::Profiler::kShadowChecks);
+                    SXC::Profiler::CountDraw(0);   // the row's draws: checks run
                     draw = Gather(sig) != s.signature;
 
                     if (!draw) {
@@ -1539,6 +1699,7 @@ namespace {
                 const size_t first = s_shadowVertices.size();
                 SXC::Profiler::Enter(SXC::Profiler::kShadowGather);
                 s.signature = Gather(g);
+                SXC::Profiler::CountDraw(g.added / 3);   // the row's draws: maps gathered, ktris: their triangles
                 SXC::Profiler::Leave(SXC::Profiler::kShadowGather);
 
                 if (g.truncated) {

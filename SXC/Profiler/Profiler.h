@@ -52,7 +52,11 @@ namespace SXC::Profiler {
         kLightsMerge,   // our lights: near lights merged, the nearest picked, inside or outside
         kLightsShadows, // our lights: the shadow assignment (the rest of it)
         kShadowChecks,  // our lights: the signature checks (has a light's surroundings changed?)
-        kShadowGather,  // our lights: the triangles of the maps drawn this frame gathered
+        kShadowGather,  // our lights: the triangles of the maps drawn this frame gathered (not in the rows below)
+        kShadowWmo,     // our lights' gathering and checks: the WMO placements walked, their groups' triangles
+        kShadowTerrain, // our lights' gathering and checks: the terrain chunks walked, their cells
+        kShadowModels,  // our lights' gathering: doodads' and game objects' triangles (AddModel)
+        kShadowObjects, // our lights: the visible game objects collected for the frame's gatherings
         kLightsGrid,    // our lights: the cells built
         kCoverFrame,    // our covers: the frame's data resolved for the terrain shader
         kGrassPrepare,  // our grass: chunks taken, runs built
