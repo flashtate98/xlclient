@@ -648,7 +648,7 @@ static int32_t Script_SetCharacterCreateZoomTuning(lua_State* L) {
     return 0;
 }
 
-// SetCharacterCreateFormSpacing(x, y): Two Forms side by side; from the middle of the scene to each form.
+// SetCharacterCreateFormSpacing(x, y): Two Forms side by side; where the other form stands, from the edited one.
 static int32_t Script_SetCharacterCreateFormSpacing(lua_State* L) {
     CharacterCreationSetFormSpacing(static_cast<float>(lua_tonumber(L, 1)), static_cast<float>(lua_tonumber(L, 2)));
     return 0;

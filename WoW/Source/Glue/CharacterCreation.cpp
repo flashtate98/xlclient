@@ -165,8 +165,8 @@ void ShowForm(bool altered) {
 
 // FlashWOW Two Forms side by side: the form not being edited stands next to the one that is, as its own component
 // (the companion), built from that form's parked look. It is never edited: the panel and the selectors work on
-// m_character only, so the two forms keep separate looks. The race's own form stands on the left, the altered
-// form on the right, whichever is being edited; the camera's zoom follows the edited one (m_character).
+// m_character only, so the two forms keep separate looks. As in Retail, the form being edited stands in the middle
+// and the other off to the side (SetCharacterCreateFormSpacing); switching forms swaps them.
 CCharacterComponent* s_companion = nullptr;
 struct CompanionState {
     int32_t race = 0;
@@ -177,9 +177,10 @@ struct CompanionState {
 };
 CompanionState s_companionState;
 uint32_t s_parkedGeneration = 1;    // bumped when the parked looks are thrown away (a new character)
-// From the middle to each form, in the scene's coordinates (SetCharacterCreateFormSpacing).
-float s_formOffsetX = 0.0f;
-float s_formOffsetY = 1.0f;
+// Where the other form stands, from the edited one in the middle, in the scene's coordinates
+// (SetCharacterCreateFormSpacing): X toward or away from the camera, Y across the view.
+float s_formOffsetX = -0.8f;
+float s_formOffsetY = 1.6f;
 
 void FreeCompanion() {
     if (!s_companion) {
@@ -194,20 +195,11 @@ void FreeCompanion() {
     s_companionState = CompanionState();
 }
 
-// Where a form stands: the race's own form on one side, the altered form on the other; the middle when alone.
-C3Vector FormPosition(bool altered) {
-    if (!s_companion) {
-        return C3Vector(0.0f, 0.0f, 0.0f);
-    }
-    const float side = altered ? 1.0f : -1.0f;
-    return C3Vector(s_formOffsetX * side, s_formOffsetY * side, 0.0f);
-}
-
 void PlaceCompanion() {
     if (!s_companion || !s_companion->m_data.m_model) {
         return;
     }
-    s_companion->m_data.m_model->SetWorldTransform(FormPosition(!s_viewingAlteredForm), CCharacterCreation::m_charFacing,
+    s_companion->m_data.m_model->SetWorldTransform(C3Vector(s_formOffsetX, s_formOffsetY, 0.0f), CCharacterCreation::m_charFacing,
         RetailCharacterGlueScale(s_companion));
 }
 
@@ -698,9 +690,8 @@ void CCharacterCreation::SetCharacterFacing(float facing) {
     if (CCharacterCreation::m_character->m_data.m_model) {
         C3Vector position(0.0f, 0.0f, 0.0f);
 #if defined(WOWDECOMP_RETAIL_MODELS)
-        // Not in the original: a Retail body is drawn at its world size (RetailCharacterGlueScale), and with Two Forms
-        // side by side each form stands on its own side (FormPosition).
-        position = FormPosition(s_viewingAlteredForm);
+        // Not in the original: a Retail body is drawn at its world size (RetailCharacterGlueScale); with Two Forms the
+        // other form stands beside it (PlaceCompanion).
         CCharacterCreation::m_character->m_data.m_model->SetWorldTransform(position, facing, RetailCharacterGlueScale(CCharacterCreation::m_character));
         PlaceCompanion();
 #else
