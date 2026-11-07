@@ -361,6 +361,18 @@ void Options(uint32_t chrModel, uint32_t classId, std::vector<Option>& options) 
     }
 }
 
+void RequiredChoices(uint32_t choiceId, std::vector<uint32_t>& needed) {
+    needed.clear();
+    Index& x = Ready();
+    if (!x.ready) return;
+    uint32_t rgb = 0;
+    EyeTint(choiceId, choiceId, rgb);
+    const Row* choice = x.choice->Find(choiceId);
+    const uint32_t requirement = choice ? x.choice->Value(*choice, "ChrCustomizationReqID") : 0;
+    const auto found = requirement ? x.choicesByRequirement.find(requirement) : x.choicesByRequirement.end();
+    if (found != x.choicesByRequirement.end()) needed = found->second;
+}
+
 bool RequirementsMet(uint32_t choiceId, const std::vector<uint32_t>& chosen) {
     Index& x = Ready();
     if (!x.ready) return true;

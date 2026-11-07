@@ -29,6 +29,9 @@ namespace Retail::Appearance
     // skins, for instance) are offered only alongside particular choices of another option
     // (ChrCustomizationReqChoice). True when the choice asks for none.
     bool RequirementsMet(uint32_t choiceId, const std::vector<uint32_t>& selected);
+    // The choices a choice's requirement asks for (one of them must be taken): a Death Knight skin colour asks for
+    // a Death Knight face. Empty when it asks for none.
+    void RequiredChoices(uint32_t choiceId, std::vector<uint32_t>& needed);
 
     // Class-implied options: unnamed options whose choices are each offered to a set of classes, never
     // shown in Retail's creator but set from the class (Void Elf's has one choice for Demon Hunters,

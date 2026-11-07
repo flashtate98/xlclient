@@ -1184,9 +1184,18 @@ bool RetailCustomizationPanel(const CCharacterComponent* character, std::vector<
             const std::vector<uint32_t>* own = nullptr;
             for (const auto& mine : ownClass)
                 if (mine.id == option.id) own = &mine.choices;
+            // A choice taken elsewhere may ask for particular choices of this option (a Death Knight skin colour
+            // asks for a Death Knight face): then only those are offered here, and the UI moves to the first of them.
+            std::vector<uint32_t> narrowed;
+            for (const uint32_t taken : choices) {
+                std::vector<uint32_t> needed;
+                Retail::Appearance::RequiredChoices(taken, needed);
+                for (const uint32_t id : needed)
+                    if (std::find(option.offered.begin(), option.offered.end(), id) != option.offered.end()) narrowed.push_back(id);
+            }
             for (const uint32_t id : option.offered)
                 panel.allowed.push_back((!own || std::find(own->begin(), own->end(), id) != own->end()) &&
-                    Retail::Appearance::RequirementsMet(id, choices));
+                    (narrowed.empty() || std::find(narrowed.begin(), narrowed.end(), id) != narrowed.end()));
             // Hidden too when its textures do not go with the choices taken (the faces of an unlocked NPC skin).
             panel.shows = Retail::Appearance::OptionShows(option.id, choices) && Retail::Appearance::OptionTextured(option.id, choices);
             options.push_back(std::move(panel));
