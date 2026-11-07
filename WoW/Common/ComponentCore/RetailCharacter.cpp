@@ -1143,7 +1143,8 @@ bool RetailCustomizationPanel(const CCharacterComponent* character, std::vector<
             panel.row = isRow ? row : -1;
             panel.stock = option.driven ? option.stock : -1;
             panel.choices = option.offered;
-            panel.shows = Retail::Appearance::OptionShows(option.id, choices);
+            // Hidden too when its textures do not go with the choices taken (the faces of an unlocked NPC skin).
+            panel.shows = Retail::Appearance::OptionShows(option.id, choices) && Retail::Appearance::OptionTextured(option.id, choices);
             options.push_back(std::move(panel));
         }
         if (isRow) ++row;

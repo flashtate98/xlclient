@@ -46,6 +46,10 @@ namespace Retail::Appearance
     // choice only applies alongside choices not taken (Eye Style, which shows only with certain eye colours)
     // does nothing for now. Options without elements count as showing.
     bool OptionShows(uint32_t optionId, const std::vector<uint32_t>& selected);
+    // FlashWOW: whether the option's textures go with the choices taken. False when some of its elements wait
+    // on another choice (a face's texture per skin colour) and none waits on one that is taken: the face
+    // options of an unlocked NPC skin, which has no face textures of its own.
+    bool OptionTextured(uint32_t optionId, const std::vector<uint32_t>& selected);
 
     // FlashWOW Death Knight eye colours: the Death Knight eye choice in other colours. They are not in the
     // tables; each is the Death Knight choice's ID packed with a colour index, offered right after it to

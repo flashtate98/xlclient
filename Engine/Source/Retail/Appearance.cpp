@@ -198,6 +198,23 @@ bool OptionDetails(uint32_t optionId, uint32_t& category, uint32_t& type) {
     return true;
 }
 
+bool OptionTextured(uint32_t optionId, const std::vector<uint32_t>& selected) {
+    Index& x = Ready(); if (!x.ready) return true;
+    const auto list = x.choicesByOption.find(optionId); if (list == x.choicesByOption.end()) return true;
+    bool waits = false;
+    for (const Row* choice : list->second) {
+        const auto elements = x.elementsByChoice.find(choice->id); if (elements == x.elementsByChoice.end()) continue;
+        for (const Row* element : elements->second) {
+            if (!x.element->Value(*element, "ChrCustomizationMaterialID")) continue;
+            const uint32_t needs = x.element->Value(*element, "RelatedChrCustomizationChoiceID");
+            if (!needs) continue;
+            waits = true;
+            if (std::find(selected.begin(), selected.end(), needs) != selected.end()) return true;
+        }
+    }
+    return !waits;
+}
+
 bool OptionShows(uint32_t optionId, const std::vector<uint32_t>& selected) {
     Index& x = Ready();
     if (!x.ready) return true;
