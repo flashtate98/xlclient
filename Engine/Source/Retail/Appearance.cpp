@@ -230,7 +230,20 @@ bool OptionShows(uint32_t optionId, const std::vector<uint32_t>& selected) {
             if (!needs || std::find(selected.begin(), selected.end(), needs) != selected.end()) return true;
         }
     }
-    return !anyElement;
+    if (anyElement) return false;
+    // An option with no elements of its own (Eye Style) works through the elements of other choices that wait on
+    // one of its choices (the special eye colours): it shows when a choice taken has such an element.
+    for (const uint32_t taken : selected) {
+        const auto elements = x.elementsByChoice.find(taken);
+        if (elements == x.elementsByChoice.end()) continue;
+        for (const Row* element : elements->second) {
+            const uint32_t needs = x.element->Value(*element, "RelatedChrCustomizationChoiceID");
+            if (!needs) continue;
+            for (const Row* choice : list->second)
+                if (choice->id == needs) return true;
+        }
+    }
+    return false;
 }
 
 bool ChoiceDetails(uint32_t choiceId, std::string& name, uint32_t& rgb) {
