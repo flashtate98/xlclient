@@ -163,6 +163,153 @@ void ShowForm(bool altered) {
     CGlueLoading::StartLoad(CCharacterCreation::m_character, 1);
 }
 
+// FlashWOW Two Forms side by side: the form not being edited stands next to the one that is, as its own component
+// (the companion), built from that form's parked look. It is never edited: the panel and the selectors work on
+// m_character only, so the two forms keep separate looks. The race's own form stands on the left, the altered
+// form on the right, whichever is being edited; the camera's zoom follows the edited one (m_character).
+CCharacterComponent* s_companion = nullptr;
+struct CompanionState {
+    int32_t race = 0;
+    uint32_t sex = 0;
+    int32_t classId = -1;
+    bool clothingHidden = false;
+    uint32_t generation = 0;
+};
+CompanionState s_companionState;
+uint32_t s_parkedGeneration = 1;    // bumped when the parked looks are thrown away (a new character)
+// From the middle to each form, in the scene's coordinates (SetCharacterCreateFormSpacing).
+float s_formOffsetX = 0.0f;
+float s_formOffsetY = 1.0f;
+
+void FreeCompanion() {
+    if (!s_companion) {
+        return;
+    }
+    if (s_companion->m_data.m_model && s_companion->m_data.m_model->m_attachParent) {
+        s_companion->m_data.m_model->DetachFromParent();
+    }
+    RetailCustomizationDiscard(s_companion);
+    CCharacterComponent::FreeComponent(s_companion);
+    s_companion = nullptr;
+    s_companionState = CompanionState();
+}
+
+// Where a form stands: the race's own form on one side, the altered form on the other; the middle when alone.
+C3Vector FormPosition(bool altered) {
+    if (!s_companion) {
+        return C3Vector(0.0f, 0.0f, 0.0f);
+    }
+    const float side = altered ? 1.0f : -1.0f;
+    return C3Vector(s_formOffsetX * side, s_formOffsetY * side, 0.0f);
+}
+
+void PlaceCompanion() {
+    if (!s_companion || !s_companion->m_data.m_model) {
+        return;
+    }
+    s_companion->m_data.m_model->SetWorldTransform(FormPosition(!s_viewingAlteredForm), CCharacterCreation::m_charFacing,
+        RetailCharacterGlueScale(s_companion));
+}
+
+// Dresses the companion as the edited form is dressed (Dress works on m_character).
+void DressCompanion() {
+    CCharacterComponent* edited = CCharacterCreation::m_character;
+    CCharacterCreation::m_character = s_companion;
+    CCharacterCreation::Dress();
+    CCharacterCreation::m_character = edited;
+}
+
+void BuildCompanion(int32_t race, uint32_t sex) {
+    FreeCompanion();
+    CreatureModelDataRec* modelRec = GetModelDataRec(race, sex);
+    CSimpleModelFFX* frame = CCharacterCreation::m_charCustomizeFrame;
+    if (!modelRec || !*modelRec->m_modelName || !frame || !frame->GetScene()) {
+        return;
+    }
+
+    // The companion is the other form, whose look is parked under the race's own ID.
+    ParkedForm& parked = s_parkedForms[SelectedBaseRace()][sex & 1];
+    ComponentData data;
+    if (parked.valid) {
+        data.SetPreferences(&parked.preferences);
+    }
+    data.m_preferences.m_raceID = race;
+    data.m_preferences.m_sexID = sex;
+    data.m_preferences.m_classId = CCharacterCreation::m_selectedClassID;
+    if (parked.valid) {
+        CCharacterComponent::ValidateComponentData(&data, COMPONENT_CONTEXT_0);
+    }
+
+    data.m_model = frame->GetScene()->CreateModel(modelRec->m_modelName, 0);
+    if (!data.m_model) {
+        return;
+    }
+    s_companion = CCharacterComponent::AllocComponent();
+    if (parked.valid) {
+        RetailCustomizationGiveExtras(s_companion, parked.extras);
+    }
+    frame->m_lightArray2[0].unk_01BC = 1;
+    data.m_model->m_lightingCallback = &CCharacterSelection::GenericLightingCallback;
+    data.m_model->m_lightingArg = frame->m_lightArray2;
+    data.m_model->SetBoneSequence(0xFFFFFFFF, 0, 0, 0, 1.0f, 1, 1);
+    data.m_flags |= 0x2;
+    s_companion->Init(&data, nullptr);
+
+    // A form not seen before gets a random look, which is then kept (and sent with the new character).
+    if (!parked.valid) {
+        s_companion->SetRandomSkin(COMPONENT_CONTEXT_0);
+        s_companion->SetRandomHairColor(COMPONENT_CONTEXT_0);
+        s_companion->SetRandomHairStyle(COMPONENT_CONTEXT_0);
+        s_companion->SetRandomFace(COMPONENT_CONTEXT_0);
+        s_companion->SetRandomFacialFeature(COMPONENT_CONTEXT_0);
+        parked.valid = true;
+        s_companion->GetPreferences(&parked.preferences);
+        parked.extras.clear();
+    }
+
+    DressCompanion();
+    s_companion->RenderPrep(0);
+    if (frame->m_model) {
+        s_companion->m_data.m_model->AttachToParent(frame->m_model, 0, nullptr, 0);
+    }
+    s_companion->RenderPrep(1);
+    s_companion->m_data.m_model->IsDrawable(1, 1);
+
+    s_companionState.race = race;
+    s_companionState.sex = sex;
+    s_companionState.classId = CCharacterCreation::m_selectedClassID;
+    s_companionState.clothingHidden = s_clothingHidden;
+    s_companionState.generation = s_parkedGeneration;
+}
+
+// Every frame: the companion follows the edited form's race, sex, class and clothing, or goes away.
+void SyncCompanion() {
+    CCharacterComponent* character = CCharacterCreation::m_character;
+    if (!character || !CharacterCreationHasAlteredForm()) {
+        if (s_companion) {
+            FreeCompanion();
+            CCharacterCreation::SetCharacterFacing(CCharacterCreation::m_charFacing);
+        }
+        return;
+    }
+
+    const int32_t base = SelectedBaseRace();
+    const int32_t race = s_viewingAlteredForm ? base : static_cast<int32_t>(AlteredFormRace(base));
+    const uint32_t sex = character->m_data.m_preferences.m_sexID;
+    if (!s_companion || s_companionState.race != race || s_companionState.sex != sex ||
+        s_companionState.generation != s_parkedGeneration) {
+        BuildCompanion(race, sex);
+        CCharacterCreation::SetCharacterFacing(CCharacterCreation::m_charFacing);
+        return;
+    }
+    if (s_companionState.classId != CCharacterCreation::m_selectedClassID || s_companionState.clothingHidden != s_clothingHidden) {
+        s_companionState.classId = CCharacterCreation::m_selectedClassID;
+        s_companionState.clothingHidden = s_clothingHidden;
+        DressCompanion();
+        s_companion->RenderPrep(1);
+    }
+}
+
 }
 
 bool CharacterCreationHasAlteredForm() {
@@ -263,6 +410,14 @@ bool CharacterCreationZoomCamera(CSimpleModel* frame, C3Vector& eye, C3Vector& t
     eye = C3Vector(eye.x + (closeEye.x - eye.x) * t, eye.y + (closeEye.y - eye.y) * t, eye.z + (closeEye.z - eye.z) * t);
     target = C3Vector(target.x + (aim.x - target.x) * t, target.y + (aim.y - target.y) * t, target.z + (aim.z - target.z) * t);
     return true;
+}
+
+void CharacterCreationSetFormSpacing(float x, float y) {
+    s_formOffsetX = x;
+    s_formOffsetY = y;
+    if (CCharacterCreation::m_character) {
+        CCharacterCreation::SetCharacterFacing(CCharacterCreation::m_charFacing);
+    }
 }
 
 void CharacterCreationSetZoomTuning(float up, float right, float minDistance, float frame) {
@@ -439,6 +594,9 @@ void CCharacterCreation::Initialize() {
 // VERIFY: 3b1595cf manual
 // OFFSET: 0x004E1E20
 void CCharacterCreation::Shutdown() {
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    FreeCompanion();
+#endif
     if (CCharacterCreation::m_character) {
         CCharacterComponent::FreeComponent(CCharacterCreation::m_character);
         CCharacterCreation::m_character = nullptr;
@@ -458,6 +616,9 @@ void CCharacterCreation::Shutdown() {
 // VERIFY: e90576fb auto
 // OFFSET: 0x004DFA50
 int32_t CCharacterCreation::Idle(const void* data, void* param) {
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    SyncCompanion();    // Not in the original: FlashWOW Two Forms side by side
+#endif
     CGlueLoading::Idle(CCharacterCreation::m_character);
     return 1;
 }
@@ -537,8 +698,11 @@ void CCharacterCreation::SetCharacterFacing(float facing) {
     if (CCharacterCreation::m_character->m_data.m_model) {
         C3Vector position(0.0f, 0.0f, 0.0f);
 #if defined(WOWDECOMP_RETAIL_MODELS)
-        // Not in the original: a Retail body is drawn at its world size (RetailCharacterGlueScale).
+        // Not in the original: a Retail body is drawn at its world size (RetailCharacterGlueScale), and with Two Forms
+        // side by side each form stands on its own side (FormPosition).
+        position = FormPosition(s_viewingAlteredForm);
         CCharacterCreation::m_character->m_data.m_model->SetWorldTransform(position, facing, RetailCharacterGlueScale(CCharacterCreation::m_character));
+        PlaceCompanion();
 #else
         CCharacterCreation::m_character->m_data.m_model->SetWorldTransform(position, facing, 1.0f);
 #endif
@@ -1115,6 +1279,8 @@ void CCharacterCreation::ResetCharCustomizeInfo() {
     // Not in the original: FlashWOW Two Forms; a new character starts in its own form with no other look.
     s_viewingAlteredForm = false;
     s_parkedForms.clear();
+    ++s_parkedGeneration;
+    FreeCompanion();
 #endif
 
     if (CCharacterCreation::m_charCustomizeFrame->m_model) {

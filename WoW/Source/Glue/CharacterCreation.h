@@ -80,6 +80,9 @@ void CharacterCreationSetZoom(float zoom, bool instant);
 // closest the camera may come to it (world units; never under 0.45), and the share of the character's height
 // the close-up frames (0: the client's own, 0.35).
 void CharacterCreationSetZoomTuning(float up, float right, float minDistance, float frame);
+// Not in the original: FlashWOW Two Forms side by side. From the middle of the scene to each form (the race's own
+// form at minus this, the altered form at plus), in the scene's coordinates.
+void CharacterCreationSetFormSpacing(float x, float y);
 // The altered form's look (skin, face, hair style, hair colour, facial hair) and Retail rows for the character
 // about to be created; false when it has none (the player never showed that form).
 bool CharacterCreationAlteredFormLook(uint8_t look[5], std::vector<std::pair<uint32_t, uint32_t>>& extras);

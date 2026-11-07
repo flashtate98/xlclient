@@ -648,6 +648,12 @@ static int32_t Script_SetCharacterCreateZoomTuning(lua_State* L) {
     return 0;
 }
 
+// SetCharacterCreateFormSpacing(x, y): Two Forms side by side; from the middle of the scene to each form.
+static int32_t Script_SetCharacterCreateFormSpacing(lua_State* L) {
+    CharacterCreationSetFormSpacing(static_cast<float>(lua_tonumber(L, 1)), static_cast<float>(lua_tonumber(L, 2)));
+    return 0;
+}
+
 static int32_t Script_ZoomCharacterCreateCamera(lua_State* L) {
     if (!lua_isnumber(L, 1)) {
         luaL_error(L, "Usage: ZoomCharacterCreateCamera(steps)");
@@ -759,6 +765,7 @@ static FrameScript_Method s_retailScriptFunctions[] = {
     { "SetCharacterCreateZoom", &Script_SetCharacterCreateZoom },
     { "ZoomCharacterCreateCamera", &Script_ZoomCharacterCreateCamera },
     { "SetCharacterCreateZoomTuning", &Script_SetCharacterCreateZoomTuning },
+    { "SetCharacterCreateFormSpacing", &Script_SetCharacterCreateFormSpacing },
     { "IsCharacterClothingHidden", &Script_IsCharacterClothingHidden },
     { "SetCharacterClothingHidden", &Script_SetCharacterClothingHidden },
     { "HasAlteredForm", &Script_HasAlteredForm },
