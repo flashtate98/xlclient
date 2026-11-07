@@ -75,6 +75,7 @@ struct RetailPanelOption {
     int32_t stock = -1;
     std::vector<uint32_t> choices;   // offered, in order
     bool shows = true;               // Retail::Appearance::OptionShows with the choices taken
+    std::vector<bool> allowed;       // per choice: the character's class may take it (Death Knight skins)
 };
 bool RetailCustomizationPanel(const CCharacterComponent* character, std::vector<RetailPanelOption>& options);
 

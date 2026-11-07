@@ -398,10 +398,16 @@ struct ResolvedOption {
 // drive take the Nth offered choice for the character's value (wrapping); the others take the stored
 // extra choice, or their first. A choice that asks for a choice of an earlier option is offered only
 // when that choice was taken.
+constexpr uint32_t kListClass = 6;    // Death Knight: the one class with choices of its own (skin colours)
+
 uint32_t ResolveFor(const CharacterPreferences& prefs, const std::map<uint32_t, uint32_t>* extras, uint32_t chrModel,
     std::vector<ResolvedOption>& resolved, std::vector<uint32_t>& choices) {
+    // FlashWOW: the choices are listed as a Death Knight sees them, whatever the class, so a 3.3.5 value means the
+    // same choice for every class: the Death Knight skin colours keep their place (and CharSections keeps them for
+    // Death Knights) instead of every later colour moving up one place for other classes. The panel greys out what
+    // the class may not take (RetailCustomizationPanel).
     std::vector<Retail::Appearance::Option> options;
-    Retail::Appearance::Options(chrModel, prefs.m_classId, options);
+    Retail::Appearance::Options(chrModel, kListClass, options);
     std::vector<int32_t> driven(options.size(), -1);
     for (const Stock stock : {Stock::Skin, Stock::Face, Stock::HairStyle, Stock::HairColor, Stock::Facial}) {
         bool found = false;
@@ -1131,6 +1137,9 @@ bool RetailCustomizationPanel(const CCharacterComponent* character, std::vector<
     std::vector<ResolvedOption> resolved;
     std::vector<uint32_t> choices;
     Resolve(character, chrModel, resolved, choices);
+    // What the character's own class may take, by option.
+    std::vector<Retail::Appearance::Option> ownClass;
+    Retail::Appearance::Options(chrModel, character->m_data.m_preferences.m_classId, ownClass);
     int32_t row = 0;
     for (const auto& option : resolved) {
         const bool isRow = option.Row();
@@ -1143,6 +1152,11 @@ bool RetailCustomizationPanel(const CCharacterComponent* character, std::vector<
             panel.row = isRow ? row : -1;
             panel.stock = option.driven ? option.stock : -1;
             panel.choices = option.offered;
+            const std::vector<uint32_t>* own = nullptr;
+            for (const auto& mine : ownClass)
+                if (mine.id == option.id) own = &mine.choices;
+            for (const uint32_t id : option.offered)
+                panel.allowed.push_back(!own || std::find(own->begin(), own->end(), id) != own->end());
             // Hidden too when its textures do not go with the choices taken (the faces of an unlocked NPC skin).
             panel.shows = Retail::Appearance::OptionShows(option.id, choices) && Retail::Appearance::OptionTextured(option.id, choices);
             options.push_back(std::move(panel));

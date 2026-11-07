@@ -660,10 +660,11 @@ static int32_t Script_ZoomCharacterCreateCamera(lua_State* L) {
 // FlashWOW customization panel (1-based, like the stock functions). Every option the player can change, the
 // five the 3.3.5 selectors drive included, with the category it is listed under.
 //   GetCustomizationPanelCount() -> number of options (0 for stock bodies)
-//   GetCustomizationPanelOption(index) -> name, choice, choiceCount, category, isCheckbox, isStock, shows (false: no
+//   GetCustomizationPanelOption(index) -> name, choice, choiceCount, category, isCheckbox, isStock, shows, stride (false: no
 //       choice changes the look with the other choices taken, as Eye Style with an ordinary eye colour)
-//   GetCustomizationPanelChoices(index) -> name1, swatch1, id1, name2, swatch2, id2, ... (swatch: 0xRRGGBB, or -1 for
-//       none; name: "" for unnamed choices; id: the ChrCustomizationChoice ID)
+//       stride: how many values GetCustomizationPanelChoices returns per choice (4)
+//   GetCustomizationPanelChoices(index) -> name1, swatch1, id1, allowed1, name2, ... (swatch: 0xRRGGBB, or -1 for
+//       none; name: "" for unnamed choices; id: the ChrCustomizationChoice ID; allowed: the class may take it)
 //   SetCustomizationPanelChoice(index, choice)
 static bool PanelOptions(std::vector<RetailPanelOption>& options) {
     return CCharacterCreation::m_character && RetailCustomizationPanel(CCharacterCreation::m_character, options);
@@ -691,7 +692,8 @@ static int32_t Script_GetCustomizationPanelOption(lua_State* L) {
     lua_pushboolean(L, option.type == 1);
     lua_pushboolean(L, option.stock >= 0);
     lua_pushboolean(L, option.shows);
-    return 7;
+    lua_pushnumber(L, 4);    // values per choice from GetCustomizationPanelChoices
+    return 8;
 }
 
 static int32_t Script_GetCustomizationPanelChoices(lua_State* L) {
@@ -702,18 +704,21 @@ static int32_t Script_GetCustomizationPanelChoices(lua_State* L) {
         return 0;
     }
     const auto& choices = options[index].choices;
-    if (!lua_checkstack(L, static_cast<int>(choices.size() * 3 + 4))) {
+    if (!lua_checkstack(L, static_cast<int>(choices.size() * 4 + 4))) {
         return 0;
     }
-    for (const uint32_t choice : choices) {
+    const auto& allowed = options[index].allowed;
+    for (size_t k = 0; k < choices.size(); ++k) {
+        const uint32_t choice = choices[k];
         std::string name;
         uint32_t rgb = 0;
         const bool swatch = Retail::Appearance::ChoiceDetails(choice, name, rgb);
         lua_pushstring(L, name.c_str());
         lua_pushnumber(L, swatch ? static_cast<double>(rgb) : -1.0);
         lua_pushnumber(L, static_cast<double>(choice));
+        lua_pushboolean(L, k >= allowed.size() || allowed[k]);
     }
-    return static_cast<int32_t>(choices.size() * 3);
+    return static_cast<int32_t>(choices.size() * 4);
 }
 
 static int32_t Script_SetCustomizationPanelChoice(lua_State* L) {
