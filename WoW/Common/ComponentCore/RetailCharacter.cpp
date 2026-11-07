@@ -402,12 +402,14 @@ constexpr uint32_t kListClass = 6;    // Death Knight: the one class with choice
 
 uint32_t ResolveFor(const CharacterPreferences& prefs, const std::map<uint32_t, uint32_t>* extras, uint32_t chrModel,
     std::vector<ResolvedOption>& resolved, std::vector<uint32_t>& choices) {
-    // FlashWOW: the choices are listed as a Death Knight sees them, whatever the class, so a 3.3.5 value means the
-    // same choice for every class: the Death Knight skin colours keep their place (and CharSections keeps them for
-    // Death Knights) instead of every later colour moving up one place for other classes. The panel greys out what
-    // the class may not take (RetailCustomizationPanel).
-    std::vector<Retail::Appearance::Option> options;
-    Retail::Appearance::Options(chrModel, kListClass, options);
+    // The options are the class's own (a Death Knight has its own Eye Color, with the glowing eyes). The five the
+    // 3.3.5 selectors drive list their choices as a Death Knight sees them, whatever the class, so a 3.3.5 value
+    // means the same choice for every class: the Death Knight skin colours keep their place (and CharSections keeps
+    // them for Death Knights) instead of every later colour moving up for other classes. RetailCustomizationPanel
+    // leaves out what the class may not take.
+    std::vector<Retail::Appearance::Option> options, stable;
+    Retail::Appearance::Options(chrModel, prefs.m_classId, options);
+    Retail::Appearance::Options(chrModel, kListClass, stable);
     std::vector<int32_t> driven(options.size(), -1);
     for (const Stock stock : {Stock::Skin, Stock::Face, Stock::HairStyle, Stock::HairColor, Stock::Facial}) {
         bool found = false;
@@ -418,6 +420,30 @@ uint32_t ResolveFor(const CharacterPreferences& prefs, const std::map<uint32_t, 
                     found = true;
                 }
     }
+    for (size_t i = 0; i < options.size(); ++i) {
+        if (driven[i] < 0) continue;
+        for (const auto& same : stable)
+            if (same.id == options[i].id && same.choices.size() > options[i].choices.size()) options[i].choices = same.choices;
+    }
+    // A choice may ask for a choice of another option (the Death Knight skin colours ask for a Death Knight eye
+    // colour, which comes later in the list). Requirements are checked against a first pass that takes every
+    // option's choice unfiltered.
+    std::vector<uint32_t> first;
+    for (size_t i = 0; i < options.size(); ++i) {
+        const auto& list = options[i].choices;
+        if (list.empty()) { first.push_back(0); continue; }
+        uint32_t index = 0;
+        if (driven[i] >= 0) {
+            index = StockValue(prefs, static_cast<Stock>(driven[i])) % list.size();
+        } else if (extras) {
+            const auto stored = extras->find(options[i].id);
+            if (stored != extras->end()) {
+                const auto at = std::find(list.begin(), list.end(), stored->second);
+                if (at != list.end()) index = static_cast<uint32_t>(at - list.begin());
+            }
+        }
+        first.push_back(list[index]);
+    }
     resolved.clear();
     choices.clear();
     for (size_t i = 0; i < options.size(); ++i) {
@@ -426,9 +452,12 @@ uint32_t ResolveFor(const CharacterPreferences& prefs, const std::map<uint32_t, 
         option.name = options[i].name;
         option.driven = driven[i] >= 0;
         option.stock = driven[i];
+        // A driven option keeps every choice in place (its value picks by position); the panel hides the ones whose
+        // requirements are not met. The others offer only what is met.
         for (const uint32_t id : options[i].choices)
-            if (Retail::Appearance::RequirementsMet(id, choices)) option.offered.push_back(id);
+            if (option.driven || Retail::Appearance::RequirementsMet(id, first)) option.offered.push_back(id);
         if (option.offered.empty()) option.offered = options[i].choices;
+        if (option.offered.empty()) continue;
         if (option.driven) {
             option.index = StockValue(prefs, static_cast<Stock>(driven[i])) % option.offered.size();
         } else if (extras) {
@@ -1156,7 +1185,8 @@ bool RetailCustomizationPanel(const CCharacterComponent* character, std::vector<
             for (const auto& mine : ownClass)
                 if (mine.id == option.id) own = &mine.choices;
             for (const uint32_t id : option.offered)
-                panel.allowed.push_back(!own || std::find(own->begin(), own->end(), id) != own->end());
+                panel.allowed.push_back((!own || std::find(own->begin(), own->end(), id) != own->end()) &&
+                    Retail::Appearance::RequirementsMet(id, choices));
             // Hidden too when its textures do not go with the choices taken (the faces of an unlocked NPC skin).
             panel.shows = Retail::Appearance::OptionShows(option.id, choices) && Retail::Appearance::OptionTextured(option.id, choices);
             options.push_back(std::move(panel));
