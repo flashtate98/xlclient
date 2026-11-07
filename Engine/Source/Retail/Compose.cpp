@@ -301,6 +301,7 @@ bool ComposeTextures(uint32_t chrModel, const std::vector<Appearance::TextureLay
     std::vector<Appearance::TextureSection> sections;
     Appearance::Sections(layout, sections);
     std::map<uint32_t, ComposedTexture> byType;
+    std::map<uint32_t, Image> lenderSkins;    // FileDataID -> decoded, for borrowed layers (see below)
     for (const Appearance::TextureLayer& layer : layers) { // already in paint order
         std::vector<uint8_t> bytes;
         Image image;
@@ -349,9 +350,54 @@ bool ComposeTextures(uint32_t chrModel, const std::vector<Appearance::TextureLay
             Paint(target.image, image, {0, 0, target.image.width, target.image.height}, layer.blendMode);
             continue;
         }
+        // FlashWOW: a layer an unlocked skin borrows from an ordinary one. Pelvis and chest textures are often
+        // that skin with the underwear painted on and no alpha; drawn as they are, the lender's skin shows on an
+        // unlocked skin's thighs. Where such a texture matches the lender's own skin it is made see-through, so
+        // only the underwear is kept. A texture with alpha of its own is left alone.
+        const Image* lender = nullptr;
+        if (layer.lenderSkin && layer.textureType == 1 && haveSheet) {
+            bool opaque = true;
+            for (size_t i = 3; i < image.rgba.size() && opaque; i += 4) opaque = image.rgba[i] == 255;
+            if (opaque) {
+                auto cached = lenderSkins.find(layer.lenderSkin);
+                if (cached == lenderSkins.end()) {
+                    std::vector<uint8_t> skinBytes;
+                    Image skin;
+                    std::string skinError;
+                    if (!(fetch(layer.lenderSkin, skinBytes, context) && DecodeBlp(skinBytes, skin, skinError))) skin = Image{};
+                    cached = lenderSkins.emplace(layer.lenderSkin, std::move(skin)).first;
+                }
+                if (cached->second.width) lender = &cached->second;
+            }
+        }
+        const auto underwearOnly = [&](const Appearance::TextureSection& section) {
+            Image masked = image;
+            for (uint32_t y = 0; y < image.height; ++y)
+                for (uint32_t x = 0; x < image.width; ++x) {
+                    // The same texel on the lender's skin, through the sheet.
+                    const uint32_t sheetX = section.x + uint32_t((uint64_t(x) * 2 + 1) * section.width / (uint64_t(image.width) * 2));
+                    const uint32_t sheetY = section.y + uint32_t((uint64_t(y) * 2 + 1) * section.height / (uint64_t(image.height) * 2));
+                    const uint32_t lx = std::min(lender->width - 1, uint32_t(uint64_t(sheetX) * lender->width / sheetWidth));
+                    const uint32_t ly = std::min(lender->height - 1, uint32_t(uint64_t(sheetY) * lender->height / sheetHeight));
+                    const uint8_t* s = &lender->rgba[(size_t(ly) * lender->width + lx) * 4];
+                    uint8_t* t = &masked.rgba[(size_t(y) * image.width + x) * 4];
+                    int diff = 0;
+                    for (int ch = 0; ch < 3; ++ch) diff = std::max(diff, std::abs(int(t[ch]) - int(s[ch])));
+                    // Within kSame of the skin: see-through; past kDifferent: solid; between: a soft edge.
+                    constexpr int kSame = 20, kDifferent = 48;
+                    t[3] = uint8_t(std::clamp((diff - kSame) * 255 / (kDifferent - kSame), 0, 255));
+                }
+            return masked;
+        };
         for (const Appearance::TextureSection& section : sections)
-            if (section.sectionType < 32 && (uint32_t(mask) >> section.sectionType & 1))
-                Paint(target.image, image, {section.x, section.y, section.width, section.height}, layer.blendMode);
+            if (section.sectionType < 32 && (uint32_t(mask) >> section.sectionType & 1)) {
+                if (lender) {
+                    const Image masked = underwearOnly(section);
+                    Paint(target.image, masked, {section.x, section.y, section.width, section.height}, layer.blendMode);
+                } else {
+                    Paint(target.image, image, {section.x, section.y, section.width, section.height}, layer.blendMode);
+                }
+            }
     }
     for (auto& entry : byType) out.push_back(std::move(entry.second));
     return !out.empty();

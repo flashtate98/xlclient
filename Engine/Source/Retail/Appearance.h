@@ -99,6 +99,10 @@ namespace Retail::Appearance
         uint32_t blendMode = 0;       // the character compositor's blend enum
         uint32_t sectionMask = 0;     // body sections it covers (0xFFFFFFFF: the whole texture)
         uint32_t fileDataId = 0;      // the BLP, from TextureFileData
+        // FlashWOW: set on a layer an unlocked choice borrows from an ordinary one (see TextureLayers): the
+        // lender's own whole-sheet body skin. A borrowed pelvis or chest texture is often the lender's skin
+        // with the underwear painted on, without alpha; the compositor keeps only where it differs from this.
+        uint32_t lenderSkin = 0;
     };
     struct TextureSection {
         uint32_t sectionType = 0, x = 0, y = 0, width = 0, height = 0;

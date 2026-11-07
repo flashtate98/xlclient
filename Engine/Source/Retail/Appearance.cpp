@@ -510,14 +510,25 @@ void TextureLayers(uint32_t chrModel, const std::vector<uint32_t>& choices, std:
         if (!option || x.option->Value(*option, "ChrModelID") != chrModel) continue;
         const auto elements = x.elementsByChoice.find(id);
         if (elements == x.elementsByChoice.end()) continue;
-        const auto paint = [&](const Row* material) {
+        const auto paint = [&](const Row* material, uint32_t lenderSkin = 0) {
             const uint32_t target = x.material->Value(*material, "ChrModelTextureTargetID");
             const uint32_t file = MaterialFile(x, x.material->Value(*material, "MaterialResourcesID"));
             for (const Row* layer : layoutLayers->second) {
                 if (x.textureLayer->Value(*layer, "ChrModelTextureTargetID") != target) continue;
                 layers.push_back({x.textureLayer->Value(*layer, "TextureType"), x.textureLayer->Value(*layer, "Layer"),
-                    x.textureLayer->Value(*layer, "BlendMode"), x.textureLayer->Value(*layer, "TextureSectionTypeBitMask"), file});
+                    x.textureLayer->Value(*layer, "BlendMode"), x.textureLayer->Value(*layer, "TextureSectionTypeBitMask"), file,
+                    lenderSkin});
             }
+        };
+        // The whole-sheet body skin a material paints, if it paints one (0 otherwise).
+        const auto wholeSkin = [&](const Row* material) -> uint32_t {
+            const uint32_t target = x.material->Value(*material, "ChrModelTextureTargetID");
+            for (const Row* layer : layoutLayers->second)
+                if (x.textureLayer->Value(*layer, "ChrModelTextureTargetID") == target &&
+                    x.textureLayer->Value(*layer, "TextureType") == 1 &&
+                    x.textureLayer->Value(*layer, "TextureSectionTypeBitMask") == 0xFFFFFFFFu)
+                    return MaterialFile(x, x.material->Value(*material, "MaterialResourcesID"));
+            return 0;
         };
         // A material element may wait for a related choice (a face's texture per skin colour, a tattoo
         // colour per tattoo). Demon Hunter blindfolds are textured only alongside the Demon Hunter fel
@@ -565,6 +576,14 @@ void TextureLayers(uint32_t chrModel, const std::vector<uint32_t>& choices, std:
                     if (other->id != id && (!req || x.requirement->Value(*req, "ReqType") == kReqClass)) { ordinary = other; break; }
                 }
             const auto lent = ordinary ? x.elementsByChoice.find(ordinary->id) : x.elementsByChoice.end();
+            // The lender's own body skin, so the compositor can tell its skin from the underwear on what it lends.
+            uint32_t lenderSkin = 0;
+            if (lent != x.elementsByChoice.end())
+                for (const Row* element : lent->second) {
+                    const uint32_t materialId = x.element->Value(*element, "ChrCustomizationMaterialID");
+                    const Row* material = materialId ? x.material->Find(materialId) : nullptr;
+                    if (material && !lenderSkin) lenderSkin = wholeSkin(material);
+                }
             if (lent != x.elementsByChoice.end())
                 for (const Row* element : lent->second) {
                     const uint32_t materialId = x.element->Value(*element, "ChrCustomizationMaterialID");
@@ -575,7 +594,7 @@ void TextureLayers(uint32_t chrModel, const std::vector<uint32_t>& choices, std:
                     const uint32_t target = x.material->Value(*material, "ChrModelTextureTargetID");
                     if (std::find(painted.begin(), painted.end(), target) != painted.end()) continue;
                     painted.push_back(target);
-                    paint(material);
+                    paint(material, lenderSkin);
                 }
         }
     }
