@@ -83,6 +83,9 @@ void CharacterCreationSetZoomTuning(float up, float right, float minDistance, fl
 // Not in the original: FlashWOW Two Forms side by side. Where the form not being edited stands, from the edited one
 // in the middle of the scene, in the scene's coordinates (X toward or away from the camera, Y across the view).
 void CharacterCreationSetFormSpacing(float x, float y);
+// Not in the original: FlashWOW class gear preview. The items (Item.dbc IDs) the create screen character wears instead
+// of its starting outfit, weapons included; none for the starting outfit.
+void CharacterCreationSetPreviewGear(const std::vector<int32_t>& items);
 // The altered form's look (skin, face, hair style, hair colour, facial hair) and Retail rows for the character
 // about to be created; false when it has none (the player never showed that form).
 bool CharacterCreationAlteredFormLook(uint8_t look[5], std::vector<std::pair<uint32_t, uint32_t>>& extras);

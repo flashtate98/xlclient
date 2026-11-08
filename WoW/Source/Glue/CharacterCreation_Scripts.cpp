@@ -648,6 +648,16 @@ static int32_t Script_SetCharacterCreateZoomTuning(lua_State* L) {
     return 0;
 }
 
+// SetCharacterCreatePreviewGear(itemID, itemID, ...): the class gear preview; no arguments for the starting outfit.
+static int32_t Script_SetCharacterCreatePreviewGear(lua_State* L) {
+    std::vector<int32_t> items;
+    for (int32_t i = 1; i <= lua_gettop(L); ++i) {
+        if (lua_isnumber(L, i)) items.push_back(static_cast<int32_t>(lua_tonumber(L, i)));
+    }
+    CharacterCreationSetPreviewGear(items);
+    return 0;
+}
+
 // SetCharacterCreateFormSpacing(x, y): Two Forms side by side; where the other form stands, from the edited one.
 static int32_t Script_SetCharacterCreateFormSpacing(lua_State* L) {
     CharacterCreationSetFormSpacing(static_cast<float>(lua_tonumber(L, 1)), static_cast<float>(lua_tonumber(L, 2)));
@@ -766,6 +776,7 @@ static FrameScript_Method s_retailScriptFunctions[] = {
     { "ZoomCharacterCreateCamera", &Script_ZoomCharacterCreateCamera },
     { "SetCharacterCreateZoomTuning", &Script_SetCharacterCreateZoomTuning },
     { "SetCharacterCreateFormSpacing", &Script_SetCharacterCreateFormSpacing },
+    { "SetCharacterCreatePreviewGear", &Script_SetCharacterCreatePreviewGear },
     { "IsCharacterClothingHidden", &Script_IsCharacterClothingHidden },
     { "SetCharacterClothingHidden", &Script_SetCharacterClothingHidden },
     { "HasAlteredForm", &Script_HasAlteredForm },

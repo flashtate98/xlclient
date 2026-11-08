@@ -17,6 +17,7 @@
 #include "WoW/Source/DB/Rec/ChrRacesRec.h"
 #include "WoW/Source/DB/Rec/CreatureModelDataRec.h"
 #include "WoW/Source/DB/Rec/ItemDisplayInfoRec.h"
+#include "WoW/Source/DB/Rec/ItemRec.h"
 #include "WoW/Source/Game/GameClient/CDrawBowString.h"
 #include "WoW/Source/Glue/CGlueLoading.h"
 #include "WoW/Source/Glue/CGlueMgr.h"
@@ -99,6 +100,10 @@ struct ParkedForm {
 
 bool s_viewingAlteredForm = false;
 bool s_clothingHidden = false;
+// FlashWOW class gear preview (SetCharacterCreatePreviewGear): items the character wears and holds instead of its
+// starting outfit, by item ID (Item.dbc); empty for the starting outfit.
+std::vector<int32_t> s_previewItems;
+uint32_t s_previewGeneration = 0;
 // Create screen zoom (CharacterCreationZoom): 0 shows the scene's own camera, 1 the character's head close up.
 // s_zoom eases toward s_zoomGoal every frame.
 float s_zoom = 0.0f;
@@ -174,6 +179,7 @@ struct CompanionState {
     int32_t classId = -1;
     bool clothingHidden = false;
     uint32_t generation = 0;
+    uint32_t preview = 0;
 };
 CompanionState s_companionState;
 uint32_t s_parkedGeneration = 1;    // bumped when the parked looks are thrown away (a new character)
@@ -272,6 +278,7 @@ void BuildCompanion(int32_t race, uint32_t sex) {
     s_companionState.classId = CCharacterCreation::m_selectedClassID;
     s_companionState.clothingHidden = s_clothingHidden;
     s_companionState.generation = s_parkedGeneration;
+    s_companionState.preview = s_previewGeneration;
 }
 
 // Every frame: the companion follows the edited form's race, sex, class and clothing, or goes away.
@@ -294,9 +301,11 @@ void SyncCompanion() {
         CCharacterCreation::SetCharacterFacing(CCharacterCreation::m_charFacing);
         return;
     }
-    if (s_companionState.classId != CCharacterCreation::m_selectedClassID || s_companionState.clothingHidden != s_clothingHidden) {
+    if (s_companionState.classId != CCharacterCreation::m_selectedClassID || s_companionState.clothingHidden != s_clothingHidden ||
+        s_companionState.preview != s_previewGeneration) {
         s_companionState.classId = CCharacterCreation::m_selectedClassID;
         s_companionState.clothingHidden = s_clothingHidden;
+        s_companionState.preview = s_previewGeneration;
         DressCompanion();
         s_companion->RenderPrep(1);
     }
@@ -488,6 +497,18 @@ bool CharacterCreationSetStockChoice(CHAR_CUSTOMIZATION_TYPE type, uint32_t coun
         return true;
     }
     return false;
+}
+
+void CharacterCreationSetPreviewGear(const std::vector<int32_t>& items) {
+    if (items == s_previewItems) {
+        return;
+    }
+    s_previewItems = items;
+    ++s_previewGeneration;
+    if (CCharacterCreation::m_character) {
+        CCharacterCreation::Dress();
+        CGlueLoading::StartLoad(CCharacterCreation::m_character, 1);
+    }
 }
 
 bool CharacterCreationClothingHidden() {
@@ -911,8 +932,9 @@ int32_t CCharacterCreation::GetRandomClassID() {
 // OFFSET: 0x004E0FD0
 void CCharacterCreation::Dress() {
 #if defined(WOWDECOMP_RETAIL_MODELS)
-    // Not in the original: FlashWOW "show clothing" off; everything comes off, weapons included.
-    if (s_clothingHidden) {
+    // Not in the original: FlashWOW "show clothing" off; everything comes off, weapons included. The class gear
+    // preview (race and class screen) shows whatever Show Clothing says.
+    if (s_clothingHidden && s_previewItems.empty()) {
         for (uint32_t i = 0; i < NUM_ITEM_SLOTS; i++) {
             CCharacterCreation::m_character->RemoveItem(static_cast<ITEM_SLOT>(i));
         }
@@ -920,6 +942,63 @@ void CCharacterCreation::Dress() {
         CCharacterComponent::RemoveHandItem(CCharacterCreation::m_character->m_data.m_model, INVSLOT_OFFHAND, SHEATHE_NONE, false);
         CCharacterComponent::RemoveHandItem(CCharacterCreation::m_character->m_data.m_model, INVSLOT_OFFHAND, SHEATHE_NONE, true);
         CCharacterComponent::RemoveHandItem(CCharacterCreation::m_character->m_data.m_model, INVSLOT_RANGED, SHEATHE_NONE, false);
+        return;
+    }
+    // Not in the original: FlashWOW class gear preview; the class's armour set instead of the starting outfit.
+    // Weapons go in the hands: the first one-hander in the main hand, a second in the off hand; off-hand items and
+    // shields in the off hand; bows, guns, wands and thrown weapons in the ranged slot. Anything Item.dbc does not
+    // know is skipped.
+    if (!s_previewItems.empty() && CCharacterCreation::m_existingCharacterIndex < 0) {
+        for (uint32_t i = 0; i < NUM_ITEM_SLOTS; i++) {
+            CCharacterCreation::m_character->RemoveItem(static_cast<ITEM_SLOT>(i));
+        }
+        CCharacterComponent::RemoveHandItem(CCharacterCreation::m_character->m_data.m_model, INVSLOT_MAINHAND, SHEATHE_NONE, false);
+        CCharacterComponent::RemoveHandItem(CCharacterCreation::m_character->m_data.m_model, INVSLOT_OFFHAND, SHEATHE_NONE, false);
+        CCharacterComponent::RemoveHandItem(CCharacterCreation::m_character->m_data.m_model, INVSLOT_OFFHAND, SHEATHE_NONE, true);
+        CCharacterComponent::RemoveHandItem(CCharacterCreation::m_character->m_data.m_model, INVSLOT_RANGED, SHEATHE_NONE, false);
+        bool mainHandUsed = false;
+        for (const int32_t id : s_previewItems) {
+            const ItemRec* item = g_itemDB.GetRecord(id);
+            if (!item || item->m_displayInfoID <= 0) {
+                continue;
+            }
+            const int32_t type = item->m_inventoryType;
+            if (type == INVTYPE_RELIC || type == INVTYPE_BAG || type == INVTYPE_AMMO || type == INVTYPE_QUIVER) {
+                continue;
+            }
+            int32_t hand = -1;
+            bool mainHandRanged = false;
+            switch (type) {
+                case INVTYPE_WEAPON:
+                    hand = mainHandUsed ? INVSLOT_OFFHAND : INVSLOT_MAINHAND;
+                    break;
+                case INVTYPE_2HWEAPON: case INVTYPE_WEAPONMAINHAND:
+                    hand = INVSLOT_MAINHAND;
+                    break;
+                case INVTYPE_WEAPONOFFHAND: case INVTYPE_HOLDABLE: case INVTYPE_SHIELD:
+                    hand = INVSLOT_OFFHAND;
+                    break;
+                case INVTYPE_RANGED: case INVTYPE_THROWN: case INVTYPE_RANGEDRIGHT:
+                    hand = INVSLOT_RANGED;
+                    mainHandRanged = type != INVTYPE_RANGED;
+                    break;
+                default:
+                    break;
+            }
+            if (hand < 0) {
+                CCharacterCreation::m_character->AddItemByType(static_cast<INVENTORY_TYPES>(type), item->m_displayInfoID);
+                continue;
+            }
+            ItemDisplayInfoRec itemRec;
+            if (!g_itemDisplayInfoDB.GetRecord(item->m_displayInfoID, &itemRec)) {
+                continue;
+            }
+            if (hand == INVSLOT_MAINHAND) {
+                mainHandUsed = true;
+            }
+            CCharacterComponent::AddHandItem(CCharacterCreation::m_character->m_data.m_model, &itemRec, static_cast<INVENTORY_SLOTS>(hand),
+                SHEATHE_NONE, false, type == INVTYPE_SHIELD, mainHandRanged, 0);
+        }
         return;
     }
 #endif
