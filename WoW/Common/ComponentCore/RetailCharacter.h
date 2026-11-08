@@ -103,10 +103,6 @@ void RetailCustomizationGiveExtras(const CCharacterComponent* character, const R
 // which suited the 3.3.5 bodies; some Retail bodies are modelled larger (Tauren male 1.35x) and are sized
 // down through those scales, so the screens follow them. 1.0 for stock bodies.
 float RetailCharacterGlueScale(const CCharacterComponent* character);
-// FlashWOW glove cuffs: the cuff geoset group (0: bare hand 401, 1-3: cuffs 402-404) a glove shows, its own cut down
-// to what its lower-arm texture covers. Used on every body, Retail or not.
-class ItemDisplayInfoRec;
-uint32_t RetailGloveCuff(const ItemDisplayInfoRec& gloves, uint32_t sex);
 
 using RetailBodyOwner = void (*)(void* owner, CM2Model* replacement);
 void RetailCharacterSetBodyOwner(const CCharacterComponent* character, RetailBodyOwner swap, void* owner);

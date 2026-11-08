@@ -3554,21 +3554,9 @@ void CCharacterComponent::GeosRenderPrep() {
 
     ItemDisplayInfoRec rec;
 
-    // Not in the original: FlashWOW glove cuffs. The cuff a glove asks for (its geoset group) is cut down to what its
-    // lower-arm texture covers (RetailGloveCuff): retro-ported gloves ask for the biggest cuff with a texture that
-    // stops short of its top, which then showed bare skin or the sleeve above the glove's rim.
-    uint32_t gloveCuff = 0;
-    if (this->m_itemDisplayID[ITEMSLOT_GLOVES] && g_itemDisplayInfoDB.GetRecord(this->m_itemDisplayID[ITEMSLOT_GLOVES], &rec)) {
-#if defined(WOWDECOMP_RETAIL_MODELS)
-        gloveCuff = RetailGloveCuff(rec, this->m_data.m_preferences.m_sexID);
-#else
-        gloveCuff = rec.m_geosetGroup[0];
-#endif
-    }
-
-    if (gloveCuff) {
+    if (this->m_itemDisplayID[ITEMSLOT_GLOVES] && g_itemDisplayInfoDB.GetRecord(this->m_itemDisplayID[ITEMSLOT_GLOVES], &rec) && rec.m_geosetGroup[0]) {
         this->m_data.m_model->SetGeometryVisible(401, 499, 0);
-        this->m_data.m_model->SetGeometryVisible(gloveCuff + 401, gloveCuff + 401, 1);
+        this->m_data.m_model->SetGeometryVisible(rec.m_geosetGroup[0] + 401, rec.m_geosetGroup[0] + 401, 1);
     } else if (this->m_itemDisplayID[ITEMSLOT_CHEST] && g_itemDisplayInfoDB.GetRecord(this->m_itemDisplayID[ITEMSLOT_CHEST], &rec) && rec.m_geosetGroup[0]) {
         this->m_data.m_model->SetGeometryVisible(rec.m_geosetGroup[0] + 801, rec.m_geosetGroup[0] + 801, 1);
     }
