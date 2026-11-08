@@ -172,8 +172,10 @@ CTexture* MakeTexture(const std::string& name, const Retail::Image& image, MakeS
     Retail::BuildBlp(image, blp);
     if (stats) { stats->build += Since(start); stats->bytes += blp.size(); ++stats->count; }
     start = Clock::now();
-    CGxTexFlags flags(GxTex_LinearMipNearest, 0, 0, 0, 0, 0, 1);
-    CTexture* texture = TextureCreateFromBlpData(name.c_str(), flags, blp.data());
+    // The filtering the player chose (trilinear by default, anisotropic if set), as the stock character skin has;
+    // a fixed bilinear one left the Retail sheets grainy at a distance, with visible steps between mip levels.
+    CGxTexFlags flags(GxTex_LinearMipLinear, 0, 0, 0, 0, 0, 1);
+    CTexture* texture = TextureCreateFromBlpData(name.c_str(), flags, blp.data(), 1);
     if (stats) stats->upload += Since(start);
     return texture;
 }
@@ -611,7 +613,7 @@ CTexture* TintedModelTexture(uint32_t fileDataId, uint32_t rgb) {
     std::vector<uint8_t> blp;
     Retail::BuildBlp(image, blp);
     CGxTexFlags flags(GxTex_LinearMipLinear, 1, 1);   // as the model loads its own (the flames scroll)
-    CTexture* texture = TextureCreateFromBlpData(name.c_str(), flags, blp.data());
+    CTexture* texture = TextureCreateFromBlpData(name.c_str(), flags, blp.data(), 1);
     if (!texture) return nullptr;
     s_tintedTextures[name] = std::make_shared<OwnedTexture>(texture);
     s_tintedTextureOrder.push_back(name);
