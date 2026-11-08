@@ -462,7 +462,17 @@ std::deque<LookJob*> s_jobQueue;
 bool s_jobStop = false;
 std::thread* s_jobWorker = nullptr;                        // never destroyed: joined at shutdown
 
+// The worker and its painting helpers run below the game's main thread, on at most half the cores: at the
+// same priority on every core they starved it, and a burst of randomize clicks froze the screen for a second.
+void BelowNormalPriority() {
+#if defined(_WIN32)
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+#endif
+}
+
 void LookWorker() {
+    BelowNormalPriority();
+    Retail::SetHelperThreads(std::max(1u, std::thread::hardware_concurrency() / 2), &BelowNormalPriority);
     std::unique_lock<std::mutex> lock(s_jobMutex);
     for (;;) {
         s_jobWake.wait(lock, [] { return s_jobStop || !s_jobQueue.empty(); });
@@ -548,6 +558,23 @@ std::shared_ptr<Look> RequestLook(uint32_t retailRace, uint32_t sex, uint32_t ch
 // The look each character shows, and the characters waiting for a look the worker is building (by its key).
 std::unordered_map<const CCharacterComponent*, std::shared_ptr<Look>> s_shownLooks;
 std::unordered_map<CCharacterComponent*, std::string> s_waitingLooks;
+
+// A character stops waiting for a look (it wants another, or none): the look's job is dropped if it has not
+// started and nobody else waits for it. Right away, not at the next pump: clicks that pile up during a slow
+// frame are all handled in one frame, and each would otherwise be built.
+void StopWaiting(CCharacterComponent* character) {
+    const auto waiting = s_waitingLooks.find(character);
+    if (waiting == s_waitingLooks.end()) return;
+    const std::string key = std::move(waiting->second);
+    s_waitingLooks.erase(waiting);
+    for (const auto& other : s_waitingLooks)
+        if (other.second == key) return;
+    std::lock_guard<std::mutex> lock(s_jobMutex);
+    const auto job = s_jobs.find(key);
+    if (job == s_jobs.end() || job->second->state != LookJob::Queued) return;
+    s_jobQueue.erase(std::find(s_jobQueue.begin(), s_jobQueue.end(), job->second.get()));
+    s_jobs.erase(job);
+}
 
 // Choices of the options the 3.3.5 selectors do not drive, per character component, by option ID:
 // set by the character creation rows (RetailCustomizationCycle). An option without an entry, or whose
@@ -709,8 +736,11 @@ std::shared_ptr<Look> RetailLook(CCharacterComponent* character) {
     std::vector<uint32_t> choices;
     Resolve(character, chrModel, resolved, choices);
     const uint32_t sex = character->m_data.m_preferences.m_sexID;
-    std::string key;
-    auto look = RequestLook(retailRace, sex, chrModel, choices, key);
+    const std::string key = LookKey(retailRace, sex, choices);
+    if (const auto waiting = s_waitingLooks.find(character); waiting != s_waitingLooks.end() && waiting->second != key)
+        StopWaiting(character);
+    std::string requested;
+    auto look = RequestLook(retailRace, sex, chrModel, choices, requested);
     if (!look) {
         const auto shown = s_shownLooks.find(character);
         if (shown != s_shownLooks.end() && shown->second->chrModel == chrModel) {
@@ -1493,7 +1523,7 @@ void RetailCustomizationForget(const CCharacterComponent* character) {
     s_originalBodies.erase(character);
     s_bodyOwners.erase(character);
     s_shownLooks.erase(character);
-    s_waitingLooks.erase(const_cast<CCharacterComponent*>(character));
+    StopWaiting(const_cast<CCharacterComponent*>(character));
 }
 
 bool RetailCustomizationChoices(const CCharacterComponent* character, RetailChoiceList& choices) {

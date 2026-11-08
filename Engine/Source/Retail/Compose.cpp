@@ -10,6 +10,22 @@
 #include <map>
 
 namespace Retail {
+
+namespace {
+thread_local uint32_t t_helperLimit = 0;
+thread_local void (*t_helperStart)() = nullptr;
+
+uint32_t HelperThreads() {
+    const uint32_t hardware = std::max(1u, std::thread::hardware_concurrency());
+    return t_helperLimit ? std::min(t_helperLimit, hardware) : hardware;
+}
+}
+
+void SetHelperThreads(uint32_t limit, void (*start)()) {
+    t_helperLimit = limit;
+    t_helperStart = start;
+}
+
 namespace {
 
 uint32_t U32(const std::vector<uint8_t>& b, size_t p) {
@@ -160,13 +176,14 @@ void BuildBlp(const Image& image, std::vector<uint8_t>& blp) {
                 }
             }
         };
-        const uint32_t hardware = std::max(1u, std::thread::hardware_concurrency());
+        const uint32_t hardware = HelperThreads();
         const uint32_t bands = uint64_t(nextWidth) * nextHeight < 64 * 1024 ? 1 : std::min({hardware, 8u, nextHeight});
         std::vector<std::thread> threads;
         const uint32_t per = (nextHeight + bands - 1) / bands;
+        void (*const start)() = t_helperStart;
         for (uint32_t band = 1; band < bands; ++band) {
             const uint32_t first = band * per, end = std::min(nextHeight, first + per);
-            if (first < end) threads.emplace_back(rows, first, end);
+            if (first < end) threads.emplace_back([&rows, start, first, end] { if (start) start(); rows(first, end); });
         }
         rows(0, std::min(nextHeight, per));
         for (auto& thread : threads) thread.join();
@@ -274,7 +291,7 @@ void Paint(Image& dst, const Image& src, const Rect& rect, uint32_t blend, bool 
         columns[x] = {x0, x1, std::min(1.0f, std::max(0.0f, fx - float(x0)))};
     }
     const uint64_t pixels = uint64_t(rect.w) * rect.h;
-    const uint32_t hardware = std::max(1u, std::thread::hardware_concurrency());
+    const uint32_t hardware = HelperThreads();
     const uint32_t bands = pixels < 128 * 1024 ? 1 : std::min({hardware, 8u, rect.h});
     if (bands <= 1) {
         PaintRows(dst, src, rect, blend, legacyAlphaOver, columns, unit.data(), 0, rect.h);
@@ -286,8 +303,10 @@ void Paint(Image& dst, const Image& src, const Rect& rect, uint32_t blend, bool 
     for (uint32_t band = 1; band < bands; ++band) {
         const uint32_t first = band * per, end = std::min(rect.h, first + per);
         if (first >= end) break;
-        threads.emplace_back(PaintRows, std::ref(dst), std::cref(src), std::cref(rect), blend, legacyAlphaOver,
-            std::cref(columns), unit.data(), first, end);
+        threads.emplace_back([&, first, end, start = t_helperStart] {
+            if (start) start();
+            PaintRows(dst, src, rect, blend, legacyAlphaOver, columns, unit.data(), first, end);
+        });
     }
     PaintRows(dst, src, rect, blend, legacyAlphaOver, columns, unit.data(), 0, std::min(rect.h, per));
     for (auto& thread : threads) thread.join();

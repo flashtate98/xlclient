@@ -19,6 +19,11 @@ struct Image {
 bool DecodeBlp(const std::vector<uint8_t>& blp, Image& out, std::string& error);
 
 // Raw BGRA BLP2 with a full mip chain, in the form the client's texture cache loads.
+// FlashWOW: the helper threads the calling thread may use for painting and mips (BuildBlp, PaintImage,
+// ComposeTextures). `limit` caps them (0: every core) and `start` runs first on each helper, so a background
+// caller (the look worker) can keep its helpers below the game's main thread. Per calling thread.
+void SetHelperThreads(uint32_t limit, void (*start)());
+
 void BuildBlp(const Image& image, std::vector<uint8_t>& blp);
 
 // Stretches `src` over a rectangle of `dst` (bilinear) with a retail blend mode (alpha-over for most modes).
