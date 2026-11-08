@@ -4505,6 +4505,12 @@ static int32_t Script_FlashPlayAnimation(lua_State* L) {
     // A true third argument picks the version for the unit's weapon first, as a spell would.
     uint32_t chosen = lua_toboolean(L, 3) ? ChooseWeaponVariantAnim(unit, static_cast<uint32_t>(id)) : static_cast<uint32_t>(id);
     uint32_t played = unit->ResolveAnimForModel(chosen, nullptr);
+    uint32_t sequence = model->ResolveSequenceFallback(played);     // the sequence the model really has
+
+    if (sequence != 0xFFFFFFFF) {
+        played = sequence;
+    }
+
     unit->PlayBaseAnimation(chosen, 0x8);
     AnimationDataRec* playedRec = g_animationDataDB.GetRecord(static_cast<int32_t>(played));
 

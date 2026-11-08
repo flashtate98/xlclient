@@ -155,8 +155,12 @@
 #include <cstdio>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #endif
+#include <unordered_set>
+#include <unordered_map>
+#include <cstdarg>
+#include <cstdio>
+#include "Engine/Source/BlizzardCore/Source/System/Log/Log.h"
 #include "WarcraftXL/Seams.h"
 
 // STATIC: 0x00ADAC04
@@ -2728,7 +2732,7 @@ int32_t CGUnit_C::ChooseStandStateAnim(uint32_t mask, uint32_t* anim) {
 }
 
 static bool ChooseChargeEndAnim(CGUnit_C* unit, uint32_t* anim);    // Not in the original: FlashWOW, defined by ChooseMovementAnim
-static bool HoldForChargeEnd(CGUnit_C* unit, uint32_t anim);       // Not in the original: FlashWOW, defined by ChooseMovementAnim
+static bool HoldForChargeEnd(CGUnit_C* unit, uint32_t* anim);      // Not in the original: FlashWOW, defined by ChooseMovementAnim
 
 // VERIFY: c45e9335 auto
 // OFFSET: 0x00724500
@@ -4396,8 +4400,11 @@ uint32_t ChooseWeaponVariantAnim(const CGUnit_C* unit, uint32_t animId) {
             switch (unit->GetCombatReadyAnim()) {
                 case ANIM_READY_2H:
                     return row[0];
-                case ANIM_READY_2HL:
-                    return row[1];
+                case ANIM_READY_2HL: {
+                    // Retail's player models carry no 2HL versions; a polearm then swings the 2H one.
+                    CM2Model* model = unit->GetObjectModel();
+                    return (model && model->IsLoaded(0, 0) && !model->HasSequence(row[1])) ? row[0] : row[1];
+                }
                 case ANIM_READY_1H:
                     return row[2];
                 default:
@@ -4430,7 +4437,7 @@ void CGUnit_C::PlayBaseAnimation(uint32_t animId, int32_t flags) {
         return;
     }
 
-    if (HoldForChargeEnd(this, animId)) {    // Not in the original: FlashWOW Retail animations
+    if (HoldForChargeEnd(this, &animId)) {    // Not in the original: FlashWOW Retail animations
         return;
     }
 
@@ -8080,6 +8087,21 @@ int32_t CGUnit_C::IsRunning() const {
 static std::unordered_set<uint64_t> s_chargingUnits;
 static std::unordered_map<uint64_t, uint32_t> s_chargeEndUntil;
 
+static void ChargeLog(const CGUnit_C* unit, const char* format, ...) {
+    char line[256];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(line, sizeof(line), format, args);
+    va_end(args);
+    Blizzard::Log::Printf(1, "Logs/Animations.log", "%u %llu %s\n", OsGetAsyncTimeMs(),
+        static_cast<unsigned long long>(unit->m_obj->m_guid.m_guid), line);
+}
+
+static const char* AnimName(uint32_t anim) {
+    AnimationDataRec* rec = g_animationDataDB.GetRecord(static_cast<int32_t>(anim));
+    return rec && rec->m_name ? rec->m_name : "?";
+}
+
 static bool IsOnChargeSpline(const CGUnit_C* unit) {
     const CMovement_C& move = unit->m_movementData;
 
@@ -8106,6 +8128,7 @@ static bool ChooseChargeEndAnim(CGUnit_C* unit, uint32_t* anim) {
     CM2Model* model = unit->GetObjectModel();
 
     if (!model || !model->IsLoaded(0, 0) || !model->HasSequence(820)) {
+        ChargeLog(unit, "charge arrived, model has no CombatChargeEnd");
         return false;
     }
 
@@ -8119,18 +8142,38 @@ static bool ChooseChargeEndAnim(CGUnit_C* unit, uint32_t* anim) {
         s_chargeEndUntil[unit->m_obj->m_guid.m_guid] = OsGetAsyncTimeMs() + info.m_duration * 9 / 10;
     }
 
+    ChargeLog(unit, "charge arrived, CombatChargeEnd %u ms", info.m_duration);
+
     return true;
 }
 
 // While CombatChargeEnd plays, the auto attack's first swing and the combat stance wait for it instead of
 // cutting it off. Most of its length is held, so the end of the sequence hands back to the usual choice. Spells,
-// hits, death and moving still play at once.
-static bool HoldForChargeEnd(CGUnit_C* unit, uint32_t anim) {
-    if (s_chargeEndUntil.empty()) {
+// hits, death and moving still play at once. The first swing can arrive before the animation choice has noticed
+// the arrival; then the swing's turn starts CombatChargeEnd instead.
+static bool IsChargeEndWaiter(uint32_t anim) {
+    return anim == ANIM_STAND || (anim >= ANIM_READY_UNARMED && anim <= ANIM_READY_2HL) || IsMeleeAttackAnim(anim);
+}
+
+static bool HoldForChargeEnd(CGUnit_C* unit, uint32_t* anim) {
+    if (s_chargingUnits.empty() && s_chargeEndUntil.empty()) {
         return false;
     }
 
-    auto holding = s_chargeEndUntil.find(unit->m_obj->m_guid.m_guid);
+    const uint64_t guid = unit->m_obj->m_guid.m_guid;
+
+    if (IsChargeEndWaiter(*anim) && s_chargingUnits.count(guid) && !IsOnChargeSpline(unit)) {
+        uint32_t end;
+        ChargeLog(unit, "%u %s asked first", *anim, AnimName(*anim));
+
+        if (ChooseChargeEndAnim(unit, &end)) {
+            *anim = end;
+        }
+
+        return false;
+    }
+
+    auto holding = s_chargeEndUntil.find(guid);
 
     if (holding == s_chargeEndUntil.end()) {
         return false;
@@ -8143,7 +8186,13 @@ static bool HoldForChargeEnd(CGUnit_C* unit, uint32_t anim) {
         return false;
     }
 
-    return anim == ANIM_STAND || (anim >= ANIM_READY_UNARMED && anim <= ANIM_READY_2HL) || IsMeleeAttackAnim(anim);
+    if (*anim == 820) {
+        return false;
+    }
+
+    bool hold = IsChargeEndWaiter(*anim);
+    ChargeLog(unit, "%s %u %s during CombatChargeEnd", hold ? "held" : "let through", *anim, AnimName(*anim));
+    return hold;
 }
 
 // VERIFY: 2be9606e manual
@@ -8193,7 +8242,10 @@ int32_t CGUnit_C::ChooseMovementAnim(uint32_t flags, uint32_t* anim) const {
             s_chargeEndUntil.clear();
         }
 
-        s_chargingUnits.insert(this->m_obj->m_guid.m_guid);
+        if (s_chargingUnits.insert(this->m_obj->m_guid.m_guid).second) {
+            ChargeLog(this, "charge started at %.1f yd/s", this->m_movementData.GetBaseSpeed(0));
+        }
+
         *anim = 816;    // CombatChargeLoop
         return 1;
     }
