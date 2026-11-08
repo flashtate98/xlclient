@@ -511,7 +511,8 @@ enum ANIMATION_ID {
     ANIM_CARRIED_2H = 0x1F7,
     ANIM_FLY_CARRY_2H = 0x1F8,
     ANIM_FLY_CARRIED_2H = 0x1F9,
-    ANIM_COUNT = 0x1FA,
+    // FlashWOW: 3.3.5 stopped at 0x1FA (506). Retail animation ids continue past it; AnimationData.dbc now runs to 1865.
+    ANIM_COUNT = 0x800,
 };
 
 enum OBJECT_EFFECT_STATE_COUNT {

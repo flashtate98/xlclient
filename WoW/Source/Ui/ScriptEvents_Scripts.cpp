@@ -54,6 +54,7 @@
 #include "WoW/Source/Object/ObjectClient/VisibleItem_C.h"
 #include "WoW/Source/Object/CreatureStats.h"
 #include "WoW/Source/DB/Rec/ChrRacesRec.h"
+#include "WoW/Source/DB/Rec/AnimationDataRec.h"
 #include "WoW/Source/DB/Rec/SpellDurationRec.h"
 #include <cmath>
 #include "WoW/Source/DB/Rec/VehicleUIIndicatorRec.h"
@@ -4453,6 +4454,65 @@ static int32_t Script_UnitIsAFK(lua_State* L) {
     return 1;
 }
 
+// Not in the original: FlashWOW animation test. FlashPlayAnimation(animation[, "unit"]) plays an animation, given by id or
+// AnimationData name, on a unit (the player by default) the way an emote or a spell does, after the model's fallback chain.
+// It returns the id the model actually plays and both names, so a fallback on an older model shows at once.
+static int32_t Script_FlashPlayAnimation(lua_State* L) {
+    int32_t id = -1;
+
+    if (lua_isnumber(L, 1)) {
+        id = static_cast<int32_t>(lua_tonumber(L, 1));
+    } else if (lua_isstring(L, 1)) {
+        const char* name = lua_tolstring(L, 1, nullptr);
+
+        for (int32_t i = 0; i < g_animationDataDB.m_numRecords; i++) {
+            const AnimationDataRec& rec = g_animationDataDB.m_records[i];
+
+            if (rec.m_name && !SStrCmpI(name, rec.m_name, STORM_MAX_STR)) {
+                id = rec.m_id;
+                break;
+            }
+        }
+    } else {
+        luaL_error(L, "Usage: FlashPlayAnimation(animationID or \"name\"[, \"unit\"])");
+        return 0;
+    }
+
+    AnimationDataRec* requested = (id >= 0 && id < ANIM_COUNT) ? g_animationDataDB.GetRecord(id) : nullptr;
+
+    if (!requested) {
+        lua_pushnil(L);
+        lua_pushstring(L, "unknown animation");
+        return 2;
+    }
+
+    const char* token = lua_isstring(L, 2) ? lua_tolstring(L, 2, nullptr) : "player";
+    WOWGUID guid = WOWGUID();
+    CGUnit_C* unit = nullptr;
+
+    if (Script_GetGUIDFromToken(token, guid, false)) {
+        unit = static_cast<CGUnit_C*>(ClntObjMgrObjectPtr(guid, TYPEMASK_UNIT, __FILE__, __LINE__));
+    }
+
+    CM2Model* model = unit ? unit->GetObjectModel() : nullptr;
+
+    if (!model || !model->IsLoaded(0, 0)) {
+        lua_pushnil(L);
+        lua_pushstring(L, "no unit or model not loaded");
+        return 2;
+    }
+
+    uint32_t played = unit->ResolveAnimForModel(static_cast<uint32_t>(id), nullptr);
+    unit->PlayBaseAnimation(static_cast<uint32_t>(id), 0x8);
+    AnimationDataRec* playedRec = g_animationDataDB.GetRecord(static_cast<int32_t>(played));
+
+    lua_pushnumber(L, static_cast<double>(played));
+    lua_pushstring(L, playedRec && playedRec->m_name ? playedRec->m_name : "?");
+    lua_pushnumber(L, static_cast<double>(id));
+    lua_pushstring(L, requested->m_name ? requested->m_name : "?");
+    return 4;
+}
+
 // STATIC: 0x00AD21D8
 static FrameScript_Method s_UnitFunctions[] = {
     { "UnitExists", &Script_UnitExists },
@@ -4624,6 +4684,7 @@ static FrameScript_Method s_UnitFunctions[] = {
     { "GetItemStatDelta", &Script_GetItemStatDelta },
     { "IsXPUserDisabled", &Script_IsXPUserDisabled },
     { "FillLocalizedClassList", &Script_FillLocalizedClassList },
+    { "FlashPlayAnimation", &Script_FlashPlayAnimation },      // Not in the original: FlashWOW
 };
 
 // VERIFY: 24f40cd0 auto

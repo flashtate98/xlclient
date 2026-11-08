@@ -1631,7 +1631,7 @@ void CGUnit_C::PreAnimate(CGWorldFrame* frame) {
 // OFFSET: 0x0071D940
 int32_t IsEmoteAnim(uint32_t animId) {
     AnimationDataRec* rec = g_animationDataDB.GetRecord(animId);
-    int32_t behavior = rec ? rec->m_behaviorID : 506;
+    int32_t behavior = rec ? rec->m_behaviorID : ANIM_COUNT;
 
     switch (behavior) {
         case 60:
@@ -1675,7 +1675,7 @@ int32_t IsEmoteAnim(uint32_t animId) {
 // OFFSET: 0x0071D380
 int32_t IsSpellCastAnim(uint32_t animId) {
     AnimationDataRec* rec = g_animationDataDB.GetRecord(animId);
-    int32_t behavior = rec ? rec->m_behaviorID : 506;
+    int32_t behavior = rec ? rec->m_behaviorID : ANIM_COUNT;
 
     switch (behavior) {
         case 2:
@@ -2368,7 +2368,7 @@ void CGUnit_C::SendSplineDone(uint32_t time, uint32_t splineId) {
 // OFFSET: 0x0071D590
 int32_t IsMeleeAttackAnim(uint32_t animId) {
     AnimationDataRec* rec = g_animationDataDB.GetRecord(animId);
-    int32_t behavior = rec ? rec->m_behaviorID : 506;
+    int32_t behavior = rec ? rec->m_behaviorID : ANIM_COUNT;
 
     switch (behavior) {
         case 10:
@@ -3711,7 +3711,7 @@ int32_t IsSpellPrecastAnim(uint32_t animId) {
 // OFFSET: 0x0071D800
 int32_t IsUpperBodyAnim(uint32_t animId) {
     AnimationDataRec* rec = g_animationDataDB.GetRecord(animId);
-    int32_t behavior = rec ? rec->m_behaviorID : 506;
+    int32_t behavior = rec ? rec->m_behaviorID : ANIM_COUNT;
 
     switch (behavior) {
         case 2:
@@ -3914,7 +3914,7 @@ int32_t IsFishingAnim(uint32_t animId) {
 // OFFSET: 0x0071D2E0
 int32_t IsRangedWeaponAnim(uint32_t animId) {
     AnimationDataRec* rec = g_animationDataDB.GetRecord(animId);
-    int32_t behavior = rec ? rec->m_behaviorID : 506;
+    int32_t behavior = rec ? rec->m_behaviorID : ANIM_COUNT;
 
     switch (behavior) {
         case 46:
@@ -7932,7 +7932,7 @@ int32_t GetAnimBehaviorId(uint32_t animId) {
         return rec->m_behaviorID;
     }
 
-    return 506;
+    return ANIM_COUNT;
 }
 
 // VERIFY: 211bd0bd auto
@@ -8192,7 +8192,7 @@ bool CGUnit_C::AnimSuppressesMovement() const {
         anim = this->m_worldModel->GetBoneSequenceId(0xFFFFFFFF);
     }
 
-    if (anim > 505) {
+    if (anim >= ANIM_COUNT) {
         return false;
     }
 
@@ -8554,7 +8554,7 @@ float CGUnit_C::GetSmoothFacing() const {
 void CGUnit_C::ChooseDefaultAnim(uint32_t& anim, int32_t force) const {
     CVehiclePassenger_C* passenger = this->m_vehiclePassenger;
 
-    if (passenger && passenger->m_state == 3 && passenger->GetLowerAnim(passenger->m_seatRec) != 506) {
+    if (passenger && passenger->m_state == 3 && passenger->GetLowerAnim(passenger->m_seatRec) != ANIM_COUNT) {
         return;
     }
 
@@ -8892,7 +8892,7 @@ void CGUnit_C::UpdateObjectEffectAnimationStates() {
             return;
         }
 
-        if (sequences[0].m_sequenceId < 506) {
+        if (sequences[0].m_sequenceId < ANIM_COUNT) {
             sequences[0].m_sequenceId = this->m_mountModel->ResolveSequenceFallback(sequences[0].m_sequenceId);
         }
     }
@@ -8902,11 +8902,11 @@ void CGUnit_C::UpdateObjectEffectAnimationStates() {
             return;
         }
 
-        if (sequences[1].m_sequenceId < 506) {
+        if (sequences[1].m_sequenceId < ANIM_COUNT) {
             sequences[1].m_sequenceId = this->m_worldModel->ResolveSequenceFallback(sequences[1].m_sequenceId);
         }
 
-        if (sequences[2].m_sequenceId < 506) {
+        if (sequences[2].m_sequenceId < ANIM_COUNT) {
             sequences[2].m_sequenceId = this->m_worldModel->ResolveSequenceFallback(sequences[2].m_sequenceId);
         }
     }
@@ -14683,7 +14683,7 @@ void CGUnit_C::AnimEndHandler(CM2Model* model, uint32_t boneId, uint32_t sequenc
     }
 
     AnimationDataRec* anim = g_animationDataDB.GetRecord(sequenceId);
-    int32_t behavior = anim ? anim->m_behaviorID : 506;
+    int32_t behavior = anim ? anim->m_behaviorID : ANIM_COUNT;
 
     if (behavior == 1 || behavior == 131 || behavior == 468) {
         if (!this->m_lootableTime) {
@@ -14805,7 +14805,7 @@ void CGUnit_C::OnBaseAnimEnd(CM2Model* model, uint32_t boneId, uint32_t sequence
         if (seat) {
             bool ride;
 
-            if (passenger->GetLowerAnim(seat) != 506) {
+            if (passenger->GetLowerAnim(seat) != ANIM_COUNT) {
                 ride = (seat->m_flags & 0x2) && (static_cast<int32_t>(sequenceId) == seat->m_rideAnimStart || static_cast<int32_t>(sequenceId) == seat->m_rideAnimLoop);
             } else {
                 ride = (seat->m_flags & 0x4) && (static_cast<int32_t>(sequenceId) == seat->m_rideUpperAnimStart || static_cast<int32_t>(sequenceId) == seat->m_rideUpperAnimLoop);
@@ -14818,9 +14818,9 @@ void CGUnit_C::OnBaseAnimEnd(CM2Model* model, uint32_t boneId, uint32_t sequence
         }
     }
 
-    uint32_t next = 506;
+    uint32_t next = ANIM_COUNT;
     AnimationDataRec* anim = g_animationDataDB.GetRecord(sequenceId);
-    int32_t behavior = anim ? anim->m_behaviorID : 506;
+    int32_t behavior = anim ? anim->m_behaviorID : ANIM_COUNT;
 
     if (behavior >= 458 && behavior <= 460) {
         this->PlayBaseAnimation(464, 16);
@@ -14889,7 +14889,7 @@ void CGUnit_C::OnBaseAnimEnd(CM2Model* model, uint32_t boneId, uint32_t sequence
         case 97: {
             next = (this->GetClientStandState() != 1) + 97;
 
-            if (next == 506) {
+            if (next == ANIM_COUNT) {
                 break;
             }
 
@@ -14901,7 +14901,7 @@ void CGUnit_C::OnBaseAnimEnd(CM2Model* model, uint32_t boneId, uint32_t sequence
         case 100: {
             next = (this->GetClientStandState() != 3) + 100;
 
-            if (next == 506) {
+            if (next == ANIM_COUNT) {
                 break;
             }
 
@@ -14990,7 +14990,7 @@ void CGUnit_C::OnBaseAnimEnd(CM2Model* model, uint32_t boneId, uint32_t sequence
         case 115: {
             next = (this->GetClientStandState() != 8) + 115;
 
-            if (next == 506) {
+            if (next == ANIM_COUNT) {
                 break;
             }
 
@@ -15039,7 +15039,7 @@ void CGUnit_C::OnBaseAnimEnd(CM2Model* model, uint32_t boneId, uint32_t sequence
         case 464: {
             this->ChooseDefaultAnim(next, 1);
 
-            if (next == 506) {
+            if (next == ANIM_COUNT) {
                 break;
             }
 
@@ -15116,16 +15116,16 @@ void CGUnit_C::OnKeyBoneAnimEnd(CM2Model* model, uint32_t boneId, uint32_t seque
         torso.m_sequenceId = anim;
         CVehiclePassenger_C* passenger = this->m_vehiclePassenger;
         const VehicleSeatRec* seat = passenger ? passenger->m_seatRec : nullptr;
-        int32_t ridingLower = passenger && passenger->m_state == 3 && passenger->GetLowerAnim(seat) != 506;
+        int32_t ridingLower = passenger && passenger->m_state == 3 && passenger->GetLowerAnim(seat) != ANIM_COUNT;
 
         if (static_cast<int32_t>(boneId) == this->m_torsoKeyBone) {
-            if (!usedDefault && chosen == 506 && ridingLower) {
+            if (!usedDefault && chosen == ANIM_COUNT && ridingLower) {
                 this->UpdateObjectEffectAnimationStates();
                 return;
             }
         }
 
-        if (static_cast<int32_t>(boneId) != this->m_torsoKeyBone || !ridingLower || this->m_vehiclePassenger->GetUpperAnim(seat) == 506) {
+        if (static_cast<int32_t>(boneId) != this->m_torsoKeyBone || !ridingLower || this->m_vehiclePassenger->GetUpperAnim(seat) == ANIM_COUNT) {
             uint32_t current = this->m_worldModel->GetBoneSequenceId(0xFFFFFFFF);
 
             if (!IsUpperBodyAnim(anim) || !this->ShouldSplitTorsoAnimation(anim, current) || anim == current) {
@@ -15777,7 +15777,7 @@ void CGUnit_C::PlayEmoteAnimation(uint32_t emote) {
 
     int32_t anim = rec->m_animID;
 
-    if (anim < 0 || anim >= 506) {
+    if (anim < 0 || anim >= ANIM_COUNT) {
         return;
     }
 
@@ -19835,7 +19835,7 @@ bool CGUnit_C::IsTracked() const {
 // OFFSET: 0x0071D450
 int32_t IsUnarmedAnim(uint32_t animId) {
     AnimationDataRec* rec = g_animationDataDB.GetRecord(animId);
-    int32_t behavior = rec ? rec->m_behaviorID : 506;
+    int32_t behavior = rec ? rec->m_behaviorID : ANIM_COUNT;
 
     switch (behavior) {
         case 16:
@@ -21430,7 +21430,7 @@ void CGUnit_C::UpdateCritterDisplay() {
 // OFFSET: 0x0071D450
 static int32_t IsWeaponAnimBehavior(uint32_t animId) {
     AnimationDataRec* animation = g_animationDataDB.GetRecord(animId);
-    int32_t behavior = animation ? animation->m_behaviorID : 506;
+    int32_t behavior = animation ? animation->m_behaviorID : ANIM_COUNT;
 
     switch (behavior) {
         case 16:
