@@ -1854,6 +1854,60 @@ bool FootTextureCovers(const char* path) {
     return covers;
 }
 
+// How far up a 3.3.5 texture its paint reaches: the share of its height from the bottom to its highest row that is
+// mostly opaque (at least half the row). 1 when unreadable. Remembered per file.
+float TextureCoverHeight(const char* path) {
+    static std::map<std::string, float> known;
+    const auto found = known.find(path);
+    if (found != known.end()) return found->second;
+    float height = 1.0f;
+    void* bytes = nullptr;
+    uint32_t size = 0;
+    if (SFile::LoadFile(path, &bytes, &size, 0, nullptr)) {
+        const auto* begin = static_cast<const uint8_t*>(bytes);
+        Retail::Image image;
+        std::string error;
+        if (Retail::DecodeBlp(std::vector<uint8_t>(begin, begin + size), image, error) && image.width && image.height) {
+            height = 0.0f;
+            for (uint32_t y = 0; y < image.height; ++y) {
+                uint32_t opaque = 0;
+                for (uint32_t x = 0; x < image.width; ++x)
+                    if (image.rgba[(size_t(y) * image.width + x) * 4 + 3] >= 128) ++opaque;
+                if (opaque * 2 >= image.width) {
+                    height = float(image.height - y) / float(image.height);
+                    break;
+                }
+            }
+        }
+        SFile::Unload(bytes);
+    }
+    known.emplace(path, height);
+    return height;
+}
+
+uint32_t RetailGloveCuff(const ItemDisplayInfoRec& gloves, uint32_t sex) {
+    uint32_t cuff = gloves.m_geosetGroup[0];
+    if (!cuff) return 0;
+    // The glove's lower-arm texture, as LoadItemComponentTexture finds it: the unisex _U, else the wearer's sex.
+    float reach = 0.0f;
+    if (gloves.m_texture[SECTION_ARM_LOWER] && *gloves.m_texture[SECTION_ARM_LOWER]) {
+        const char* sexes[] = {"U", sex ? "F" : "M"};
+        for (const char* suffix : sexes) {
+            char path[260];
+            std::snprintf(path, sizeof(path), "Item\\TextureComponents\\ArmLowerTexture\\%s_%s.blp",
+                gloves.m_texture[SECTION_ARM_LOWER], suffix);
+            if (!SFile::FileExists(path)) continue;
+            reach = TextureCoverHeight(path);
+            break;
+        }
+    }
+    // The cuffs reach about this high up the lower arm: 402 a third, 403 two thirds, 404 all of it. A glove keeps the
+    // biggest cuff its texture covers (with a little slack), and no cuff when it paints the lower arm hardly at all.
+    constexpr float kCuffReach[] = {0.0f, 0.30f, 0.60f, 0.90f};
+    while (cuff > 0 && reach < kCuffReach[std::min<uint32_t>(cuff, 3)]) --cuff;
+    return cuff;
+}
+
 void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
     CM2Model* model = character->m_data.m_model;
     if (!model) return;
@@ -1911,39 +1965,6 @@ void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
         const bool shoe = hasShoe && paintsFoot;
         model->SetGeometryVisible(2001, 2099, 0);
         model->SetGeometryVisible(shoe ? 2002 : 2001, shoe ? 2002 : 2001, 1);
-    }
-
-    // Glove cuffs. A glove with a geoset group shows a cuff (402-404) instead of the bare hand (401); on Retail
-    // bodies these are big flared gauntlet cuffs, made for a glove that paints the lower arm. A glove whose lower-arm
-    // texture is missing or mostly see-through left the cuff in plain skin, or in the chest's sleeve texture,
-    // bulging round the wrist. Such a glove shows the bare hand instead, and the chest's sleeve (801+) takes the
-    // wrist as it would without the glove.
-    if (character->m_itemDisplayID[ITEMSLOT_GLOVES]) {
-        ItemDisplayInfoRec gloves;
-        if (g_itemDisplayInfoDB.GetRecord(character->m_itemDisplayID[ITEMSLOT_GLOVES], &gloves) && gloves.m_geosetGroup[0]) {
-            bool paintsArm = false;
-            if (gloves.m_texture[SECTION_ARM_LOWER] && *gloves.m_texture[SECTION_ARM_LOWER]) {
-                const char* sexes[] = {"U", character->m_data.m_preferences.m_sexID ? "F" : "M"};
-                for (const char* sex : sexes) {
-                    char path[260];
-                    std::snprintf(path, sizeof(path), "Item\\TextureComponents\\ArmLowerTexture\\%s_%s.blp",
-                        gloves.m_texture[SECTION_ARM_LOWER], sex);
-                    if (!SFile::FileExists(path)) continue;
-                    paintsArm = FootTextureCovers(path);
-                    break;
-                }
-            }
-            if (!paintsArm) {
-                model->SetGeometryVisible(401, 499, 0);
-                model->SetGeometryVisible(401, 401, 1);
-                ItemDisplayInfoRec chest;
-                if (character->m_itemDisplayID[ITEMSLOT_CHEST] && g_itemDisplayInfoDB.GetRecord(character->m_itemDisplayID[ITEMSLOT_CHEST], &chest) &&
-                    chest.m_geosetGroup[0]) {
-                    model->SetGeometryVisible(801, 899, 0);
-                    model->SetGeometryVisible(chest.m_geosetGroup[0] + 801, chest.m_geosetGroup[0] + 801, 1);
-                }
-            }
-        }
     }
 
     // Group 14. No 3.3.5 item drives it, so the stock pass always shows 1401; most Retail bodies have nothing
