@@ -8164,11 +8164,24 @@ static bool ChooseChargeEndAnim(CGUnit_C* unit, uint32_t* anim) {
 }
 
 // While CombatChargeEnd plays, the auto attack's first swing and the combat stance wait for it instead of
-// cutting it off. Most of its length is held, so the end of the sequence hands back to the usual choice. Spells,
-// hits, death and moving still play at once. The first swing can arrive before the animation choice has noticed
+// cutting it off. Most of its length is held, so the end of the sequence hands back to the usual choice. Abilities,
+// spells, hits, death and moving still play at once. The first swing can arrive before the animation choice has noticed
 // the arrival; then the swing's turn starts CombatChargeEnd instead.
+// Only the auto attack's own swings wait; an ability (Special1H, Kick, ShieldBash, ...) pressed as the charge lands
+// plays at once, as in Retail.
+static bool IsAutoAttackSwingAnim(uint32_t anim) {
+    AnimationDataRec* rec = g_animationDataDB.GetRecord(static_cast<int32_t>(anim));
+
+    switch (rec ? rec->m_behaviorID : ANIM_COUNT) {
+        case 16: case 17: case 18: case 19: case 85: case 86: case 87: case 88: case 117:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static bool IsChargeEndWaiter(uint32_t anim) {
-    return anim == ANIM_STAND || (anim >= ANIM_READY_UNARMED && anim <= ANIM_READY_2HL) || IsMeleeAttackAnim(anim);
+    return anim == ANIM_STAND || (anim >= ANIM_READY_UNARMED && anim <= ANIM_READY_2HL) || IsAutoAttackSwingAnim(anim);
 }
 
 static bool HoldForChargeEnd(CGUnit_C* unit, uint32_t* anim) {
@@ -8180,7 +8193,7 @@ static bool HoldForChargeEnd(CGUnit_C* unit, uint32_t* anim) {
 
     // The server can swing a few ms before the client's charge path ends; that swing would play over the loop
     // and CombatChargeEnd would then blend in from it.
-    if (IsMeleeAttackAnim(*anim) && s_chargingUnits.count(guid) && IsOnChargeSpline(unit)) {
+    if (IsAutoAttackSwingAnim(*anim) && s_chargingUnits.count(guid) && IsOnChargeSpline(unit)) {
         ChargeLog(unit, "held %u %s during the charge", *anim, AnimName(*anim));
         return true;
     }
