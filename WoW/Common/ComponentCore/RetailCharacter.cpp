@@ -1403,11 +1403,42 @@ static void Refresh(CCharacterComponent* character) {
     character->SetDirtySections(0xFFFFFFFF);
 }
 
+bool BuildCustomizationPanel(const CCharacterComponent* character, uint32_t chrModel, std::vector<RetailPanelOption>& options);
+
 bool RetailCustomizationPanel(const CCharacterComponent* character, std::vector<RetailPanelOption>& options) {
     options.clear();
     uint32_t retailRace = 0;
     const uint32_t chrModel = RetailModelOf(character, retailRace);
     if (!chrModel) return false;
+
+    // The panel is built once per state and kept. The panel scripts read it one option at a time, and each read
+    // built the whole panel again: a Dracthyr (some 30 options) rebuilt it 60 times per read, several reads per
+    // randomize, which held the screen about 0.3 s per click. The key is everything the panel comes from: the
+    // character, its body, its 3.3.5 values and its Retail choices.
+    static std::string cachedKey;
+    static std::vector<RetailPanelOption> cached;
+    const auto& prefs = character->m_data.m_preferences;
+    std::string key;
+    key.reserve(256);
+    key += std::to_string(reinterpret_cast<uintptr_t>(character)) + "/" +
+        std::to_string(reinterpret_cast<uintptr_t>(character->m_data.m_model->m_shared)) + "/" + std::to_string(chrModel);
+    for (const uint32_t value : {prefs.m_raceID, prefs.m_sexID, prefs.m_classId, prefs.m_skinID, prefs.m_faceId,
+             prefs.m_hairStyleId, prefs.m_hairColorId, prefs.m_facialHairId})
+        key += "/" + std::to_string(value);
+    key += "|";
+    if (const auto* extras = ExtraChoicesOf(character))
+        for (const auto& extra : *extras) key += std::to_string(extra.first) + "=" + std::to_string(extra.second) + ",";
+    if (key == cachedKey) {
+        options = cached;
+        return true;
+    }
+    const bool built = BuildCustomizationPanel(character, chrModel, options);
+    cachedKey = std::move(key);
+    cached = options;
+    return built;
+}
+
+bool BuildCustomizationPanel(const CCharacterComponent* character, uint32_t chrModel, std::vector<RetailPanelOption>& options) {
     std::vector<ResolvedOption> resolved;
     std::vector<uint32_t> choices;
     Resolve(character, chrModel, resolved, choices);
