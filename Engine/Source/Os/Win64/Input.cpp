@@ -12,6 +12,7 @@
 #include "Engine/Source/Os/TimeManager.h"
 #include "Engine/Source/Storm/H/storm.h"
 #include "Engine/Source/Tempest/C2iVector.h"
+#include "SXC/Log.h"  // SXC: the camera spin's delta log
 
 #define WM_POPUPSYSTEMMENU 0x313
 
@@ -183,6 +184,8 @@ static C2iVector s_dragStart;
 
 // STATIC: 0x00D413EC
 static C2iVector s_centerMousePos;
+// SXC: whether CenterMouse's last cursor set succeeded, for the camera spin's delta log.
+static BOOL s_centerSetOk = TRUE;
 
 // STATIC: 0x00D413F4
 static HWND s_mouseWnd;
@@ -1166,7 +1169,31 @@ static void CenterMouse() {
     OsLogicalToPhysicalPoint(hwnd, &anchor);
     s_centerMousePos.x = anchor.x;
     s_centerMousePos.y = anchor.y;
-    OsSetPhysicalCursorPos(s_centerMousePos.x, s_centerMousePos.y);
+    s_centerSetOk = OsSetPhysicalCursorPos(s_centerMousePos.x, s_centerMousePos.y);  // SXC: kept for the delta log
+}
+
+// SXC: the camera spin (kb stock-fixes): log mouselook deltas too large for one mouse message, with
+// what CenterMouse last did, to catch the rare spin. Remove once it's found.
+static void LogLargeMouseDelta(HWND hwnd, const POINT& point) {
+    constexpr int32_t kLarge = 150;
+    static DWORD s_lastMove = 0;
+
+    DWORD now = GetTickCount();
+    DWORD since = s_lastMove ? now - s_lastMove : 0;
+    s_lastMove = now;
+
+    int32_t dx = point.x - s_centerMousePos.x;
+    int32_t dy = point.y - s_centerMousePos.y;
+    if (dx > -kLarge && dx < kLarge && dy > -kLarge && dy < kLarge) {
+        return;
+    }
+
+    RECT client = {};
+    GetClientRect(hwnd, &client);
+    SXC::Log("input: large mouselook delta (%d, %d): cursor (%ld, %ld), centre (%d, %d), anchor (%d, %d) in %ldx%ld, last set %s, %lu ms since the last move, %s",
+        dx, dy, point.x, point.y, s_centerMousePos.x, s_centerMousePos.y, s_mousePos.x, s_mousePos.y,
+        client.right - client.left, client.bottom - client.top, s_centerSetOk ? "ok" : "FAILED",
+        static_cast<unsigned long>(since), GetForegroundWindow() == hwnd ? "foreground" : "NOT foreground");
 }
 
 // OFFSET: 0x00869E00
@@ -1531,6 +1558,7 @@ intptr_t OsWindowProc(void* window, uint32_t message, uintptr_t wparam, intptr_t
                 }
 
                 if (point.x != s_centerMousePos.x || point.y != s_centerMousePos.y) {
+                    LogLargeMouseDelta(hwnd, point);  // SXC: the camera spin
                     OsQueuePut(OS_INPUT_MOUSE_MOVE_RELATIVE, 0, point.x - s_centerMousePos.x, point.y - s_centerMousePos.y, 0);
                     CenterMouse();
                 }
