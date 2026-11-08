@@ -1162,4 +1162,8 @@ float CreatureSoundDataGetFidgetDelayMax(const CreatureSoundDataRec* rec);
 
 int32_t MissileTrajectoryObjectCallback(void* param, uint32_t flags, uint64_t param64, uintptr_t param32);
 
+// Not in the original: FlashWOW Retail animations. The two-hand / loose two-hand / one-hand / unarmed version of a
+// Retail melee ability animation that fits what the unit holds (Unit_C.cpp).
+uint32_t ChooseWeaponVariantAnim(const CGUnit_C* unit, uint32_t animId);
+
 #endif

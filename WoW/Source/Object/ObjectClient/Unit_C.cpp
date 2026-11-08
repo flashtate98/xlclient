@@ -155,6 +155,7 @@
 #include <cstdio>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #endif
 #include "WarcraftXL/Seams.h"
 
@@ -2726,12 +2727,18 @@ int32_t CGUnit_C::ChooseStandStateAnim(uint32_t mask, uint32_t* anim) {
     return 1;
 }
 
+static bool ChooseChargeEndAnim(CGUnit_C* unit, uint32_t* anim);    // Not in the original: FlashWOW, defined by ChooseMovementAnim
+
 // VERIFY: c45e9335 auto
 // OFFSET: 0x00724500
 uint32_t CGUnit_C::ChooseAnimation(uint32_t mask, uint32_t* animFlags, int32_t* usedDefault) {
     uint32_t anim = ANIM_COUNT;
 
     if (this->ChooseDeathAnim(mask, &anim, animFlags) || this->ChooseSpecialIdleAnim(mask, &anim) || (this->m_vehiclePassenger && this->m_vehiclePassenger->PickHighPriorityAnimation(mask, &anim))) {
+        return anim;
+    }
+
+    if (ChooseChargeEndAnim(this, &anim)) {    // Not in the original: FlashWOW Retail animations
         return anim;
     }
 
@@ -4359,6 +4366,48 @@ void CGUnit_C::UpdateHandItemAnimEffects(bool force) {
     }
 }
 
+// Not in the original: FlashWOW Retail animations. Retail's melee ability animations come in a two-hand, a loose
+// two-hand (polearm, staff, spear), a one-hand and an unarmed version; Retail picks one by the weapon held. A spell
+// may name any of them and the unit plays the one that fits what it holds, as Special1H/2H already does. Cat and
+// bear forms take the unarmed one (Retail's feral attacks). Older models fall back through AnimationData as usual.
+static const uint32_t s_weaponVariantAnims[][4] = {
+    // 2H    2HL   1H    unarmed
+    { 812,  844,  818,  850  },   // CombatAbility2H01, CombatAbility2HL01, CombatAbility1H01, CombatUnarmed01
+    { 826,  846,  822,  1070 },   // CombatAbility2H02, CombatAbility2HL02, CombatAbility1H02, CombatUnarmed02
+    { 810,  848,  824,  850  },   // CombatAbility2HBig01, CombatAbility2HLBig01, CombatAbility1HBig01, CombatUnarmed01
+    { 1488, 848,  824,  850  },   // CombatAbility2HBig02 (Obliterate, Execute) with the Big01 others
+    { 1080, 844,  824,  850  },   // CombatAbility2H03 (Victory Rush: one-hand plays CombatAbility1HBig01)
+};
+
+uint32_t ChooseWeaponVariantAnim(const CGUnit_C* unit, uint32_t animId) {
+    for (const auto& row : s_weaponVariantAnims) {
+        for (uint32_t version : row) {
+            if (version != animId) {
+                continue;
+            }
+
+            uint32_t form = unit->GetShapeshiftForm();
+
+            if (form == 1 || form == 5 || form == 8) {
+                return row[3];
+            }
+
+            switch (unit->GetCombatReadyAnim()) {
+                case ANIM_READY_2H:
+                    return row[0];
+                case ANIM_READY_2HL:
+                    return row[1];
+                case ANIM_READY_1H:
+                    return row[2];
+                default:
+                    return row[3];
+            }
+        }
+    }
+
+    return animId;
+}
+
 // VERIFY: 4d39ab41 manual
 // OFFSET: 0x007385C0
 void CGUnit_C::PlayBaseAnimation(uint32_t animId, int32_t flags) {
@@ -4414,6 +4463,8 @@ void CGUnit_C::PlayBaseAnimation(uint32_t animId, int32_t flags) {
             } else {
                 animId = ANIM_SPECIAL_1H;
             }
+        } else if (!(flags & 0x8)) {
+            animId = ChooseWeaponVariantAnim(this, animId);    // Not in the original: FlashWOW Retail animations
         }
 
         anim = (flags & 0x4) ? animId : this->ResolveAnimForModel(animId, nullptr);
@@ -8016,6 +8067,46 @@ int32_t CGUnit_C::IsRunning() const {
     return this->m_movementData.m_walkSpeed + this->m_movementData.m_walkSpeed >= this->m_movementData.GetBaseSpeed(0);
 }
 
+// Not in the original: FlashWOW Retail animations. Retail plays CombatChargeLoop while a unit charges and
+// CombatChargeEnd when it arrives; neither is in Charge's spell data, the client takes them from the movement.
+// A charge reaches the client as a fast ground spline (42 yd/s): not a jump or knockback arc, not flying, not
+// mounted or on a flight path. CombatChargeLoop falls back to Sprint, which older models already played here;
+// CombatChargeEnd plays only on models that have it. Units seen charging are kept by guid until they arrive.
+static std::unordered_set<uint64_t> s_chargingUnits;
+
+static bool IsOnChargeSpline(const CGUnit_C* unit) {
+    const CMovement_C& move = unit->m_movementData;
+
+    if (!move.IsOnSpline() || move.IsOnParabolicSpline() || unit->IsOnFlyingSpline() || unit->m_mountModel) {
+        return false;
+    }
+
+    float speed = move.GetBaseSpeed(0);
+    return speed >= 25.0f && speed >= move.m_runSpeed * 2.0f;
+}
+
+static bool ChooseChargeEndAnim(CGUnit_C* unit, uint32_t* anim) {
+    if (s_chargingUnits.empty()) {
+        return false;
+    }
+
+    auto charging = s_chargingUnits.find(unit->m_obj->m_guid.m_guid);
+
+    if (charging == s_chargingUnits.end() || IsOnChargeSpline(unit)) {
+        return false;
+    }
+
+    s_chargingUnits.erase(charging);
+    CM2Model* model = unit->GetObjectModel();
+
+    if (!model || !model->IsLoaded(0, 0) || !model->HasSequence(820)) {
+        return false;
+    }
+
+    *anim = 820;    // CombatChargeEnd
+    return true;
+}
+
 // VERIFY: 2be9606e manual
 // OFFSET: 0x00717050
 int32_t CGUnit_C::ChooseMovementAnim(uint32_t flags, uint32_t* anim) const {
@@ -8053,6 +8144,17 @@ int32_t CGUnit_C::ChooseMovementAnim(uint32_t flags, uint32_t* anim) const {
 
     if (this->m_unit->m_unitFieldBytes1[2] & 0x2) {
         *anim = ANIM_STEALTH_WALK;
+        return 1;
+    }
+
+    // Not in the original: FlashWOW Retail animations, see IsOnChargeSpline.
+    if (IsOnChargeSpline(this)) {
+        if (s_chargingUnits.size() > 4096) {
+            s_chargingUnits.clear();
+        }
+
+        s_chargingUnits.insert(this->m_obj->m_guid.m_guid);
+        *anim = 816;    // CombatChargeLoop
         return 1;
     }
 

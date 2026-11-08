@@ -4454,7 +4454,7 @@ static int32_t Script_UnitIsAFK(lua_State* L) {
     return 1;
 }
 
-// Not in the original: FlashWOW animation test. FlashPlayAnimation(animation[, "unit"]) plays an animation, given by id or
+// Not in the original: FlashWOW animation test. FlashPlayAnimation(animation[, "unit"[, weapon]]) plays an animation, given by id or
 // AnimationData name, on a unit (the player by default) the way an emote or a spell does, after the model's fallback chain.
 // It returns the id the model actually plays and both names, so a fallback on an older model shows at once.
 static int32_t Script_FlashPlayAnimation(lua_State* L) {
@@ -4474,7 +4474,7 @@ static int32_t Script_FlashPlayAnimation(lua_State* L) {
             }
         }
     } else {
-        luaL_error(L, "Usage: FlashPlayAnimation(animationID or \"name\"[, \"unit\"])");
+        luaL_error(L, "Usage: FlashPlayAnimation(animationID or \"name\"[, \"unit\"[, weapon]])");
         return 0;
     }
 
@@ -4502,8 +4502,10 @@ static int32_t Script_FlashPlayAnimation(lua_State* L) {
         return 2;
     }
 
-    uint32_t played = unit->ResolveAnimForModel(static_cast<uint32_t>(id), nullptr);
-    unit->PlayBaseAnimation(static_cast<uint32_t>(id), 0x8);
+    // A true third argument picks the version for the unit's weapon first, as a spell would.
+    uint32_t chosen = lua_toboolean(L, 3) ? ChooseWeaponVariantAnim(unit, static_cast<uint32_t>(id)) : static_cast<uint32_t>(id);
+    uint32_t played = unit->ResolveAnimForModel(chosen, nullptr);
+    unit->PlayBaseAnimation(chosen, 0x8);
     AnimationDataRec* playedRec = g_animationDataDB.GetRecord(static_cast<int32_t>(played));
 
     lua_pushnumber(L, static_cast<double>(played));
