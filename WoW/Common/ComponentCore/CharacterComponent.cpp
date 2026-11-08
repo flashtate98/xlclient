@@ -4830,6 +4830,13 @@ void CCharacterComponent::PasteFromSkin(COMPONENT_SECTIONS section, void* textur
         mipLevel++;
     }
 
+    // Not in the original: a skin texture that is not square (a Retail-sized NPC skin, twice as wide as tall) read
+    // past its mip's rows, which are laid out for a square skin; so did one whose mips stop before the needed level.
+    // Such a skin is not pasted. On a Retail body the stock skin is not what is drawn anyway (RetailCharacterBody).
+    if (info.m_height != info.m_width || (info.m_mipCount && mipLevel >= info.m_mipCount)) {
+        return;
+    }
+
     CCharacterComponent::Paste(texture, dstMips, s_sectionInfo[section].m_pos, s_sectionInfo[section].m_pos, s_sectionInfo[section].m_size, info, mipLevel);
 }
 
