@@ -1828,7 +1828,7 @@ void RetailCharacterFitHelmet(CCharacterComponent* character) {
     }
 }
 
-// Whether a 3.3.5 foot texture covers most of the foot: at least half its pixels mostly opaque.
+// Whether a 3.3.5 foot (or lower-arm) texture covers most of its section: at least half its pixels mostly opaque.
 // Remembered per file.
 bool FootTextureCovers(const char* path) {
     static std::map<std::string, bool> known;
@@ -1911,6 +1911,39 @@ void RetailCharacterAfterStockGeometry(CCharacterComponent* character) {
         const bool shoe = hasShoe && paintsFoot;
         model->SetGeometryVisible(2001, 2099, 0);
         model->SetGeometryVisible(shoe ? 2002 : 2001, shoe ? 2002 : 2001, 1);
+    }
+
+    // Glove cuffs. A glove with a geoset group shows a cuff (402-404) instead of the bare hand (401); on Retail
+    // bodies these are big flared gauntlet cuffs, made for a glove that paints the lower arm. A glove whose lower-arm
+    // texture is missing or mostly see-through left the cuff in plain skin, or in the chest's sleeve texture,
+    // bulging round the wrist. Such a glove shows the bare hand instead, and the chest's sleeve (801+) takes the
+    // wrist as it would without the glove.
+    if (character->m_itemDisplayID[ITEMSLOT_GLOVES]) {
+        ItemDisplayInfoRec gloves;
+        if (g_itemDisplayInfoDB.GetRecord(character->m_itemDisplayID[ITEMSLOT_GLOVES], &gloves) && gloves.m_geosetGroup[0]) {
+            bool paintsArm = false;
+            if (gloves.m_texture[SECTION_ARM_LOWER] && *gloves.m_texture[SECTION_ARM_LOWER]) {
+                const char* sexes[] = {"U", character->m_data.m_preferences.m_sexID ? "F" : "M"};
+                for (const char* sex : sexes) {
+                    char path[260];
+                    std::snprintf(path, sizeof(path), "Item\\TextureComponents\\ArmLowerTexture\\%s_%s.blp",
+                        gloves.m_texture[SECTION_ARM_LOWER], sex);
+                    if (!SFile::FileExists(path)) continue;
+                    paintsArm = FootTextureCovers(path);
+                    break;
+                }
+            }
+            if (!paintsArm) {
+                model->SetGeometryVisible(401, 499, 0);
+                model->SetGeometryVisible(401, 401, 1);
+                ItemDisplayInfoRec chest;
+                if (character->m_itemDisplayID[ITEMSLOT_CHEST] && g_itemDisplayInfoDB.GetRecord(character->m_itemDisplayID[ITEMSLOT_CHEST], &chest) &&
+                    chest.m_geosetGroup[0]) {
+                    model->SetGeometryVisible(801, 899, 0);
+                    model->SetGeometryVisible(chest.m_geosetGroup[0] + 801, chest.m_geosetGroup[0] + 801, 1);
+                }
+            }
+        }
     }
 
     // Group 14. No 3.3.5 item drives it, so the stock pass always shows 1401; most Retail bodies have nothing
