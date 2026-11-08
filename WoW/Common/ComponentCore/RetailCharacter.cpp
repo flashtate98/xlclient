@@ -25,6 +25,7 @@
 #include "WoW/Source/Object/Types.h"
 #include "WoW/Source/ObjectMgrClient/ObjectMgrClient.h"
 #include <deque>
+#include <list>
 #include <cstdio>
 #include <cctype>
 #include <cstring>
@@ -137,26 +138,69 @@ void TintImage(Retail::Image& image, uint32_t rgb) {
     }
 }
 
-// Composes with the Death Knight eye choice's own textures tinted.
+// The Death Knight eye choice's own textures, to be composed tinted (FetchImage).
 struct TintFetch {
     uint32_t rgb = 0;
     std::set<uint32_t> fileDataIds;
 };
 
-bool FetchTinted(uint32_t fileDataId, std::vector<uint8_t>& bytes, void* context) {
-    if (!FetchBlp(fileDataId, bytes, nullptr)) return false;
-    const auto* tint = static_cast<const TintFetch*>(context);
-    if (!tint || !tint->rgb || !tint->fileDataIds.count(fileDataId)) return true;
-    Retail::Image image;
-    std::string error;
-    if (!Retail::DecodeBlp(bytes, image, error)) return true;
-    TintImage(image, tint->rgb);
-    Retail::BuildBlp(image, bytes);
-    return true;
-}
-
 using Clock = std::chrono::steady_clock;
 double Since(Clock::time_point start) { return std::chrono::duration<double, std::milli>(Clock::now() - start).count(); }
+
+// Decoded layer textures, kept between looks: a randomize or a new race reads the same base skin, underwear, eye and
+// hair files for every look it builds, and reading and decoding them was over a third of each build. Keyed by
+// FileDataID and, for the Death Knight eye textures, the tint drawn into them. The least recently used go first once
+// the images pass kImageCacheBytes.
+constexpr size_t kImageCacheBytes = 256u << 20;
+struct ImageCache {
+    std::mutex mutex;
+    std::unordered_map<uint64_t, std::pair<std::shared_ptr<const Retail::Image>, std::list<uint64_t>::iterator>> images;
+    std::list<uint64_t> order;    // most recently used first
+    size_t bytes = 0;
+};
+ImageCache s_imageCache;
+
+std::shared_ptr<const Retail::Image> FetchImage(uint32_t fileDataId, void* context, Retail::ComposeStats* stats) {
+    const auto* tint = static_cast<const TintFetch*>(context);
+    const uint32_t rgb = tint && tint->rgb && tint->fileDataIds.count(fileDataId) ? tint->rgb : 0;
+    const uint64_t key = uint64_t(fileDataId) | uint64_t(rgb) << 32;
+    {
+        std::lock_guard<std::mutex> lock(s_imageCache.mutex);
+        const auto found = s_imageCache.images.find(key);
+        if (found != s_imageCache.images.end()) {
+            s_imageCache.order.splice(s_imageCache.order.begin(), s_imageCache.order, found->second.second);
+            if (stats) ++stats->cached;
+            return found->second.first;
+        }
+    }
+    std::vector<uint8_t> bytes;
+    auto start = Clock::now();
+    const bool read = FetchBlp(fileDataId, bytes, nullptr);
+    if (stats) { stats->fetch += Since(start); ++stats->files; }
+    if (!read) return nullptr;
+    start = Clock::now();
+    auto image = std::make_shared<Retail::Image>();
+    std::string error;
+    const bool decoded = Retail::DecodeBlp(bytes, *image, error);
+    if (decoded && rgb) TintImage(*image, rgb);
+    if (stats) stats->decode += Since(start);
+    if (!decoded) {
+        Blizzard::Log::Printf(1, kLog, "Texture %u: %s\n", static_cast<unsigned>(fileDataId), error.c_str());
+        return nullptr;
+    }
+    std::lock_guard<std::mutex> lock(s_imageCache.mutex);
+    if (s_imageCache.images.count(key)) return image;
+    s_imageCache.order.push_front(key);
+    s_imageCache.images.emplace(key, std::make_pair(image, s_imageCache.order.begin()));
+    s_imageCache.bytes += image->rgba.size();
+    while (s_imageCache.bytes > kImageCacheBytes && s_imageCache.order.size() > 1) {
+        const auto oldest = s_imageCache.images.find(s_imageCache.order.back());
+        s_imageCache.bytes -= oldest->second.first->rgba.size();
+        s_imageCache.images.erase(oldest);
+        s_imageCache.order.pop_back();
+    }
+    return image;
+}
 
 // Time spent turning composed images into client textures: building the BLP (pixels plus every mip
 // level) and creating the texture from it.
@@ -315,7 +359,7 @@ std::shared_ptr<Look> LookFor(uint32_t retailRace, uint32_t sex, uint32_t chrMod
         }
         auto start = Clock::now();
         composed.clear();
-        Retail::ComposeTextures(chrModel, type.second, FetchTinted, &tint, composed, warnings, &compose);
+        Retail::ComposeTextures(chrModel, type.second, &FetchImage, &tint, composed, warnings, &compose);
         composeTotal += Since(start);
         for (auto& texture : composed) {
             if (texture.textureType == 1) {
@@ -335,9 +379,9 @@ std::shared_ptr<Look> LookFor(uint32_t retailRace, uint32_t sex, uint32_t chrMod
         }
     }
     Blizzard::Log::Printf(1, kLog,
-        "Timing look: total %.1f ms | tables %.1f | %u texture types reused | compose %.1f (read %.1f for %u files, decode %.1f, paint %.1f) | "
+        "Timing look: total %.1f ms | tables %.1f | %u texture types reused | compose %.1f (read %.1f for %u files, %u cached, decode %.1f, paint %.1f) | "
         "textures %u: build %.1f, create %.1f, %.1f MB\n",
-        Since(lookStart), tables, reused, composeTotal, compose.fetch, compose.files, compose.decode, compose.paint,
+        Since(lookStart), tables, reused, composeTotal, compose.fetch, compose.files, compose.cached, compose.decode, compose.paint,
         make.count, make.build, make.upload, make.bytes / 1048576.0);
 
     std::string text;
@@ -1459,6 +1503,12 @@ void RetailCharacterShutdown() {
     s_armsSkinOrder.clear();
     s_armsStarted.clear();
     s_itemImages.clear();
+    {
+        std::lock_guard<std::mutex> lock(s_imageCache.mutex);
+        s_imageCache.images.clear();
+        s_imageCache.order.clear();
+        s_imageCache.bytes = 0;
+    }
     s_itemImageOrder.clear();
     s_collections.clear();
     for (auto& body : s_bodies) HandleClose(reinterpret_cast<HOBJECT>(body.second));

@@ -185,6 +185,8 @@ struct Rect { uint32_t x, y, w, h; };
 // column instead of once per pixel, n/255 comes from a table holding the same float values, source
 // texels with zero alpha are skipped where the blend leaves the destination unchanged, and large
 // rectangles are split into row bands painted on several threads (rows are independent).
+// FlashWOW: a layer drawn at its own size samples every texel exactly (the weights come out 0), so it skips the
+// interpolation, and a plain copy (blend 0 and 1) copies whole rows. Most layers are drawn at their own size.
 struct Column { int x0, x1; float tx; };
 
 void PaintRows(Image& dst, const Image& src, const Rect& rect, uint32_t blend, bool legacyAlphaOver,
@@ -195,7 +197,12 @@ void PaintRows(Image& dst, const Image& src, const Rect& rect, uint32_t blend, b
     const bool skipClear = blend != 0 && blend != 1;
     const uint8_t* const texels = src.rgba.data();
     const size_t stride = size_t(src.width) * 4;
+    const bool exact = src.width == rect.w && src.height == rect.h;
     for (uint32_t y = firstRow; y < endRow; ++y) {
+        if (exact && (blend == 0 || blend == 1)) {
+            std::memcpy(&dst.rgba[(size_t(rect.y + y) * dst.width + rect.x) * 4], texels + size_t(y) * stride, stride);
+            continue;
+        }
         const float fy = (float(y) + 0.5f) * src.height / rect.h - 0.5f;
         const int y0 = std::max(0, int(std::floor(fy))), y1 = std::min(int(src.height) - 1, y0 + 1);
         const float ty = std::min(1.0f, std::max(0.0f, fy - float(y0)));
@@ -210,10 +217,14 @@ void PaintRows(Image& dst, const Image& src, const Rect& rect, uint32_t blend, b
             const uint8_t* const b1 = row1 + size_t(column.x1) * 4;
             const float tx = column.tx;
             float s[4];
-            for (int c = 0; c < 4; ++c) {
-                const float top = a0[c] * (1 - tx) + a1[c] * tx;
-                const float bottom = b0[c] * (1 - tx) + b1[c] * tx;
-                s[c] = top * (1 - ty) + bottom * ty;
+            if (exact) {
+                for (int c = 0; c < 4; ++c) s[c] = a0[c];
+            } else {
+                for (int c = 0; c < 4; ++c) {
+                    const float top = a0[c] * (1 - tx) + a1[c] * tx;
+                    const float bottom = b0[c] * (1 - tx) + b1[c] * tx;
+                    s[c] = top * (1 - ty) + bottom * ty;
+                }
             }
             // Straight alpha-over onto a fully transparent texel zeroes its RGB, so that case still paints.
             if (skipClear && s[3] == 0.0f && (!legacyAlphaOver || d[3] != 0)) continue;
@@ -288,7 +299,39 @@ void PaintImage(Image& dst, const Image& src, uint32_t x, uint32_t y, uint32_t w
     Paint(dst, src, {x, y, width, height}, blend, blend == 2);
 }
 
+namespace {
+
+// The byte-fetching form: each file read and decoded on the spot, nothing kept.
+struct BytesFetch {
+    BlpFetch fetch;
+    void* context;
+};
+
+std::shared_ptr<const Image> FetchAndDecode(uint32_t fileDataId, void* context, ComposeStats* stats) {
+    using Clock = std::chrono::steady_clock;
+    const auto* bytesFetch = static_cast<const BytesFetch*>(context);
+    std::vector<uint8_t> bytes;
+    auto start = Clock::now();
+    const bool fetched = bytesFetch->fetch(fileDataId, bytes, bytesFetch->context);
+    if (stats) { stats->fetch += std::chrono::duration<double, std::milli>(Clock::now() - start).count(); ++stats->files; }
+    if (!fetched) return nullptr;
+    start = Clock::now();
+    auto image = std::make_shared<Image>();
+    std::string error;
+    const bool decoded = DecodeBlp(bytes, *image, error);
+    if (stats) stats->decode += std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+    return decoded ? image : nullptr;
+}
+
+}
+
 bool ComposeTextures(uint32_t chrModel, const std::vector<Appearance::TextureLayer>& layers, BlpFetch fetch, void* context,
+    std::vector<ComposedTexture>& out, std::string& warnings, ComposeStats* stats) {
+    BytesFetch bytesFetch{fetch, context};
+    return ComposeTextures(chrModel, layers, &FetchAndDecode, &bytesFetch, out, warnings, stats);
+}
+
+bool ComposeTextures(uint32_t chrModel, const std::vector<Appearance::TextureLayer>& layers, ImageFetch fetch, void* context,
     std::vector<ComposedTexture>& out, std::string& warnings, ComposeStats* stats) {
     out.clear();
     using Clock = std::chrono::steady_clock;
@@ -301,22 +344,16 @@ bool ComposeTextures(uint32_t chrModel, const std::vector<Appearance::TextureLay
     std::vector<Appearance::TextureSection> sections;
     Appearance::Sections(layout, sections);
     std::map<uint32_t, ComposedTexture> byType;
-    std::map<uint32_t, Image> lenderSkins;    // FileDataID -> decoded, for borrowed layers (see below)
+    std::map<uint32_t, std::shared_ptr<const Image>> lenderSkins;    // FileDataID -> decoded, for borrowed layers (see below)
     for (const Appearance::TextureLayer& layer : layers) { // already in paint order
-        std::vector<uint8_t> bytes;
-        Image image;
-        std::string error;
-        auto start = Clock::now();
-        const bool fetched = layer.fileDataId && fetch(layer.fileDataId, bytes, context);
-        if (stats) { stats->fetch += since(start); ++stats->files; }
-        start = Clock::now();
-        const bool decoded = fetched && DecodeBlp(bytes, image, error);
-        if (stats) stats->decode += since(start);
-        if (!decoded) {
-            warnings += "texture " + std::to_string(layer.fileDataId) + " unavailable" + (error.empty() ? "" : ": " + error) + "\n";
+        const std::shared_ptr<const Image> source = layer.fileDataId ? fetch(layer.fileDataId, context, stats) : nullptr;
+        if (!source || !source->width || source->rgba.size() < size_t(source->width) * source->height * 4) {
+            warnings += "texture " + std::to_string(layer.fileDataId) + " unavailable\n";
             continue;
         }
-        start = Clock::now();
+        const Image* image = source.get();    // the fetched image is shared: a layer that changes it works on a copy
+        Image glow;
+        const auto start = Clock::now();
         struct PaintTimer {
             ComposeStats* stats; Clock::time_point start;
             ~PaintTimer() { if (stats) stats->paint += std::chrono::duration<double, std::milli>(Clock::now() - start).count(); }
@@ -326,14 +363,16 @@ bool ComposeTextures(uint32_t chrModel, const std::vector<Appearance::TextureLay
         // renderer has no emissive skin, so painted as ordinary transparency they barely showed. Such a layer is
         // baked as glow instead: its alpha stretched to full strength, its colour lifted toward white. Layers
         // with ordinary alpha (Orc war paint, Tauren and Troll paint) are painted as before.
-        if (layer.blendMode == 9 && layer.textureType == 1 && !image.rgba.empty()) {
+        if (layer.blendMode == 9 && layer.textureType == 1 && !image->rgba.empty()) {
             uint8_t peak = 0;
-            for (size_t i = 3; i < image.rgba.size(); i += 4) peak = std::max(peak, image.rgba[i]);
+            for (size_t i = 3; i < image->rgba.size(); i += 4) peak = std::max(peak, image->rgba[i]);
             if (peak && peak <= 64) {
-                for (size_t i = 0; i < image.rgba.size(); i += 4) {
-                    for (size_t c = 0; c < 3; ++c) image.rgba[i + c] = uint8_t(image.rgba[i + c] + (255 - image.rgba[i + c]) * 11 / 20);
-                    image.rgba[i + 3] = uint8_t(std::min(255u, uint32_t(image.rgba[i + 3]) * 255u / peak));
+                glow = *image;
+                for (size_t i = 0; i < glow.rgba.size(); i += 4) {
+                    for (size_t c = 0; c < 3; ++c) glow.rgba[i + c] = uint8_t(glow.rgba[i + c] + (255 - glow.rgba[i + c]) * 11 / 20);
+                    glow.rgba[i + 3] = uint8_t(std::min(255u, uint32_t(glow.rgba[i + 3]) * 255u / peak));
                 }
+                image = &glow;
             }
         }
         ComposedTexture& target = byType[layer.textureType];
@@ -341,13 +380,13 @@ bool ComposeTextures(uint32_t chrModel, const std::vector<Appearance::TextureLay
         if (!target.image.width) {
             // The body sheet has the layout's size; every other type takes the size of its first layer.
             const bool body = layer.textureType == 1 && haveSheet;
-            target.image.width = body ? sheetWidth : image.width;
-            target.image.height = body ? sheetHeight : image.height;
+            target.image.width = body ? sheetWidth : image->width;
+            target.image.height = body ? sheetHeight : image->height;
             target.image.rgba.assign(size_t(target.image.width) * target.image.height * 4, 0);
         }
         const int32_t mask = int32_t(layer.sectionMask);
         if (mask == -1 || layer.textureType != 1) {
-            Paint(target.image, image, {0, 0, target.image.width, target.image.height}, layer.blendMode);
+            Paint(target.image, *image, {0, 0, target.image.width, target.image.height}, layer.blendMode);
             continue;
         }
         // FlashWOW: a layer an unlocked skin borrows from an ordinary one. Pelvis and chest textures are often
@@ -357,30 +396,25 @@ bool ComposeTextures(uint32_t chrModel, const std::vector<Appearance::TextureLay
         const Image* lender = nullptr;
         if (layer.lenderSkin && layer.textureType == 1 && haveSheet) {
             bool opaque = true;
-            for (size_t i = 3; i < image.rgba.size() && opaque; i += 4) opaque = image.rgba[i] == 255;
+            for (size_t i = 3; i < image->rgba.size() && opaque; i += 4) opaque = image->rgba[i] == 255;
             if (opaque) {
                 auto cached = lenderSkins.find(layer.lenderSkin);
-                if (cached == lenderSkins.end()) {
-                    std::vector<uint8_t> skinBytes;
-                    Image skin;
-                    std::string skinError;
-                    if (!(fetch(layer.lenderSkin, skinBytes, context) && DecodeBlp(skinBytes, skin, skinError))) skin = Image{};
-                    cached = lenderSkins.emplace(layer.lenderSkin, std::move(skin)).first;
-                }
-                if (cached->second.width) lender = &cached->second;
+                if (cached == lenderSkins.end()) cached = lenderSkins.emplace(layer.lenderSkin, fetch(layer.lenderSkin, context, stats)).first;
+                if (cached->second && cached->second->width && cached->second->rgba.size() >= size_t(cached->second->width) * cached->second->height * 4)
+                    lender = cached->second.get();
             }
         }
         const auto underwearOnly = [&](const Appearance::TextureSection& section) {
-            Image masked = image;
-            for (uint32_t y = 0; y < image.height; ++y)
-                for (uint32_t x = 0; x < image.width; ++x) {
+            Image masked = *image;
+            for (uint32_t y = 0; y < image->height; ++y)
+                for (uint32_t x = 0; x < image->width; ++x) {
                     // The same texel on the lender's skin, through the sheet.
-                    const uint32_t sheetX = section.x + uint32_t((uint64_t(x) * 2 + 1) * section.width / (uint64_t(image.width) * 2));
-                    const uint32_t sheetY = section.y + uint32_t((uint64_t(y) * 2 + 1) * section.height / (uint64_t(image.height) * 2));
+                    const uint32_t sheetX = section.x + uint32_t((uint64_t(x) * 2 + 1) * section.width / (uint64_t(image->width) * 2));
+                    const uint32_t sheetY = section.y + uint32_t((uint64_t(y) * 2 + 1) * section.height / (uint64_t(image->height) * 2));
                     const uint32_t lx = std::min(lender->width - 1, uint32_t(uint64_t(sheetX) * lender->width / sheetWidth));
                     const uint32_t ly = std::min(lender->height - 1, uint32_t(uint64_t(sheetY) * lender->height / sheetHeight));
                     const uint8_t* s = &lender->rgba[(size_t(ly) * lender->width + lx) * 4];
-                    uint8_t* t = &masked.rgba[(size_t(y) * image.width + x) * 4];
+                    uint8_t* t = &masked.rgba[(size_t(y) * image->width + x) * 4];
                     int diff = 0;
                     for (int ch = 0; ch < 3; ++ch) diff = std::max(diff, std::abs(int(t[ch]) - int(s[ch])));
                     // Within kSame of the skin: see-through; past kDifferent: solid; between: a soft edge.
@@ -395,7 +429,7 @@ bool ComposeTextures(uint32_t chrModel, const std::vector<Appearance::TextureLay
                     const Image masked = underwearOnly(section);
                     Paint(target.image, masked, {section.x, section.y, section.width, section.height}, layer.blendMode);
                 } else {
-                    Paint(target.image, image, {section.x, section.y, section.width, section.height}, layer.blendMode);
+                    Paint(target.image, *image, {section.x, section.y, section.width, section.height}, layer.blendMode);
                 }
             }
     }

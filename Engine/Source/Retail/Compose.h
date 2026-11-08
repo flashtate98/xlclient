@@ -3,6 +3,7 @@
 
 #include "Engine/Source/Retail/Appearance.h"
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -35,10 +36,18 @@ using BlpFetch = bool (*)(uint32_t fileDataId, std::vector<uint8_t>& bytes, void
 // Where ComposeTextures spends its time, in milliseconds, for the timing log.
 struct ComposeStats {
     double fetch = 0, decode = 0, paint = 0;
-    uint32_t files = 0;
+    uint32_t files = 0;     // files read and decoded
+    uint32_t cached = 0;    // decoded images an ImageFetch already had
 };
 
 bool ComposeTextures(uint32_t chrModel, const std::vector<Appearance::TextureLayer>& layers, BlpFetch fetch, void* context,
+    std::vector<ComposedTexture>& out, std::string& warnings, ComposeStats* stats = nullptr);
+
+// The same with decoded images from the caller, who may keep them between calls (FlashWOW: a randomize reads the
+// same base skin, underwear and eye files for every look). Returns null for a file it cannot give; it adds its own
+// read and decode time, and its cache hits, to `stats` when given.
+using ImageFetch = std::shared_ptr<const Image> (*)(uint32_t fileDataId, void* context, ComposeStats* stats);
+bool ComposeTextures(uint32_t chrModel, const std::vector<Appearance::TextureLayer>& layers, ImageFetch fetch, void* context,
     std::vector<ComposedTexture>& out, std::string& warnings, ComposeStats* stats = nullptr);
 
 }
