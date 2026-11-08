@@ -4662,6 +4662,21 @@ void CGUnit_C::PlayBaseAnimation(uint32_t animId, int32_t flags) {
         keepBase = (IsCorpseAnim(anim) && IsDeadOrDyingAnim(this->GetCurrentTorsoAnimId())) ? 1 : 0;
     }
 
+    // Not in the original: FlashWOW Retail animations. CombatChargeLoop and CombatChargeEnd are whole-body. A short
+    // charge starts almost in reach, so the server's first swing can begin at the cast; it stayed on the upper
+    // body over the loop and the end. Older models resolve these to Sprint and keep the usual split.
+    if ((anim == 816 || anim == 820) && !this->m_mountModel) {
+        updateBase = 1;
+        baseSlot = newSlot;
+        keepBase = 0;
+
+        if (hasTorso) {
+            updateTorso = 1;
+            torsoSlot.m_sequenceId = 0xFFFFFFFF;
+            keepTorso = 0;
+        }
+    }
+
     if (!IsDeadOrDyingAnim(anim) && this->ApplyAttachmentAnimOverride(&mount, &base, &torso, hasTorso, &mountSlot, &baseSlot, &torsoSlot, &keepBase, &keepTorso)) {
         updateBase = 1;
 
