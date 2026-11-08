@@ -43,4 +43,11 @@ extern const int32_t g_scriptSexIndex[3];
 void CharSelectRegisterScriptFunctions();
 void CharSelectUnregisterScriptFunctions();
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+// Not in the original: FlashWOW Two Forms side by side on the character select screen. Turns the selected
+// character's other form with it, and sets where it stands from the character (scene coordinates).
+void CharacterSelectionPlaceOtherForm(float rotation);
+void CharacterSelectionSetFormSpacing(float x, float y);
+#endif
+
 #endif

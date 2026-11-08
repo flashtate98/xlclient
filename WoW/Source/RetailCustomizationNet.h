@@ -2,6 +2,7 @@
 #define WOW_SOURCE_RETAILCUSTOMIZATIONNET_H
 
 #include <cstdint>
+#include "WoW/Common/ComponentCore/RetailCharacter.h"   // RetailChoiceList
 
 class CDataStore;
 class CCharacterComponent;
@@ -39,6 +40,10 @@ void RetailCustomizationNetFormChanged(uint64_t guid);
 
 // The Two Forms form the server reported for a character (0 the race's own form, 1 its altered form).
 uint32_t RetailCustomizationSavedForm(uint64_t guid);
+
+// The other Two Forms form's look the character list reported for a character: its skin, face, hair style, hair
+// colour and facial hair, and its Retail choices. False when the server sent none.
+bool RetailCustomizationOtherForm(uint64_t guid, uint8_t look[5], RetailChoiceList& choices);
 
 // Binds a component to the character it shows and, when `ask` is set and its choices are not known,
 // asks the server for them.

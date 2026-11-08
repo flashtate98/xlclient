@@ -339,6 +339,14 @@ static int32_t Script_SelectCharacter(lua_State* L) {
 }
 
 // STATIC: 0x00AC4378
+#if defined(WOWDECOMP_RETAIL_MODELS)
+// SetCharacterSelectFormSpacing(x, y): Two Forms side by side; where the selected character's other form stands.
+static int32_t Script_SetCharacterSelectFormSpacing(lua_State* L) {
+    CharacterSelectionSetFormSpacing(static_cast<float>(lua_tonumber(L, 1)), static_cast<float>(lua_tonumber(L, 2)));
+    return 0;
+}
+#endif
+
 static FrameScript_Method s_scriptFunctions[] = {
     { "SetCharSelectModelFrame", &Script_SetCharSelectModelFrame },
     { "SetCharSelectBackground", &Script_SetCharSelectBackground },
@@ -353,6 +361,9 @@ static FrameScript_Method s_scriptFunctions[] = {
     { "GetCharacterSelectFacing", &Script_GetCharacterSelectFacing },
     { "SetCharacterSelectFacing", &Script_SetCharacterSelectFacing },
     { "GetSelectBackgroundModel", &Script_GetSelectBackgroundModel },
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    { "SetCharacterSelectFormSpacing", &Script_SetCharacterSelectFormSpacing },
+#endif
 };
 
 // VERIFY: 55f0de4b auto

@@ -37,6 +37,7 @@
 #include "WoW/Source/WowSvcs/WowSvcsClient/ClientServices.h"
 #if defined(WOWDECOMP_RETAIL_MODELS)
 #include "WoW/Source/RetailCustomizationNet.h"
+#include "WoW/Common/ComponentCore/RetailCharacter.h"
 #include "WoW/Source/Object/ObjectClient/AlteredForm.h"
 #endif
 
@@ -81,6 +82,108 @@ static uint32_t SelectionBodyRace(const CHARACTER_INFO& info) {
     return info.m_raceID;
 }
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+// Not in the original: FlashWOW Two Forms side by side. The selected character's other form stands beside it, from
+// the look the character list reported (RetailCustomizationOtherForm), wearing the same gear.
+static CCharacterComponent* s_otherForm = nullptr;
+static float s_otherFormX = -0.8f;     // from the character, in the scene's coordinates (SetCharacterSelectFormSpacing)
+static float s_otherFormY = 1.6f;
+
+static void FreeOtherForm() {
+    if (!s_otherForm) {
+        return;
+    }
+    if (s_otherForm->m_data.m_model && s_otherForm->m_data.m_model->m_attachParent) {
+        s_otherForm->m_data.m_model->DetachFromParent();
+    }
+    RetailCustomizationDiscard(s_otherForm);
+    CCharacterComponent::FreeComponent(s_otherForm);
+    s_otherForm = nullptr;
+}
+
+void CharacterSelectionPlaceOtherForm(float rotation) {
+    if (s_otherForm && s_otherForm->m_data.m_model) {
+        s_otherForm->m_data.m_model->SetWorldTransform(C3Vector(s_otherFormX, s_otherFormY, 0.0f), rotation, RetailCharacterGlueScale(s_otherForm));
+    }
+}
+
+void CharacterSelectionSetFormSpacing(float x, float y) {
+    s_otherFormX = x;
+    s_otherFormY = y;
+    CharacterSelectionPlaceOtherForm(CCharacterSelection::s_charFacing);
+}
+
+static void DressOtherForm(const CHARACTER_INFO& info) {
+    const bool hunter = info.m_classID == 3;
+    for (uint32_t slot = 0; slot < 23; slot++) {
+        const int32_t displayID = info.m_inventoryItemDisplayID[slot];
+        const int32_t itemVisual = info.m_inventoryItemVisualID[slot];
+        if (!displayID) continue;
+        if (hunter ? (slot == INVSLOT_MAINHAND || slot == INVSLOT_OFFHAND) : slot == INVSLOT_RANGED) continue;
+        if (((info.m_flags & 0x400) && slot == INVSLOT_HEAD) || ((info.m_flags & 0x800) && slot == INVSLOT_BACK)) continue;
+        ItemDisplayInfoRec itemRec;
+        const int32_t found = g_itemDisplayInfoDB.GetRecord(displayID, &itemRec);
+        const int32_t visual = found && g_itemVisualsDB.GetRecord(itemRec.m_itemVisual) ? 0 : itemVisual;
+        if (slot == INVSLOT_MAINHAND || slot == INVSLOT_OFFHAND || slot == INVSLOT_RANGED) {
+            if (found) {
+                CCharacterComponent::AddHandItem(s_otherForm->m_data.m_model, &itemRec, static_cast<INVENTORY_SLOTS>(slot), SHEATHE_NONE,
+                    false, info.m_inventoryItemType[slot] == INVTYPE_SHIELD, false, visual);
+            }
+        } else if (slot >= 19 && slot <= 22) {
+            continue;   // bags
+        } else {
+            s_otherForm->AddItemBySlot(static_cast<INVENTORY_SLOTS>(slot), displayID, visual);
+        }
+    }
+}
+
+static void ShowOtherForm(const CHARACTER_INFO& info) {
+    FreeOtherForm();
+    const uint32_t base = info.m_raceID;
+    const uint32_t altered = AlteredFormRace(base);
+    if (!altered || !g_chrRacesDB.GetRecord(altered) || !CCharacterSelection::m_modelFrame || !CCharacterSelection::m_modelFrame->m_model) {
+        return;
+    }
+    uint8_t look[5] = {};
+    RetailChoiceList choices;
+    if (!RetailCustomizationOtherForm(info.m_guid.m_guid, look, choices)) {
+        return;
+    }
+    const uint32_t race = SelectionBodyRace(info) == base ? altered : base;
+    CreatureModelDataRec* modelRec = GetModelDataRec(race, info.m_sexID);
+    if (!modelRec || !*modelRec->m_modelName) {
+        return;
+    }
+
+    ComponentData data;
+    data.m_preferences.m_raceID = race;
+    data.m_preferences.m_sexID = info.m_sexID;
+    data.m_preferences.m_classId = info.m_classID;
+    data.m_preferences.m_skinID = look[0];
+    data.m_preferences.m_faceId = look[1];
+    data.m_preferences.m_hairStyleId = look[2];
+    data.m_preferences.m_hairColorId = look[3];
+    data.m_preferences.m_facialHairId = look[4];
+    data.m_model = CCharacterSelection::m_modelFrame->GetScene()->CreateModel(modelRec->m_modelName, 0);
+    if (!data.m_model) {
+        return;
+    }
+    data.m_flags |= 0x2;
+    s_otherForm = CCharacterComponent::AllocComponent();
+    RetailCustomizationGiveExtras(s_otherForm, choices);
+    s_otherForm->Init(&data, nullptr);
+    s_otherForm->m_data.m_model->m_lightingCallback = &CCharacterSelection::GenericLightingCallback;
+    s_otherForm->m_data.m_model->m_lightingArg = CCharacterSelection::m_modelFrame->m_lightArray2;
+    s_otherForm->m_data.m_model->SetBoneSequence(0xFFFFFFFF, 0, 0xFFFFFFFF, 0, 1.0f, 1, 1);
+    DressOtherForm(info);
+    s_otherForm->RenderPrep(0);
+    s_otherForm->m_data.m_model->AttachToParent(CCharacterSelection::m_modelFrame->m_model, 0, nullptr, 0);
+    CharacterSelectionPlaceOtherForm(CCharacterSelection::s_charFacing);
+    s_otherForm->RenderPrep(1);
+    s_otherForm->m_data.m_model->IsDrawable(1, 1);
+}
+#endif
+
 // VERIFY: ef583a6e manual
 // OFFSET: 0x005EEB70
 void CCharacterSelection::Initialize() {
@@ -90,6 +193,9 @@ void CCharacterSelection::Initialize() {
 // OFFSET: 0x004E38F0
 void CCharacterSelection::Shutdown() {
     LoadingScreenMiniDisable();
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    FreeOtherForm();
+#endif
 
     if (CCharacterComponent::m_activePlayerComponent) {
         CCharacterComponent::FreeComponent(CCharacterComponent::m_activePlayerComponent);
@@ -447,6 +553,9 @@ void CCharacterSelection::ShowCharacter() {
     }
 
     CCharacterSelection::s_charFacing = 0.0f;
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    FreeOtherForm();
+#endif
 
     int32_t newComponent = 0;
 
@@ -625,6 +734,9 @@ void CCharacterSelection::ShowCharacter() {
 
     if (CCharacterSelection::m_modelFrame->m_model) {
         CCharacterSelection::s_characterList[CCharacterSelection::s_selectionIndex].m_component->m_data.m_model->AttachToParent(CCharacterSelection::m_modelFrame->m_model, 0, nullptr, 0);
+#if defined(WOWDECOMP_RETAIL_MODELS)
+        ShowOtherForm(CCharacterSelection::s_characterList[CCharacterSelection::s_selectionIndex].m_characterInfo);
+#endif
         CharacterSelectionDisplay::SetCharacterFacing(0.0f);
 
         if (CCharacterSelection::s_characterList[CCharacterSelection::s_selectionIndex].m_petModel) {

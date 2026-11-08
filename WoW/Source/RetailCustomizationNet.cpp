@@ -18,6 +18,18 @@ constexpr uint32_t kMagic = 0x434C5452;      // "RTLC"
 constexpr uint32_t kFormMagic = 0x464F5754;  // "TWOF"
 constexpr uint8_t kMaxChoices = 64;
 constexpr uint32_t kSavedFormOption = 0xFFFFFF01;  // not a Retail option: the character's Two Forms form
+// Character list only: the other Two Forms form's look. Its skin, face, hair style and hair colour packed in one
+// value (low byte first), its facial hair, and its Retail choices with the top bit set on the option ID.
+constexpr uint32_t kOtherLookOption = 0xFFFFFF02;
+constexpr uint32_t kOtherFacialOption = 0xFFFFFF03;
+constexpr uint32_t kOtherChoiceBit = 0x80000000;
+
+struct OtherForm {
+    bool valid = false;
+    uint8_t look[5] = {};
+    RetailChoiceList choices;
+};
+std::unordered_map<uint64_t, OtherForm> s_otherForms;
 
 std::unordered_map<uint64_t, uint32_t> s_savedForms;
 std::unordered_map<uint64_t, RetailChoiceList> s_formChoices;    // a form change's choices, waiting for its flag
@@ -49,16 +61,34 @@ int32_t OnChoices(void* param, NETMESSAGE msgId, uint32_t time, CDataStore* msg)
         choices.clear();
         s_savedForms.erase(guid);     // the character list and form changes name the form; anything else means none known
         bool named = false;
+        OtherForm other;
         for (uint8_t i = 0; i < count; ++i) {
             uint32_t option = 0, choice = 0;
             msg->Get(option);
             msg->Get(choice);
+            if (option == kOtherLookOption) {
+                other.valid = true;
+                for (int k = 0; k < 4; ++k) other.look[k] = static_cast<uint8_t>(choice >> (8 * k));
+                continue;
+            }
+            if (option == kOtherFacialOption) {
+                other.look[4] = static_cast<uint8_t>(choice);
+                continue;
+            }
+            if ((option & kOtherChoiceBit) && option < kSavedFormOption) {
+                other.choices.emplace_back(option & ~kOtherChoiceBit, choice);
+                continue;
+            }
             if (option == kSavedFormOption) {
                 s_savedForms[guid] = choice;
                 named = true;
                 continue;
             }
             choices.emplace_back(option, choice);
+        }
+        if (named) {
+            if (other.valid) s_otherForms[guid] = other;
+            else s_otherForms.erase(guid);
         }
         if (named && AwaitsForm(guid, s_savedForms[guid])) {
             s_formChoices[guid] = choices;
@@ -116,6 +146,15 @@ void RetailCustomizationNetFormChanged(uint64_t guid) {
     const RetailChoiceList choices = std::move(found->second);
     s_formChoices.erase(found);
     RetailCustomizationStore(guid, choices);
+}
+
+bool RetailCustomizationOtherForm(uint64_t guid, uint8_t look[5], RetailChoiceList& choices) {
+    choices.clear();
+    const auto found = s_otherForms.find(guid);
+    if (found == s_otherForms.end() || !found->second.valid) return false;
+    for (int k = 0; k < 5; ++k) look[k] = found->second.look[k];
+    choices = found->second.choices;
+    return true;
 }
 
 uint32_t RetailCustomizationSavedForm(uint64_t guid) {

@@ -57,6 +57,7 @@ void CharacterSelectionDisplay::SetCharacterFacing(float rotation) {
 #if defined(WOWDECOMP_RETAIL_MODELS)
         // Not in the original: a Retail body is drawn at its world size (RetailCharacterGlueScale).
         display.m_component->m_data.m_model->SetWorldTransform(position, rotation, RetailCharacterGlueScale(display.m_component));
+        CharacterSelectionPlaceOtherForm(rotation);     // Two Forms: the other form turns with it
 #else
         display.m_component->m_data.m_model->SetWorldTransform(position, rotation, 1.0f);
 #endif
