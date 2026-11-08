@@ -157,8 +157,11 @@ bool RetailCharacterAttachTransformArms(CM2Model* body, uint64_t guid, uint32_t 
 void RetailCharacterUpdateTransformArms(CM2Model* body, uint32_t elapsed);
 void RetailCharacterDropTransformArms(CM2Model* body);
 
-// Releases every composed texture. Called at shutdown before TextureDestroy: textures still held at
-// process exit would be freed after the graphics device is gone.
+// Every frame (CCharacterComponent::Update): characters whose new look the look worker finished take it.
+void RetailCharacterPump();
+
+// Stops the look worker and releases every composed texture. Called at shutdown before TextureDestroy:
+// textures still held at process exit would be freed after the graphics device is gone.
 void RetailCharacterShutdown();
 
 #endif

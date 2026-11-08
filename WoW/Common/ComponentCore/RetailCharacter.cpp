@@ -41,6 +41,8 @@
 #include <unordered_map>
 #include <memory>
 #include <mutex>
+#include <condition_variable>
+#include <thread>
 #include <set>
 #include <string>
 #include <vector>
@@ -293,23 +295,47 @@ void Trim(Map& map, std::deque<std::string>& order, size_t keep) {
 std::map<std::string, std::shared_ptr<const Retail::Image>> s_itemImages;
 std::deque<std::string> s_itemImageOrder;
 
-// A composed look per Retail race, sex and choices. The most recent ones are kept; each holds a full
-// skin sheet, so the cache is bounded.
-std::shared_ptr<Look> LookFor(uint32_t retailRace, uint32_t sex, uint32_t chrModel, const std::vector<uint32_t>& picked) {
-    auto& looks = s_looks;
-    auto& order = s_lookOrder;
-    std::lock_guard<std::mutex> lock(s_lookMutex);
+// A look in the making. BuildLook does everything that needs no graphics device (the tables, composing,
+// the BLP files with their mips) and may run on the look worker; FinishLook creates the textures and keeps
+// the look, on the main thread. The main thread owns every job: the worker only works on one it was given,
+// so a job, and the textures its look shares, are never released on the worker.
+struct LookJob {
+    std::string key;
+    uint32_t retailRace = 0, sex = 0, chrModel = 0;
+    std::vector<uint32_t> picked;
+    enum State { Queued, Running, Done } state = Queued;     // under s_jobMutex
+    // Results.
+    std::shared_ptr<Look> look;
+    struct Pending {
+        uint32_t textureType;
+        std::string typeKey;
+        std::vector<uint8_t> blp;
+    };
+    std::vector<Pending> pending;                            // composed textures to create
+    std::string warnings, choicesText;
+    double total = 0, tables = 0, composeTotal = 0;
+    Retail::ComposeStats compose;
+    MakeStats make;
+    uint32_t reused = 0;
+};
 
+// Guards the composed bodies and textures, which the worker reads and the main thread trims.
+std::mutex s_composedMutex;
+
+std::string LookKey(uint32_t retailRace, uint32_t sex, const std::vector<uint32_t>& picked) {
     std::string key = std::to_string(retailRace) + "-" + std::to_string(sex);
     for (const uint32_t id : picked) key += "-" + std::to_string(id);
-    const auto found = looks.find(key);
-    if (found != looks.end()) return found->second;
+    return key;
+}
 
+void BuildLook(LookJob& job) {
+    const auto lookStart = Clock::now();
+    const uint32_t chrModel = job.chrModel;
     // A Death Knight eye colour draws as the Death Knight eye choice with its textures tinted.
     std::vector<uint32_t> choices;
-    Retail::Appearance::BaseChoices(picked, choices);
+    Retail::Appearance::BaseChoices(job.picked, choices);
     TintFetch tint;
-    for (const uint32_t id : picked) {
+    for (const uint32_t id : job.picked) {
         uint32_t base = 0, rgb = 0;
         if (!Retail::Appearance::EyeTint(id, base, rgb)) continue;
         tint.rgb = rgb;
@@ -318,16 +344,13 @@ std::shared_ptr<Look> LookFor(uint32_t retailRace, uint32_t sex, uint32_t chrMod
         for (const auto& layer : own) tint.fileDataIds.insert(layer.fileDataId);
     }
 
-    LogBuildType();
-    const auto lookStart = Clock::now();
     auto look = std::make_shared<Look>();
     look->chrModel = chrModel;
-    look->key = key;
+    look->key = job.key;
     look->eyeTint = tint.rgb;
     std::vector<uint16_t> defaults;
     std::vector<Retail::Appearance::TextureLayer> layers;
     std::vector<Retail::ComposedTexture> composed;
-    std::string warnings;
     Retail::Appearance::Geosets(chrModel, choices, look->geosets);
     Retail::Appearance::DefaultGeosets(look->geosets, defaults);
     look->geosets.insert(look->geosets.end(), defaults.begin(), defaults.end());
@@ -337,11 +360,7 @@ std::shared_ptr<Look> LookFor(uint32_t retailRace, uint32_t sex, uint32_t chrMod
     uint32_t ownBody = 0;
     look->bodyFileDataId = Retail::Appearance::BodyModel(chrModel, choices, ownBody);
     Retail::Appearance::TextureLayers(chrModel, choices, layers);
-    const double tables = Since(lookStart);
-    Retail::ComposeStats compose;
-    double composeTotal = 0;
-    MakeStats make;
-    uint32_t reused = 0;
+    job.tables = Since(lookStart);
     std::map<uint32_t, std::vector<Retail::Appearance::TextureLayer>> byType;
     for (const auto& layer : layers) byType[layer.textureType].push_back(layer);
     for (const auto& type : byType) {
@@ -349,60 +368,186 @@ std::shared_ptr<Look> LookFor(uint32_t retailRace, uint32_t sex, uint32_t chrMod
         for (const auto& layer : type.second)
             typeKey += ":" + std::to_string(layer.fileDataId) + "." + std::to_string(layer.blendMode) + "." + std::to_string(layer.sectionMask) +
                 (tint.fileDataIds.count(layer.fileDataId) ? "~" + std::to_string(tint.rgb) : "");
-        if (type.first == 1) {
-            const auto cached = s_composedBodies.find(typeKey);
-            look->bodyKey = typeKey;
-            if (cached != s_composedBodies.end()) { look->body = cached->second; ++reused; continue; }
-        } else {
-            const auto cached = s_composedTextures.find(typeKey);
-            if (cached != s_composedTextures.end()) { look->textures[type.first] = cached->second; ++reused; continue; }
+        {
+            std::lock_guard<std::mutex> lock(s_composedMutex);
+            if (type.first == 1) {
+                look->bodyKey = typeKey;
+                const auto cached = s_composedBodies.find(typeKey);
+                if (cached != s_composedBodies.end()) { look->body = cached->second; ++job.reused; continue; }
+            } else {
+                const auto cached = s_composedTextures.find(typeKey);
+                if (cached != s_composedTextures.end()) { look->textures[type.first] = cached->second; ++job.reused; continue; }
+            }
         }
         auto start = Clock::now();
         composed.clear();
-        Retail::ComposeTextures(chrModel, type.second, &FetchImage, &tint, composed, warnings, &compose);
-        composeTotal += Since(start);
+        Retail::ComposeTextures(chrModel, type.second, &FetchImage, &tint, composed, job.warnings, &job.compose);
+        job.composeTotal += Since(start);
         for (auto& texture : composed) {
             if (texture.textureType == 1) {
                 look->body = std::make_shared<const Retail::Image>(std::move(texture.image));
+                std::lock_guard<std::mutex> lock(s_composedMutex);
                 s_composedBodies[typeKey] = look->body;
                 s_composedBodyOrder.push_back(typeKey);
                 Trim(s_composedBodies, s_composedBodyOrder, 6);
                 continue;
             }
-            CTexture* made = MakeTexture("Retail\\Character\\" + std::to_string(std::hash<std::string>{}(typeKey)), texture.image, &make);
-            if (!made) continue;
-            auto owned = std::make_shared<OwnedTexture>(made);
-            look->textures[texture.textureType] = owned;
-            s_composedTextures[typeKey] = owned;
-            s_composedTextureOrder.push_back(typeKey);
-            Trim(s_composedTextures, s_composedTextureOrder, 48);
+            start = Clock::now();
+            LookJob::Pending made{texture.textureType, typeKey, {}};
+            Retail::BuildBlp(texture.image, made.blp);
+            job.make.build += Since(start);
+            job.make.bytes += made.blp.size();
+            ++job.make.count;
+            job.pending.push_back(std::move(made));
         }
     }
+
+    for (const uint32_t id : choices) job.choicesText += " " + std::to_string(id);
+    job.look = std::move(look);
+    job.total = Since(lookStart);
+}
+
+// Creates the job's textures and keeps its look (main thread).
+std::shared_ptr<Look> FinishLook(LookJob& job) {
+    Look& look = *job.look;
+    for (auto& made : job.pending) {
+        const auto start = Clock::now();
+        CGxTexFlags flags(GxTex_LinearMipLinear, 0, 0, 0, 0, 0, 1);    // with the player's filtering (see MakeTexture)
+        const std::string name = "Retail\\Character\\" + std::to_string(std::hash<std::string>{}(made.typeKey));
+        CTexture* texture = TextureCreateFromBlpData(name.c_str(), flags, made.blp.data(), 1);
+        job.make.upload += Since(start);
+        if (!texture) continue;
+        auto owned = std::make_shared<OwnedTexture>(texture);
+        look.textures[made.textureType] = owned;
+        std::lock_guard<std::mutex> lock(s_composedMutex);
+        s_composedTextures[made.typeKey] = owned;
+        s_composedTextureOrder.push_back(made.typeKey);
+        Trim(s_composedTextures, s_composedTextureOrder, 48);
+    }
+    job.pending.clear();
+
+    LogBuildType();
     Blizzard::Log::Printf(1, kLog,
         "Timing look: total %.1f ms | tables %.1f | %u texture types reused | compose %.1f (read %.1f for %u files, %u cached, decode %.1f, paint %.1f) | "
         "textures %u: build %.1f, create %.1f, %.1f MB\n",
-        Since(lookStart), tables, reused, composeTotal, compose.fetch, compose.files, compose.cached, compose.decode, compose.paint,
-        make.count, make.build, make.upload, make.bytes / 1048576.0);
-
-    std::string text;
-    for (const uint32_t id : choices) text += " " + std::to_string(id);
-    text += " | geosets";
-    for (const uint16_t id : look->geosets) text += " " + std::to_string(id);
+        job.total + job.make.upload, job.tables, job.reused, job.composeTotal, job.compose.fetch, job.compose.files, job.compose.cached,
+        job.compose.decode, job.compose.paint, job.make.count, job.make.build, job.make.upload, job.make.bytes / 1048576.0);
+    std::string text = job.choicesText + " | geosets";
+    for (const uint16_t id : look.geosets) text += " " + std::to_string(id);
     text += " | textures";
-    if (look->body && look->body->width) text += " 1 (" + std::to_string(look->body->width) + "x" + std::to_string(look->body->height) + ")";
-    for (const auto& texture : look->textures) text += " " + std::to_string(texture.first);
-    Blizzard::Log::Printf(1, kLog, "Retail race %u sex %u: ChrModel %u, choices%s\n%s",
-        static_cast<unsigned>(retailRace), static_cast<unsigned>(sex), static_cast<unsigned>(chrModel), text.c_str(), warnings.c_str());
+    if (look.body && look.body->width) text += " 1 (" + std::to_string(look.body->width) + "x" + std::to_string(look.body->height) + ")";
+    for (const auto& texture : look.textures) text += " " + std::to_string(texture.first);
+    Blizzard::Log::Printf(1, kLog, "Retail race %u sex %u: ChrModel %u, choices%s\n%s", static_cast<unsigned>(job.retailRace),
+        static_cast<unsigned>(job.sex), static_cast<unsigned>(job.chrModel), text.c_str(), job.warnings.c_str());
 
-    looks.emplace(key, look);
-    order.push_back(key);
-    while (order.size() > 24) {
-        const auto old = looks.find(order.front());
-        if (old != looks.end()) looks.erase(old);   // its textures close with the last reference
-        order.pop_front();
+    std::lock_guard<std::mutex> lock(s_lookMutex);
+    s_looks[job.key] = job.look;
+    s_lookOrder.push_back(job.key);
+    while (s_lookOrder.size() > 24) {
+        const auto old = s_looks.find(s_lookOrder.front());
+        if (old != s_looks.end()) s_looks.erase(old);   // its textures close with the last reference
+        s_lookOrder.pop_front();
     }
-    return look;
+    return job.look;
 }
+
+// FlashWOW: the look worker. Building a look took up to a fifth of a second on the main thread (a Dracthyr
+// randomize), freezing the screen. A character that already shows a look keeps it while the new one is built
+// here, and takes the new one when it is ready (RetailCharacterPump); a new character still waits for its
+// first look, so it never shows without its textures.
+std::mutex s_jobMutex;
+std::condition_variable s_jobWake, s_jobDone;
+std::map<std::string, std::unique_ptr<LookJob>> s_jobs;    // by look key; queued, running and done
+std::deque<LookJob*> s_jobQueue;
+bool s_jobStop = false;
+std::thread* s_jobWorker = nullptr;                        // never destroyed: joined at shutdown
+
+void LookWorker() {
+    std::unique_lock<std::mutex> lock(s_jobMutex);
+    for (;;) {
+        s_jobWake.wait(lock, [] { return s_jobStop || !s_jobQueue.empty(); });
+        if (s_jobStop) return;
+        LookJob* job = s_jobQueue.front();
+        s_jobQueue.pop_front();
+        job->state = LookJob::Running;
+        lock.unlock();
+        BuildLook(*job);
+        lock.lock();
+        job->state = LookJob::Done;
+        s_jobDone.notify_all();
+    }
+}
+
+// The look for these choices: kept, or built now on this thread (waiting for the worker if it is on it).
+std::shared_ptr<Look> LookFor(uint32_t retailRace, uint32_t sex, uint32_t chrModel, const std::vector<uint32_t>& picked) {
+    const std::string key = LookKey(retailRace, sex, picked);
+    {
+        std::lock_guard<std::mutex> lock(s_lookMutex);
+        const auto found = s_looks.find(key);
+        if (found != s_looks.end()) return found->second;
+    }
+    std::unique_ptr<LookJob> job;
+    {
+        std::unique_lock<std::mutex> lock(s_jobMutex);
+        const auto queued = s_jobs.find(key);
+        if (queued != s_jobs.end()) {
+            if (queued->second->state == LookJob::Queued)
+                s_jobQueue.erase(std::find(s_jobQueue.begin(), s_jobQueue.end(), queued->second.get()));
+            else
+                s_jobDone.wait(lock, [&] { return queued->second->state == LookJob::Done; });
+            job = std::move(queued->second);
+            s_jobs.erase(queued);
+        }
+    }
+    if (!job) {
+        job = std::make_unique<LookJob>();
+        job->key = key;
+        job->retailRace = retailRace;
+        job->sex = sex;
+        job->chrModel = chrModel;
+        job->picked = picked;
+    }
+    if (!job->look) BuildLook(*job);
+    return FinishLook(*job);
+}
+
+// The look for these choices if it is ready; otherwise it is handed to the worker (once) and null comes back.
+std::shared_ptr<Look> RequestLook(uint32_t retailRace, uint32_t sex, uint32_t chrModel, const std::vector<uint32_t>& picked,
+    std::string& key) {
+    key = LookKey(retailRace, sex, picked);
+    {
+        std::lock_guard<std::mutex> lock(s_lookMutex);
+        const auto found = s_looks.find(key);
+        if (found != s_looks.end()) return found->second;
+    }
+    std::unique_ptr<LookJob> done;
+    {
+        std::lock_guard<std::mutex> lock(s_jobMutex);
+        const auto queued = s_jobs.find(key);
+        if (queued != s_jobs.end()) {
+            if (queued->second->state != LookJob::Done) return nullptr;
+            done = std::move(queued->second);
+            s_jobs.erase(queued);
+        } else {
+            if (!s_jobWorker) s_jobWorker = new std::thread(LookWorker);
+            auto job = std::make_unique<LookJob>();
+            job->key = key;
+            job->retailRace = retailRace;
+            job->sex = sex;
+            job->chrModel = chrModel;
+            job->picked = picked;
+            s_jobQueue.push_back(job.get());
+            s_jobs.emplace(key, std::move(job));
+            s_jobWake.notify_one();
+            return nullptr;
+        }
+    }
+    return FinishLook(*done);
+}
+
+// The look each character shows, and the characters waiting for a look the worker is building (by its key).
+std::unordered_map<const CCharacterComponent*, std::shared_ptr<Look>> s_shownLooks;
+std::unordered_map<CCharacterComponent*, std::string> s_waitingLooks;
 
 // Choices of the options the 3.3.5 selectors do not drive, per character component, by option ID:
 // set by the character creation rows (RetailCustomizationCycle). An option without an entry, or whose
@@ -553,7 +698,9 @@ uint32_t RetailModelOf(const CCharacterComponent* character, uint32_t& retailRac
     return Retail::Appearance::ChrModelFor(race->second, prefs.m_sexID);
 }
 
-// The Retail look of a character with a Retail body, or null for stock bodies and unmapped races.
+// The Retail look of a character with a Retail body, or null for stock bodies and unmapped races. A new look
+// is built on the look worker while the character keeps the one it shows (geosets, textures and body sheet
+// together, so it never shows half of each); a character showing nothing yet, or another body, waits for it.
 std::shared_ptr<Look> RetailLook(CCharacterComponent* character) {
     uint32_t retailRace = 0;
     const uint32_t chrModel = RetailModelOf(character, retailRace);
@@ -561,7 +708,20 @@ std::shared_ptr<Look> RetailLook(CCharacterComponent* character) {
     std::vector<ResolvedOption> resolved;
     std::vector<uint32_t> choices;
     Resolve(character, chrModel, resolved, choices);
-    return LookFor(retailRace, character->m_data.m_preferences.m_sexID, chrModel, choices);
+    const uint32_t sex = character->m_data.m_preferences.m_sexID;
+    std::string key;
+    auto look = RequestLook(retailRace, sex, chrModel, choices, key);
+    if (!look) {
+        const auto shown = s_shownLooks.find(character);
+        if (shown != s_shownLooks.end() && shown->second->chrModel == chrModel) {
+            s_waitingLooks[character] = key;
+            return shown->second;
+        }
+        look = LookFor(retailRace, sex, chrModel, choices);
+    }
+    s_waitingLooks.erase(character);
+    s_shownLooks[character] = look;
+    return look;
 }
 
 // One equipped item texture in a body section, in the stock compositor's order (Esteria's
@@ -1332,6 +1492,8 @@ void RetailCustomizationForget(const CCharacterComponent* character) {
     s_boundGuids.erase(character);
     s_originalBodies.erase(character);
     s_bodyOwners.erase(character);
+    s_shownLooks.erase(character);
+    s_waitingLooks.erase(const_cast<CCharacterComponent*>(character));
 }
 
 bool RetailCustomizationChoices(const CCharacterComponent* character, RetailChoiceList& choices) {
@@ -1487,7 +1649,64 @@ void RetailCharacterDropTransformArms(CM2Model* body) {
     }
 }
 
+void RetailCharacterPump() {
+    // s_jobs is only changed on this thread (the worker only takes jobs off the queue), so this needs no lock.
+    if (s_jobs.empty()) return;
+    std::set<std::string> wanted;
+    for (const auto& waiting : s_waitingLooks) wanted.insert(waiting.second);
+    std::vector<std::unique_ptr<LookJob>> finished;
+    {
+        std::lock_guard<std::mutex> lock(s_jobMutex);
+        for (auto it = s_jobs.begin(); it != s_jobs.end();) {
+            LookJob* job = it->second.get();
+            if (job->state == LookJob::Done) {
+                finished.push_back(std::move(it->second));
+                it = s_jobs.erase(it);
+            } else if (job->state == LookJob::Queued && !wanted.count(it->first)) {
+                // Nobody waits for it any more (clicked past it before it started): not built.
+                s_jobQueue.erase(std::find(s_jobQueue.begin(), s_jobQueue.end(), job));
+                it = s_jobs.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    if (finished.empty()) return;
+    for (auto& job : finished) FinishLook(*job);    // kept even when nobody waits for it now
+    finished.clear();
+
+    // Each character whose look is ready takes it on its next geometry and section pass, queued now. Collected
+    // first: queueing a character may prepare it on the spot, which asks for its look again.
+    std::vector<CCharacterComponent*> ready;
+    {
+        std::lock_guard<std::mutex> lock(s_lookMutex);
+        // Also one whose look is neither kept nor being built (dropped from the cache): it asks again.
+        for (const auto& waiting : s_waitingLooks)
+            if (s_looks.count(waiting.second) || !s_jobs.count(waiting.second)) ready.push_back(waiting.first);
+    }
+    for (CCharacterComponent* character : ready) {
+        if (!s_waitingLooks.erase(character)) continue;
+        character->m_flags |= 0x4;
+        character->SetDirtySections(0xFFFFFFFF);
+        character->RenderPrep(0);
+    }
+}
+
 void RetailCharacterShutdown() {
+    // The worker first: it reads the caches below and the Retail files.
+    if (s_jobWorker) {
+        {
+            std::lock_guard<std::mutex> lock(s_jobMutex);
+            s_jobStop = true;
+        }
+        s_jobWake.notify_all();
+        s_jobWorker->join();
+        s_jobWorker = nullptr;    // the thread object itself is left: nothing runs on it
+    }
+    s_jobQueue.clear();
+    s_jobs.clear();
+    s_waitingLooks.clear();
+    s_shownLooks.clear();
     {
         std::lock_guard<std::mutex> lock(s_lookMutex);
         s_looks.clear();

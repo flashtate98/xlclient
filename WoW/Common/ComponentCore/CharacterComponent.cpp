@@ -5365,6 +5365,11 @@ void CCharacterComponent::DestroyComponentFreeLists() {
 int32_t CCharacterComponent::Update(const void* data, void* param) {
     int32_t hasContext = g_theGxDevicePtr ? g_theGxDevicePtr->CapsHasContext(-1) : 0;
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: characters whose new Retail look is ready join the queue below.
+    RetailCharacterPump();
+#endif
+
     for (CCharacterComponent* component = CCharacterComponent::s_queue.Head(); component;) {
         CCharacterComponent* next = CCharacterComponent::s_queue.Next(component);
 
