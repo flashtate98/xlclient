@@ -43,6 +43,10 @@ struct ComposeStats {
     double fetch = 0, decode = 0, paint = 0;
     uint32_t files = 0;     // files read and decoded
     uint32_t cached = 0;    // decoded images an ImageFetch already had
+    // What was painted: layers (and of those, drawn at another size than their own), and the texels
+    // drawn against the texels their sources have, in millions.
+    uint32_t layers = 0, scaled = 0;
+    double drawn = 0, source = 0;
 };
 
 bool ComposeTextures(uint32_t chrModel, const std::vector<Appearance::TextureLayer>& layers, BlpFetch fetch, void* context,

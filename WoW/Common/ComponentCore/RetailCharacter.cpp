@@ -429,9 +429,10 @@ std::shared_ptr<Look> FinishLook(LookJob& job) {
     LogBuildType();
     Blizzard::Log::Printf(1, kLog,
         "Timing look: total %.1f ms | tables %.1f | %u texture types reused | compose %.1f (read %.1f for %u files, %u cached, decode %.1f, paint %.1f) | "
-        "textures %u: build %.1f, create %.1f, %.1f MB\n",
+        "textures %u: build %.1f, create %.1f, %.1f MB | painted %u layers, %u scaled, %.1f Mpx drawn from %.1f Mpx\n",
         job.total + job.make.upload, job.tables, job.reused, job.composeTotal, job.compose.fetch, job.compose.files, job.compose.cached,
-        job.compose.decode, job.compose.paint, job.make.count, job.make.build, job.make.upload, job.make.bytes / 1048576.0);
+        job.compose.decode, job.compose.paint, job.make.count, job.make.build, job.make.upload, job.make.bytes / 1048576.0,
+        job.compose.layers, job.compose.scaled, job.compose.drawn, job.compose.source);
     std::string text = job.choicesText + " | geosets";
     for (const uint16_t id : look.geosets) text += " " + std::to_string(id);
     text += " | textures";
@@ -1345,6 +1346,14 @@ void RetailCharacterSetBodyOwner(const CCharacterComponent* character, RetailBod
 }
 
 bool RetailCharacterGeometry(CCharacterComponent* character) {
+    const auto geometryStart = Clock::now();
+    struct Report {
+        Clock::time_point start;
+        ~Report() {
+            const double spent = Since(start);
+            if (spent > 5) Blizzard::Log::Printf(1, kLog, "Timing geometry: %.1f ms\n", spent);
+        }
+    } report{geometryStart};
     const auto found = RetailLook(character);
     if (!found) return false;
     const Look& look = *found;
@@ -1680,6 +1689,15 @@ void RetailCharacterDropTransformArms(CM2Model* body) {
 }
 
 void RetailCharacterPump() {
+    // Diagnostics: a long gap between two updates means the main thread was held up (the screen froze).
+    static Clock::time_point last;
+    const auto now = Clock::now();
+    if (last != Clock::time_point()) {
+        const double gap = std::chrono::duration<double, std::milli>(now - last).count();
+        if (gap > 100) Blizzard::Log::Printf(1, kLog, "Timing frame: %.0f ms since the last update%s\n", gap,
+            s_waitingLooks.empty() ? "" : " (a look was awaited)");
+    }
+    last = now;
     // s_jobs is only changed on this thread (the worker only takes jobs off the queue), so this needs no lock.
     if (s_jobs.empty()) return;
     std::set<std::string> wanted;

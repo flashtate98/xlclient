@@ -364,6 +364,13 @@ bool ComposeTextures(uint32_t chrModel, const std::vector<Appearance::TextureLay
     Appearance::Sections(layout, sections);
     std::map<uint32_t, ComposedTexture> byType;
     std::map<uint32_t, std::shared_ptr<const Image>> lenderSkins;    // FileDataID -> decoded, for borrowed layers (see below)
+    const auto count = [stats](const Image& src, uint32_t width, uint32_t height) {
+        if (!stats) return;
+        ++stats->layers;
+        if (src.width != width || src.height != height) ++stats->scaled;
+        stats->drawn += double(width) * height / 1e6;
+        stats->source += double(src.width) * src.height / 1e6;
+    };
     for (const Appearance::TextureLayer& layer : layers) { // already in paint order
         const std::shared_ptr<const Image> source = layer.fileDataId ? fetch(layer.fileDataId, context, stats) : nullptr;
         if (!source || !source->width || source->rgba.size() < size_t(source->width) * source->height * 4) {
@@ -405,6 +412,7 @@ bool ComposeTextures(uint32_t chrModel, const std::vector<Appearance::TextureLay
         }
         const int32_t mask = int32_t(layer.sectionMask);
         if (mask == -1 || layer.textureType != 1) {
+            count(*image, target.image.width, target.image.height);
             Paint(target.image, *image, {0, 0, target.image.width, target.image.height}, layer.blendMode);
             continue;
         }
@@ -446,8 +454,10 @@ bool ComposeTextures(uint32_t chrModel, const std::vector<Appearance::TextureLay
             if (section.sectionType < 32 && (uint32_t(mask) >> section.sectionType & 1)) {
                 if (lender) {
                     const Image masked = underwearOnly(section);
+                    count(masked, section.width, section.height);
                     Paint(target.image, masked, {section.x, section.y, section.width, section.height}, layer.blendMode);
                 } else {
+                    count(*image, section.width, section.height);
                     Paint(target.image, *image, {section.x, section.y, section.width, section.height}, layer.blendMode);
                 }
             }
