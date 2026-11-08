@@ -713,6 +713,17 @@ int32_t CVar::LogAll(char* buffer, uint32_t size, uint32_t category, uint32_t ex
     return CVar::IterateForArchive(category, excludeFlags, CVar::LogCvar, &log);
 }
 
+// Not in the original: a CVar's console command keys on the CVar's own name string (HASHKEY_CONSTSTRI keeps the
+// pointer), so deleting the CVar alone leaves the command reading freed memory. The next Register that probes
+// the same bucket (logging back in) then crashed. Remove the command that belongs to this CVar first.
+static void UnregisterCVarCommand(CVar* var) {
+    CONSOLECOMMAND* cmd = g_consoleCommandHash.Ptr(var->m_key.m_str);
+
+    if (cmd && cmd->m_key.m_str == var->m_key.m_str) {
+        g_consoleCommandHash.Delete(cmd);
+    }
+}
+
 // VERIFY: da3d65c9 manual
 // OFFSET: 0x00767350
 void CVar::DeleteCharacterCVars() {
@@ -720,6 +731,7 @@ void CVar::DeleteCharacterCVars() {
 
     while (var) {
         if ((var->m_flags & 0x1) && (var->m_flags & 0x30) == 0x20) {
+            UnregisterCVarCommand(var);
             var = s_registeredCVars.DeleteNode(var);
         } else {
             var = s_registeredCVars.Next(var);
@@ -734,6 +746,7 @@ void CVar::DeleteAccountCVars() {
 
     while (var) {
         if ((var->m_flags & 0x1) && (var->m_flags & 0x30) == 0x10) {
+            UnregisterCVarCommand(var);
             var = s_registeredCVars.DeleteNode(var);
         } else {
             var = s_registeredCVars.Next(var);
