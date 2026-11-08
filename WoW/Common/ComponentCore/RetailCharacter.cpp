@@ -1142,22 +1142,22 @@ bool RetailCharacterGeometry(CCharacterComponent* character) {
     return true;
 }
 
+// The stock skin, face and hair setters ask for their textures here, each as soon as its value changes. The look is
+// not built now: a randomize changes a dozen values one after another, and building each in-between look cost up to
+// a quarter of a second apiece (a Dracthyr randomize built four looks, half a second, to show the last). The geometry
+// pass marked here (GeosRenderPrep, once per frame) builds the look once from the final values and binds the same
+// textures, eye tint and collections as this did.
 bool RetailCharacterTextures(CCharacterComponent* character) {
-    const auto look = RetailLook(character);
-    if (!look) return false;
-    for (const auto& texture : look->textures) character->m_data.m_model->ReplaceTexture(texture.first, texture.second->texture);
-    ApplyEyeTint(character->m_data.m_model, *look);
-    for (auto& collection : s_collections)
-        if (collection.second.parent == character->m_data.m_model) collection.second.textures = look->textures;
-    ApplyCollections(character->m_data.m_model);
+    uint32_t retailRace = 0;
+    if (!RetailModelOf(character, retailRace)) return false;
+    character->m_flags |= 0x4;
     return true;
 }
 
-// Geosets, then the hair/eye textures, then the body sheet on the next section pass.
+// Geosets and the hair/eye textures on the next geometry pass, then the body sheet on the next section pass.
 static void Refresh(CCharacterComponent* character) {
     character->m_flags |= 0x4;
     character->SetDirtySections(0xFFFFFFFF);
-    RetailCharacterTextures(character);
 }
 
 bool RetailCustomizationPanel(const CCharacterComponent* character, std::vector<RetailPanelOption>& options) {
