@@ -2728,6 +2728,7 @@ int32_t CGUnit_C::ChooseStandStateAnim(uint32_t mask, uint32_t* anim) {
 }
 
 static bool ChooseChargeEndAnim(CGUnit_C* unit, uint32_t* anim);    // Not in the original: FlashWOW, defined by ChooseMovementAnim
+static bool HoldForChargeEnd(CGUnit_C* unit, uint32_t anim);       // Not in the original: FlashWOW, defined by ChooseMovementAnim
 
 // VERIFY: c45e9335 auto
 // OFFSET: 0x00724500
@@ -4426,6 +4427,10 @@ void CGUnit_C::PlayBaseAnimation(uint32_t animId, int32_t flags) {
     this->m_pendingAnimId = -1;
 
     if (this->IsDeadOrAttachmentDying() && !IsDeadOrDyingAnim(animId)) {
+        return;
+    }
+
+    if (HoldForChargeEnd(this, animId)) {    // Not in the original: FlashWOW Retail animations
         return;
     }
 
@@ -8073,6 +8078,7 @@ int32_t CGUnit_C::IsRunning() const {
 // mounted or on a flight path. CombatChargeLoop falls back to Sprint, which older models already played here;
 // CombatChargeEnd plays only on models that have it. Units seen charging are kept by guid until they arrive.
 static std::unordered_set<uint64_t> s_chargingUnits;
+static std::unordered_map<uint64_t, uint32_t> s_chargeEndUntil;
 
 static bool IsOnChargeSpline(const CGUnit_C* unit) {
     const CMovement_C& move = unit->m_movementData;
@@ -8104,7 +8110,40 @@ static bool ChooseChargeEndAnim(CGUnit_C* unit, uint32_t* anim) {
     }
 
     *anim = 820;    // CombatChargeEnd
+
+    M2SequenceInfo info;
+    info.Clear();
+    model->GetSequenceInfo(820, 0, info);
+
+    if (info.m_duration) {
+        s_chargeEndUntil[unit->m_obj->m_guid.m_guid] = OsGetAsyncTimeMs() + info.m_duration * 9 / 10;
+    }
+
     return true;
+}
+
+// While CombatChargeEnd plays, the auto attack's first swing and the combat stance wait for it instead of
+// cutting it off. Most of its length is held, so the end of the sequence hands back to the usual choice. Spells,
+// hits, death and moving still play at once.
+static bool HoldForChargeEnd(CGUnit_C* unit, uint32_t anim) {
+    if (s_chargeEndUntil.empty()) {
+        return false;
+    }
+
+    auto holding = s_chargeEndUntil.find(unit->m_obj->m_guid.m_guid);
+
+    if (holding == s_chargeEndUntil.end()) {
+        return false;
+    }
+
+    const uint32_t moving = MOVEMENTFLAG_FORWARD | MOVEMENTFLAG_BACKWARD | MOVEMENTFLAG_STRAFE_LEFT | MOVEMENTFLAG_STRAFE_RIGHT | MOVEMENTFLAG_FALLING;
+
+    if (static_cast<int32_t>(OsGetAsyncTimeMs() - holding->second) >= 0 || (unit->m_movementData.m_flags & moving)) {
+        s_chargeEndUntil.erase(holding);
+        return false;
+    }
+
+    return anim == ANIM_STAND || (anim >= ANIM_READY_UNARMED && anim <= ANIM_READY_2HL) || IsMeleeAttackAnim(anim);
 }
 
 // VERIFY: 2be9606e manual
@@ -8151,6 +8190,7 @@ int32_t CGUnit_C::ChooseMovementAnim(uint32_t flags, uint32_t* anim) const {
     if (IsOnChargeSpline(this)) {
         if (s_chargingUnits.size() > 4096) {
             s_chargingUnits.clear();
+            s_chargeEndUntil.clear();
         }
 
         s_chargingUnits.insert(this->m_obj->m_guid.m_guid);
