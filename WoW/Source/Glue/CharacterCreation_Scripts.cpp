@@ -525,13 +525,15 @@ static int32_t Script_SetSelectedClass(lua_State* L) {
 // VERIFY: 19e1ce07 auto
 // OFFSET: 0x004E1B60
 static int32_t Script_RandomizeCharCustomization(lua_State* L) {
-    CCharacterCreation::RandomizeCharCustomization();
 #if defined(WOWDECOMP_RETAIL_MODELS)
-    // Not in the original: the Retail rows are randomized with the stock selectors.
-    if (CCharacterCreation::m_character && RetailCustomizationCycle(CCharacterCreation::m_character, 0, 0, true)) {
-        CGlueLoading::StartLoad(CCharacterCreation::m_character, 1);
+    // Not in the original: the Retail rows are randomized with the stock selectors. First, so the stock randomize's
+    // load (StartLoad prepares the character on the spot) builds the new look once: loading after each half built a
+    // look with only the stock values changed, then the whole one (two builds per click, 0.3 s for a Dracthyr).
+    if (CCharacterCreation::m_character) {
+        RetailCustomizationCycle(CCharacterCreation::m_character, 0, 0, true);
     }
 #endif
+    CCharacterCreation::RandomizeCharCustomization();
     return 0;
 }
 
