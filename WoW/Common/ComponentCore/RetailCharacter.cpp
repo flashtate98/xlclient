@@ -470,6 +470,67 @@ std::deque<LookJob*> s_jobQueue;
 bool s_jobStop = false;
 std::thread* s_jobWorker = nullptr;                        // never destroyed: joined at shutdown
 
+// A body sheet in the making: the look's composed skin with the equipped item textures painted over their
+// sections. The main thread gathers the items (decoded ones it kept, else their bytes from the texture
+// cache, which only it may use); the worker decodes, paints and builds the BLP; the main thread creates the
+// texture and gives it to every character waiting for it (FinishBody).
+struct BodyJob {
+    std::string name;
+    std::shared_ptr<const Retail::Image> skin;
+    std::vector<Retail::Appearance::TextureSection> sections;
+    struct Item {
+        uint32_t section = 0, layer = 0, displayId = 0;
+        std::string key;                                    // for s_itemImages; empty for guild tabards
+        std::shared_ptr<const Retail::Image> decoded;       // kept from before, or
+        std::vector<uint8_t> bytes;                         // the texture cache's BLP
+    };
+    std::vector<Item> items;
+    enum State { Queued, Running, Done } state = Queued;    // under s_jobMutex
+    // Results.
+    std::vector<uint8_t> blp;
+    std::vector<std::pair<std::string, std::shared_ptr<const Retail::Image>>> decoded;    // newly decoded, to keep
+    std::string errors;
+    uint32_t reused = 0;
+    double gather = 0, copy = 0, decode = 0, paint = 0, build = 0, total = 0;
+    Clock::time_point queued;
+};
+std::map<std::string, std::unique_ptr<BodyJob>> s_bodyJobs;    // by sheet name; queued, running and done
+std::deque<BodyJob*> s_bodyQueue;
+std::unordered_map<CCharacterComponent*, std::string> s_bodyWaiting;    // characters waiting for a sheet, by name
+
+void BuildBody(BodyJob& job) {
+    const auto bodyStart = Clock::now();
+    auto start = Clock::now();
+    Retail::Image sheet = *job.skin;
+    job.copy = Since(start);
+    for (auto& item : job.items) {
+        std::shared_ptr<const Retail::Image> image = item.decoded;
+        if (!image) {
+            start = Clock::now();
+            auto made = std::make_shared<Retail::Image>();
+            std::string error;
+            const bool decoded = Retail::DecodeBlp(item.bytes, *made, error);
+            job.decode += Since(start);
+            if (!decoded) {
+                job.errors += "Item texture for section " + std::to_string(item.section) + " layer " + std::to_string(item.layer) +
+                    " (display " + std::to_string(item.displayId) + "): " + error + "\n";
+                continue;
+            }
+            image = made;
+            if (!item.key.empty()) job.decoded.emplace_back(item.key, image);
+        }
+        start = Clock::now();
+        for (const auto& section : job.sections)
+            if (section.sectionType == item.section)
+                Retail::PaintImage(sheet, *image, section.x, section.y, section.width, section.height, 2);
+        job.paint += Since(start);
+    }
+    start = Clock::now();
+    Retail::BuildBlp(sheet, job.blp);
+    job.build = Since(start);
+    job.total = Since(bodyStart);
+}
+
 // The worker and its painting helpers run below the game's main thread, on at most half the cores: at the
 // same priority on every core they starved it, and a burst of randomize clicks froze the screen for a second.
 void BelowNormalPriority() {
@@ -483,8 +544,19 @@ void LookWorker() {
     Retail::SetHelperThreads(std::max(1u, std::thread::hardware_concurrency() / 2), &BelowNormalPriority);
     std::unique_lock<std::mutex> lock(s_jobMutex);
     for (;;) {
-        s_jobWake.wait(lock, [] { return s_jobStop || !s_jobQueue.empty(); });
+        s_jobWake.wait(lock, [] { return s_jobStop || !s_jobQueue.empty() || !s_bodyQueue.empty(); });
         if (s_jobStop) return;
+        // Bodies first: a body is the last step before a character is drawn.
+        if (!s_bodyQueue.empty()) {
+            BodyJob* body = s_bodyQueue.front();
+            s_bodyQueue.pop_front();
+            body->state = BodyJob::Running;
+            lock.unlock();
+            BuildBody(*body);
+            lock.lock();
+            body->state = BodyJob::Done;
+            continue;
+        }
         LookJob* job = s_jobQueue.front();
         s_jobQueue.pop_front();
         job->state = LookJob::Running;
@@ -494,6 +566,11 @@ void LookWorker() {
         job->state = LookJob::Done;
         s_jobDone.notify_all();
     }
+}
+
+// Under s_jobMutex.
+void EnsureLookWorker() {
+    if (!s_jobWorker) s_jobWorker = new std::thread(LookWorker);
 }
 
 // The look for these choices: kept, or built now on this thread (waiting for the worker if it is on it).
@@ -547,7 +624,7 @@ std::shared_ptr<Look> RequestLook(uint32_t retailRace, uint32_t sex, uint32_t ch
             done = std::move(queued->second);
             s_jobs.erase(queued);
         } else {
-            if (!s_jobWorker) s_jobWorker = new std::thread(LookWorker);
+            EnsureLookWorker();
             auto job = std::make_unique<LookJob>();
             job->key = key;
             job->retailRace = retailRace;
@@ -584,11 +661,37 @@ void StopWaiting(CCharacterComponent* character) {
     s_jobs.erase(job);
 }
 
+// A character stops waiting for a body sheet: its job is dropped if it has not started and nobody else waits.
+void StopWaitingBody(CCharacterComponent* character) {
+    const auto waiting = s_bodyWaiting.find(character);
+    if (waiting == s_bodyWaiting.end()) return;
+    const std::string name = std::move(waiting->second);
+    s_bodyWaiting.erase(waiting);
+    for (const auto& other : s_bodyWaiting)
+        if (other.second == name) return;
+    std::lock_guard<std::mutex> lock(s_jobMutex);
+    const auto job = s_bodyJobs.find(name);
+    if (job == s_bodyJobs.end() || job->second->state != BodyJob::Queued) return;
+    s_bodyQueue.erase(std::find(s_bodyQueue.begin(), s_bodyQueue.end(), job->second.get()));
+    s_bodyJobs.erase(job);
+}
+
+// Whether something is being built for the character: its look or its body sheet is queued or under way.
+bool BeingBuilt(const CCharacterComponent* character) {
+    auto* key = const_cast<CCharacterComponent*>(character);
+    const auto look = s_waitingLooks.find(key);
+    if (look != s_waitingLooks.end() && s_jobs.count(look->second)) return true;
+    const auto body = s_bodyWaiting.find(key);
+    return body != s_bodyWaiting.end() && s_bodyJobs.count(body->second);
+}
+
 // FlashWOW: a new character (a race picked on the create screen, a player coming into view) is not drawn until
 // its first look is ready, instead of the game waiting for it: its body, and through it everything attached
 // (equipment, collection models), draws at base alpha 0. It shows again once its body sheet is on
-// (RetailCharacterBody), or after kRevealAfterMs whatever happened.
+// (FinishBody), or when kRevealAfterMs pass with nothing being built for it, or after kRevealAlwaysMs whatever
+// happened: in a crowd, waiting for the worker's turn is not a failure.
 constexpr double kRevealAfterMs = 2000;
+constexpr double kRevealAlwaysMs = 10000;
 struct HiddenCharacter {
     Clock::time_point since;
     uint32_t retailRace = 0, sex = 0;
@@ -1616,6 +1719,7 @@ void RetailCustomizationForget(const CCharacterComponent* character) {
     s_shownLooks.erase(character);
     s_hiddenCharacters.erase(character);
     StopWaiting(const_cast<CCharacterComponent*>(character));
+    StopWaitingBody(const_cast<CCharacterComponent*>(character));
 }
 
 bool RetailCustomizationChoices(const CCharacterComponent* character, RetailChoiceList& choices) {
@@ -1771,6 +1875,51 @@ void RetailCharacterDropTransformArms(CM2Model* body) {
     }
 }
 
+// Creates a finished body sheet's texture, keeps it, and puts it on every character waiting for it (main thread).
+void FinishBody(BodyJob& job) {
+    const auto start = Clock::now();
+    CGxTexFlags flags(GxTex_LinearMipLinear, 0, 0, 0, 0, 0, 1);    // with the player's filtering (see MakeTexture)
+    CTexture* texture = job.blp.empty() ? nullptr : TextureCreateFromBlpData(job.name.c_str(), flags, job.blp.data(), 1);
+    const double create = Since(start);
+    LogBuildType();
+    Blizzard::Log::Printf(1, kLog,
+        "Timing body: total %.1f ms (%.1f on this thread) | gather %.1f | copy %.1f | %u item layers (%u reused): decode %.1f, paint %.1f | "
+        "build %.1f, create %.1f, %.1f MB | queued %.1f ms before done\n%s",
+        job.gather + job.total + create, job.gather + create, job.gather, job.copy, static_cast<unsigned>(job.items.size()), job.reused,
+        job.decode, job.paint, job.build, create, job.blp.size() / 1048576.0, Since(job.queued), job.errors.c_str());
+    for (auto& decoded : job.decoded) {
+        s_itemImages[decoded.first] = std::move(decoded.second);
+        s_itemImageOrder.push_back(decoded.first);
+    }
+    Trim(s_itemImages, s_itemImageOrder, 64);
+    if (texture) {
+        s_bodies.emplace(job.name, texture);
+        s_bodyOrder.push_back(job.name);
+    }
+    // Every waiting character takes it now, before the cache below may let it go (each model holds its own
+    // reference): in a crowd many sheets finish in one frame.
+    std::vector<CCharacterComponent*> waiting;
+    for (const auto& entry : s_bodyWaiting)
+        if (entry.second == job.name) waiting.push_back(entry.first);
+    for (CCharacterComponent* character : waiting) {
+        s_bodyWaiting.erase(character);
+        if (texture && character->m_data.m_model) {
+            character->m_data.m_model->ReplaceTexture(1, texture);
+            ApplyCollections(character->m_data.m_model);
+        }
+        RevealCharacter(character, texture ? "look ready" : "body sheet failed");
+    }
+    // Each state is a full-size sheet; keep a handful.
+    while (s_bodyOrder.size() > 8) {
+        const auto old = s_bodies.find(s_bodyOrder.front());
+        if (old != s_bodies.end()) {
+            HandleClose(reinterpret_cast<HOBJECT>(old->second));
+            s_bodies.erase(old);
+        }
+        s_bodyOrder.pop_front();
+    }
+}
+
 void RetailCharacterPump() {
     // Diagnostics: a long gap between two updates means the main thread was held up (the screen froze).
     static Clock::time_point last;
@@ -1784,9 +1933,27 @@ void RetailCharacterPump() {
     // The safety net: nobody stays hidden for long, whatever happened to their look.
     if (!s_hiddenCharacters.empty()) {
         std::vector<CCharacterComponent*> overdue;
-        for (const auto& hidden : s_hiddenCharacters)
-            if (Since(hidden.second.since) > kRevealAfterMs) overdue.push_back(const_cast<CCharacterComponent*>(hidden.first));
+        for (const auto& hidden : s_hiddenCharacters) {
+            const double waited = Since(hidden.second.since);
+            if (waited > kRevealAlwaysMs || (waited > kRevealAfterMs && !BeingBuilt(hidden.first)))
+                overdue.push_back(const_cast<CCharacterComponent*>(hidden.first));
+        }
         for (CCharacterComponent* character : overdue) RevealCharacter(character, "timed out: shown without its look");
+    }
+    // Finished body sheets go straight to the characters waiting for them.
+    if (!s_bodyJobs.empty()) {
+        std::vector<std::unique_ptr<BodyJob>> bodies;
+        {
+            std::lock_guard<std::mutex> lock(s_jobMutex);
+            for (auto it = s_bodyJobs.begin(); it != s_bodyJobs.end();)
+                if (it->second->state == BodyJob::Done) {
+                    bodies.push_back(std::move(it->second));
+                    it = s_bodyJobs.erase(it);
+                } else {
+                    ++it;
+                }
+        }
+        for (auto& body : bodies) FinishBody(*body);
     }
     // s_jobs is only changed on this thread (the worker only takes jobs off the queue), so this needs no lock.
     if (s_jobs.empty()) return;
@@ -1843,6 +2010,9 @@ void RetailCharacterShutdown() {
     }
     s_jobQueue.clear();
     s_jobs.clear();
+    s_bodyQueue.clear();
+    s_bodyJobs.clear();
+    s_bodyWaiting.clear();
     s_waitingLooks.clear();
     s_shownLooks.clear();
     s_hiddenCharacters.clear();
@@ -1904,101 +2074,70 @@ void RetailCharacterBody(CCharacterComponent* character) {
         if (!layer.displayId && layer.texture) name += ":" + std::string(static_cast<const CACHEENTRY*>(layer.texture)->m_fileName);
     }
 
-    auto& bodies = s_bodies;
-    auto& order = s_bodyOrder;
-    auto cached = bodies.find(name);
-    if (cached == bodies.end()) {
-        LogBuildType();
-        const auto bodyStart = Clock::now();
-        double itemRead = 0, itemDecode = 0, itemPaint = 0;
-        uint32_t itemsReused = 0;
-        auto start = Clock::now();
-        Retail::Image sheet = *look.body;
-        const double copy = Since(start);
-        const auto& prefs = character->m_data.m_preferences;
-        for (const auto& layer : layers) {
-            void* handle = layer.texture;
-            // Only dirty sections reload their item textures; the others were released by the last pass.
-            const bool reload = !handle;
-            // An item's section texture depends on the display, section and the wearer's race and sex
-            // (its _M/_F/_U file). Guild tabards (display zero) are not kept: their emblems vary.
-            std::string itemKey;
-            if (layer.displayId) {
-                itemKey = std::to_string(layer.displayId) + "/" + std::to_string(layer.section) + "/" + std::to_string(layer.layer)
-                    + "/" + std::to_string(prefs.m_raceID) + "/" + std::to_string(prefs.m_sexID);
-                const auto cached = s_itemImages.find(itemKey);
-                if (cached != s_itemImages.end()) {
-                    start = Clock::now();
-                    for (const auto& section : look.sections)
-                        if (section.sectionType == layer.section)
-                            Retail::PaintImage(sheet, *cached->second, section.x, section.y, section.width, section.height, 2);
-                    itemPaint += Since(start);
-                    ++itemsReused;
-                    continue;
-                }
-            }
-            if (reload) {
-                ItemDisplayInfoRec display;
-                if (g_itemDisplayInfoDB.GetRecord(layer.displayId, &display))
-                    handle = character->LoadItemComponentTexture(&display, static_cast<COMPONENT_SECTIONS>(layer.section));
-            }
-            start = Clock::now();
-            TCTEXTUREINFO info{};
-            TextureCacheGetInfo(handle, info, 1);
-            const CACHEENTRY* entry = static_cast<const CACHEENTRY*>(handle);
-            std::vector<uint8_t> bytes;
-            if (entry && !entry->m_loadFailed && entry->m_data && info.m_width) {
-                const auto* begin = reinterpret_cast<const uint8_t*>(entry->m_data);
-                bytes.assign(begin, begin + entry->m_size);
-            }
-            if (reload && handle) TextureCacheDestroyTexture(handle);
-            itemRead += Since(start);
-            Retail::Image item;
-            std::string error;
-            start = Clock::now();
-            const bool decoded = Retail::DecodeBlp(bytes, item, error);
-            itemDecode += Since(start);
-            if (!decoded) {
-                Blizzard::Log::Printf(1, kLog, "Item texture for section %u layer %u (display %u): %s\n",
-                    static_cast<unsigned>(layer.section), static_cast<unsigned>(layer.layer), static_cast<unsigned>(layer.displayId), error.c_str());
+    const auto cached = s_bodies.find(name);
+    if (cached != s_bodies.end()) {
+        StopWaitingBody(character);
+        character->m_data.m_model->ReplaceTexture(1, cached->second);
+        ApplyCollections(character->m_data.m_model);
+        RevealCharacter(character, "look ready");
+        return;
+    }
+
+    // Built on the look worker: meanwhile the character keeps the sheet it has (or stays hidden, if new).
+    if (const auto waiting = s_bodyWaiting.find(character); waiting != s_bodyWaiting.end() && waiting->second != name)
+        StopWaitingBody(character);
+    s_bodyWaiting[character] = name;
+    if (s_bodyJobs.count(name)) return;
+
+    const auto gatherStart = Clock::now();
+    auto job = std::make_unique<BodyJob>();
+    job->name = name;
+    job->skin = look.body;
+    job->sections = look.sections;
+    const auto& prefs = character->m_data.m_preferences;
+    for (const auto& layer : layers) {
+        BodyJob::Item item;
+        item.section = layer.section;
+        item.layer = layer.layer;
+        item.displayId = layer.displayId;
+        void* handle = layer.texture;
+        // Only dirty sections reload their item textures; the others were released by the last pass.
+        const bool reload = !handle;
+        // An item's section texture depends on the display, section and the wearer's race and sex
+        // (its _M/_F/_U file). Guild tabards (display zero) are not kept: their emblems vary.
+        if (layer.displayId) {
+            item.key = std::to_string(layer.displayId) + "/" + std::to_string(layer.section) + "/" + std::to_string(layer.layer)
+                + "/" + std::to_string(prefs.m_raceID) + "/" + std::to_string(prefs.m_sexID);
+            const auto kept = s_itemImages.find(item.key);
+            if (kept != s_itemImages.end()) {
+                item.decoded = kept->second;
+                ++job->reused;
+                job->items.push_back(std::move(item));
                 continue;
             }
-            start = Clock::now();
-            for (const auto& section : look.sections)
-                if (section.sectionType == layer.section)
-                    Retail::PaintImage(sheet, item, section.x, section.y, section.width, section.height, 2);
-            itemPaint += Since(start);
-            if (!itemKey.empty()) {
-                s_itemImages[itemKey] = std::make_shared<const Retail::Image>(std::move(item));
-                s_itemImageOrder.push_back(itemKey);
-                Trim(s_itemImages, s_itemImageOrder, 64);
-            }
         }
-        MakeStats make;
-        CTexture* texture = MakeTexture(name, sheet, &make);
-        Blizzard::Log::Printf(1, kLog,
-            "Timing body: total %.1f ms | copy %.1f | %u item layers (%u reused): read %.1f, decode %.1f, paint %.1f | build %.1f, create %.1f, %.1f MB\n",
-            Since(bodyStart), copy, static_cast<unsigned>(layers.size()), itemsReused, itemRead, itemDecode, itemPaint,
-            make.build, make.upload, make.bytes / 1048576.0);
-        if (!texture) {
-            RevealCharacter(character, "body sheet failed");
-            return;
+        if (reload) {
+            ItemDisplayInfoRec display;
+            if (g_itemDisplayInfoDB.GetRecord(layer.displayId, &display))
+                handle = character->LoadItemComponentTexture(&display, static_cast<COMPONENT_SECTIONS>(layer.section));
         }
-        cached = bodies.emplace(name, texture).first;
-        order.push_back(name);
-        // Each state is a full-size sheet; keep a handful.
-        while (order.size() > 8) {
-            const auto old = bodies.find(order.front());
-            if (old != bodies.end()) {
-                HandleClose(reinterpret_cast<HOBJECT>(old->second));
-                bodies.erase(old);
-            }
-            order.pop_front();
+        TCTEXTUREINFO info{};
+        TextureCacheGetInfo(handle, info, 1);
+        const CACHEENTRY* entry = static_cast<const CACHEENTRY*>(handle);
+        if (entry && !entry->m_loadFailed && entry->m_data && info.m_width) {
+            const auto* begin = reinterpret_cast<const uint8_t*>(entry->m_data);
+            item.bytes.assign(begin, begin + entry->m_size);
         }
+        if (reload && handle) TextureCacheDestroyTexture(handle);
+        job->items.push_back(std::move(item));
     }
-    character->m_data.m_model->ReplaceTexture(1, cached->second);
-    ApplyCollections(character->m_data.m_model);
-    RevealCharacter(character, "look ready");
+    job->gather = Since(gatherStart);
+    job->queued = Clock::now();
+    std::lock_guard<std::mutex> lock(s_jobMutex);
+    EnsureLookWorker();
+    s_bodyQueue.push_back(job.get());
+    s_bodyJobs.emplace(name, std::move(job));
+    s_jobWake.notify_one();
 }
 
 // Hand tuning for helmet placement per client race and sex, from Data\Retail\helmets.csv beside the
