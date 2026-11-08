@@ -8109,8 +8109,9 @@ static bool IsOnChargeSpline(const CGUnit_C* unit) {
         return false;
     }
 
+    // Charge arrives at 26-28 yd/s in practice; nothing that only runs comes near 2.5 times its run speed.
     float speed = move.GetBaseSpeed(0);
-    return speed >= 25.0f && speed >= move.m_runSpeed * 2.0f;
+    return speed >= 18.0f && speed >= move.m_runSpeed * 2.5f;
 }
 
 static bool ChooseChargeEndAnim(CGUnit_C* unit, uint32_t* anim) {
@@ -8161,6 +8162,13 @@ static bool HoldForChargeEnd(CGUnit_C* unit, uint32_t* anim) {
     }
 
     const uint64_t guid = unit->m_obj->m_guid.m_guid;
+
+    // The server can swing a few ms before the client's charge path ends; that swing would play over the loop
+    // and CombatChargeEnd would then blend in from it.
+    if (IsMeleeAttackAnim(*anim) && s_chargingUnits.count(guid) && IsOnChargeSpline(unit)) {
+        ChargeLog(unit, "held %u %s during the charge", *anim, AnimName(*anim));
+        return true;
+    }
 
     if (IsChargeEndWaiter(*anim) && s_chargingUnits.count(guid) && !IsOnChargeSpline(unit)) {
         uint32_t end;
