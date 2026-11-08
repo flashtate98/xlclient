@@ -119,6 +119,7 @@ struct Look {
     std::string bodyKey;                                             // its layers (shared by looks)
     std::map<uint32_t, std::shared_ptr<OwnedTexture>> textures;     // every other type (hair, eyes, ...)
     uint32_t eyeTint = 0;                                            // FlashWOW Death Knight eye colour (0xRRGGBB), 0 for Frost
+    bool placeholder = false;    // the tables only, no textures: shown (hidden) while a new character's look is built
 };
 
 bool FetchBlp(uint32_t fileDataId, std::vector<uint8_t>& bytes, void*) {
@@ -328,6 +329,20 @@ std::string LookKey(uint32_t retailRace, uint32_t sex, const std::vector<uint32_
     return key;
 }
 
+// The parts of a look that come from the tables alone: geosets, sections, collection models, face shapes, body.
+void LookTables(Look& look, const std::vector<uint32_t>& choices) {
+    const uint32_t chrModel = look.chrModel;
+    std::vector<uint16_t> defaults;
+    Retail::Appearance::Geosets(chrModel, choices, look.geosets);
+    Retail::Appearance::DefaultGeosets(look.geosets, defaults);
+    look.geosets.insert(look.geosets.end(), defaults.begin(), defaults.end());
+    Retail::Appearance::Sections(Retail::Appearance::LayoutFor(chrModel), look.sections);
+    Retail::Appearance::SkinnedModels(chrModel, choices, look.parts);
+    Retail::Appearance::BoneSets(chrModel, choices, look.boneSets);
+    uint32_t ownBody = 0;
+    look.bodyFileDataId = Retail::Appearance::BodyModel(chrModel, choices, ownBody);
+}
+
 void BuildLook(LookJob& job) {
     const auto lookStart = Clock::now();
     const uint32_t chrModel = job.chrModel;
@@ -348,17 +363,9 @@ void BuildLook(LookJob& job) {
     look->chrModel = chrModel;
     look->key = job.key;
     look->eyeTint = tint.rgb;
-    std::vector<uint16_t> defaults;
     std::vector<Retail::Appearance::TextureLayer> layers;
     std::vector<Retail::ComposedTexture> composed;
-    Retail::Appearance::Geosets(chrModel, choices, look->geosets);
-    Retail::Appearance::DefaultGeosets(look->geosets, defaults);
-    look->geosets.insert(look->geosets.end(), defaults.begin(), defaults.end());
-    Retail::Appearance::Sections(Retail::Appearance::LayoutFor(chrModel), look->sections);
-    Retail::Appearance::SkinnedModels(chrModel, choices, look->parts);
-    Retail::Appearance::BoneSets(chrModel, choices, look->boneSets);
-    uint32_t ownBody = 0;
-    look->bodyFileDataId = Retail::Appearance::BodyModel(chrModel, choices, ownBody);
+    LookTables(*look, choices);
     Retail::Appearance::TextureLayers(chrModel, choices, layers);
     job.tables = Since(lookStart);
     std::map<uint32_t, std::vector<Retail::Appearance::TextureLayer>> byType;
@@ -577,6 +584,39 @@ void StopWaiting(CCharacterComponent* character) {
     s_jobs.erase(job);
 }
 
+// FlashWOW: a new character (a race picked on the create screen, a player coming into view) is not drawn until
+// its first look is ready, instead of the game waiting for it: its body, and through it everything attached
+// (equipment, collection models), draws at base alpha 0. It shows again once its body sheet is on
+// (RetailCharacterBody), or after kRevealAfterMs whatever happened.
+constexpr double kRevealAfterMs = 2000;
+struct HiddenCharacter {
+    Clock::time_point since;
+    uint32_t retailRace = 0, sex = 0;
+};
+std::unordered_map<const CCharacterComponent*, HiddenCharacter> s_hiddenCharacters;
+uint32_t s_shownCount = 0;
+double s_shownTotal = 0, s_shownWorst = 0;
+
+void HideCharacter(CCharacterComponent* character, uint32_t retailRace, uint32_t sex) {
+    if (CM2Model* model = character->m_data.m_model) model->m_baseAlpha = 0.0f;
+    if (!s_hiddenCharacters.count(character)) s_hiddenCharacters[character] = {Clock::now(), retailRace, sex};
+}
+
+void RevealCharacter(CCharacterComponent* character, const char* why) {
+    const auto hidden = s_hiddenCharacters.find(character);
+    if (hidden == s_hiddenCharacters.end()) return;
+    if (CM2Model* model = character->m_data.m_model) model->m_baseAlpha = 1.0f;
+    const double waited = Since(hidden->second.since);
+    ++s_shownCount;
+    s_shownTotal += waited;
+    s_shownWorst = std::max(s_shownWorst, waited);
+    Blizzard::Log::Printf(1, kLog, "Timing appear: race %u sex %u shown %.1f ms after its first look was asked for (%s) | "
+        "%zu still hidden, %u shown so far, average %.1f ms, slowest %.1f ms\n", static_cast<unsigned>(hidden->second.retailRace),
+        static_cast<unsigned>(hidden->second.sex), waited, why, s_hiddenCharacters.size() - 1, s_shownCount,
+        s_shownTotal / s_shownCount, s_shownWorst);
+    s_hiddenCharacters.erase(hidden);
+}
+
 // Choices of the options the 3.3.5 selectors do not drive, per character component, by option ID:
 // set by the character creation rows (RetailCustomizationCycle). An option without an entry, or whose
 // stored choice is not offered any more, takes its default choice.
@@ -748,7 +788,18 @@ std::shared_ptr<Look> RetailLook(CCharacterComponent* character) {
             s_waitingLooks[character] = key;
             return shown->second;
         }
-        look = LookFor(retailRace, sex, chrModel, choices);
+        // A new character: hidden, with the look's geometry from the tables, until its textures are built.
+        auto placeholder = std::make_shared<Look>();
+        placeholder->chrModel = chrModel;
+        placeholder->key = key;
+        placeholder->placeholder = true;
+        std::vector<uint32_t> base;
+        Retail::Appearance::BaseChoices(choices, base);
+        LookTables(*placeholder, base);
+        s_shownLooks[character] = placeholder;
+        s_waitingLooks[character] = key;
+        HideCharacter(character, retailRace, sex);
+        return placeholder;
     }
     s_waitingLooks.erase(character);
     s_shownLooks[character] = look;
@@ -1563,6 +1614,7 @@ void RetailCustomizationForget(const CCharacterComponent* character) {
     s_originalBodies.erase(character);
     s_bodyOwners.erase(character);
     s_shownLooks.erase(character);
+    s_hiddenCharacters.erase(character);
     StopWaiting(const_cast<CCharacterComponent*>(character));
 }
 
@@ -1729,6 +1781,13 @@ void RetailCharacterPump() {
             s_waitingLooks.empty() ? "" : " (a look was awaited)");
     }
     last = now;
+    // The safety net: nobody stays hidden for long, whatever happened to their look.
+    if (!s_hiddenCharacters.empty()) {
+        std::vector<CCharacterComponent*> overdue;
+        for (const auto& hidden : s_hiddenCharacters)
+            if (Since(hidden.second.since) > kRevealAfterMs) overdue.push_back(const_cast<CCharacterComponent*>(hidden.first));
+        for (CCharacterComponent* character : overdue) RevealCharacter(character, "timed out: shown without its look");
+    }
     // s_jobs is only changed on this thread (the worker only takes jobs off the queue), so this needs no lock.
     if (s_jobs.empty()) return;
     std::set<std::string> wanted;
@@ -1786,6 +1845,7 @@ void RetailCharacterShutdown() {
     s_jobs.clear();
     s_waitingLooks.clear();
     s_shownLooks.clear();
+    s_hiddenCharacters.clear();
     {
         std::lock_guard<std::mutex> lock(s_lookMutex);
         s_looks.clear();
@@ -1822,7 +1882,11 @@ void RetailCharacterBody(CCharacterComponent* character) {
     RetailCharacterFitHelmet(character);
     const auto found = RetailLook(character);
     if (found) ApplyEyeTint(character->m_data.m_model, *found);
-    if (!found || !found->body || !found->body->width) return;
+    if (!found || found->placeholder) return;
+    if (!found->body || !found->body->width) {
+        RevealCharacter(character, "no body sheet");
+        return;
+    }
     const Look& look = *found;
 
     // The 3.3.5 item section grid is the left half of the Retail sheet at twice the size, in the same
@@ -1916,7 +1980,10 @@ void RetailCharacterBody(CCharacterComponent* character) {
             "Timing body: total %.1f ms | copy %.1f | %u item layers (%u reused): read %.1f, decode %.1f, paint %.1f | build %.1f, create %.1f, %.1f MB\n",
             Since(bodyStart), copy, static_cast<unsigned>(layers.size()), itemsReused, itemRead, itemDecode, itemPaint,
             make.build, make.upload, make.bytes / 1048576.0);
-        if (!texture) return;
+        if (!texture) {
+            RevealCharacter(character, "body sheet failed");
+            return;
+        }
         cached = bodies.emplace(name, texture).first;
         order.push_back(name);
         // Each state is a full-size sheet; keep a handful.
@@ -1931,6 +1998,7 @@ void RetailCharacterBody(CCharacterComponent* character) {
     }
     character->m_data.m_model->ReplaceTexture(1, cached->second);
     ApplyCollections(character->m_data.m_model);
+    RevealCharacter(character, "look ready");
 }
 
 // Hand tuning for helmet placement per client race and sex, from Data\Retail\helmets.csv beside the
