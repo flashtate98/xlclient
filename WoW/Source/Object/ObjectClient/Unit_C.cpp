@@ -8158,6 +8158,7 @@ static std::unordered_map<uint64_t, uint32_t> s_chargeEndUntil;
 static std::unordered_map<uint64_t, uint32_t> s_abilityUntil;
 static std::unordered_map<uint64_t, uint32_t> s_lastSpellCast;
 static std::unordered_map<uint64_t, uint32_t> s_lastSwing;
+static std::unordered_map<uint64_t, const char*> s_casterStanceLogged;   // the last outcome logged, per unit
 
 static void ChargeLog(const CGUnit_C* unit, const char* format, ...) {
     char line[256];
@@ -8276,7 +8277,16 @@ static void NoteAbilityAnim(CGUnit_C* unit, uint32_t requested, uint32_t played)
             s_lastSpellCast.clear();
         }
 
+        if (s_lastSpellCast.size() > 4096) {
+            s_casterStanceLogged.clear();
+        }
+
         s_lastSpellCast[unit->m_obj->m_guid.m_guid] = OsGetAsyncTimeMs();
+
+        if (unit->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
+            ChargeLog(unit, "spell animation %u %s (combat flags %s)", requested, rec->m_name,
+                (unit->m_unit->m_unitFieldFlags & 0x80000) ? "in combat" : "out of combat");
+        }
     } else if (!s_lastSpellCast.empty() && IsAutoAttackSwingAnim(requested)) {
         s_lastSwing[unit->m_obj->m_guid.m_guid] = OsGetAsyncTimeMs();
     }
@@ -8317,8 +8327,29 @@ static void NoteAbilityAnim(CGUnit_C* unit, uint32_t requested, uint32_t played)
 // or caster-form druid in combat whose last action was a spell, cast in the last 10 seconds, holds MagReadySpellCast,
 // PriReadySpellCast, LocReadySpellCast, ShaReadySpellCast or DruReadySpellCast. A melee swing since then brings the
 // weapon stance back; models without the stance stand as before.
+static bool CasterStanceResult(CGUnit_C* unit, const char* why, bool on) {
+    if (unit->m_obj->m_guid != ClntObjMgrGetActivePlayer()) {
+        return on;  // logged for the player's own character only
+    }
+
+    const char*& last = s_casterStanceLogged[unit->m_obj->m_guid.m_guid];
+
+    if (last != why) {
+        last = why;
+        ChargeLog(unit, "caster stance %s: %s", on ? "on" : "off", why);
+    }
+
+    return on;
+}
+
 static bool ChooseCasterReadyAnim(CGUnit_C* unit, uint32_t* anim) {
     if (s_lastSpellCast.empty() || unit->m_mountModel) {
+        return false;
+    }
+
+    auto cast = s_lastSpellCast.find(unit->m_obj->m_guid.m_guid);
+
+    if (cast == s_lastSpellCast.end()) {
         return false;
     }
 
@@ -8334,36 +8365,39 @@ static bool ChooseCasterReadyAnim(CGUnit_C* unit, uint32_t* anim) {
     }
 
     if (unit->m_unit->m_unitFieldBytes0[1] == 11 && unit->GetShapeshiftForm() != 0) {
-        return false;
-    }
-
-    auto cast = s_lastSpellCast.find(unit->m_obj->m_guid.m_guid);
-
-    if (cast == s_lastSpellCast.end() || !unit->IsInCombat()) {
-        return false;
+        return CasterStanceResult(unit, "shapeshifted", false);
     }
 
     if (OsGetAsyncTimeMs() - cast->second > 10000) {
         s_lastSpellCast.erase(cast);
         s_lastSwing.erase(unit->m_obj->m_guid.m_guid);
-        return false;
+        return CasterStanceResult(unit, "no spell in 10 s", false);
+    }
+
+    // UNIT_FLAG_IN_COMBAT (0x80000). IsInCombat() reads the pet-in-combat flag (0x800) and melee attacking only.
+    if (!(unit->m_unit->m_unitFieldFlags & 0x80000) && !unit->IsInCombat()) {
+        return CasterStanceResult(unit, "not in combat", false);
     }
 
     // Auto attacking: the stance follows whichever came last, the spell or the swing.
     auto swing = s_lastSwing.find(unit->m_obj->m_guid.m_guid);
 
     if (swing != s_lastSwing.end() && static_cast<int32_t>(swing->second - cast->second) > 0) {
-        return false;
+        return CasterStanceResult(unit, "melee swing since the spell", false);
     }
 
     CM2Model* model = unit->GetObjectModel();
 
-    if (!model || !model->IsLoaded(0, 0) || !model->HasSequence(ready)) {
+    if (!model || !model->IsLoaded(0, 0)) {
         return false;
     }
 
+    if (!model->HasSequence(ready)) {
+        return CasterStanceResult(unit, "model has no class stance", false);
+    }
+
     *anim = ready;
-    return true;
+    return CasterStanceResult(unit, "in combat after a spell", true);
 }
 
 static bool HoldForChargeEnd(CGUnit_C* unit, uint32_t* anim) {
