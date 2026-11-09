@@ -2734,6 +2734,7 @@ int32_t CGUnit_C::ChooseStandStateAnim(uint32_t mask, uint32_t* anim) {
 static bool ChooseChargeEndAnim(CGUnit_C* unit, uint32_t* anim);    // Not in the original: FlashWOW, defined by ChooseMovementAnim
 static bool HoldForChargeEnd(CGUnit_C* unit, uint32_t* anim);      // Not in the original: FlashWOW, defined by ChooseMovementAnim
 static void NoteAbilityAnim(CGUnit_C* unit, uint32_t requested, uint32_t played);    // Not in the original: FlashWOW, same place
+static bool ChooseCasterReadyAnim(CGUnit_C* unit, uint32_t* anim);                    // Not in the original: FlashWOW, same place
 
 // VERIFY: c45e9335 auto
 // OFFSET: 0x00724500
@@ -2759,6 +2760,10 @@ uint32_t CGUnit_C::ChooseAnimation(uint32_t mask, uint32_t* animFlags, int32_t* 
 
     if (this->m_pendingAnimId != -1) {
         return this->m_pendingAnimId;
+    }
+
+    if (ChooseCasterReadyAnim(this, &anim)) {    // Not in the original: FlashWOW Retail animations
+        return anim;
     }
 
     if (usedDefault) {
@@ -8147,6 +8152,7 @@ int32_t CGUnit_C::IsRunning() const {
 static std::unordered_set<uint64_t> s_chargingUnits;
 static std::unordered_map<uint64_t, uint32_t> s_chargeEndUntil;
 static std::unordered_map<uint64_t, uint32_t> s_abilityUntil;
+static std::unordered_map<uint64_t, uint32_t> s_lastSpellCast;
 
 static void ChargeLog(const CGUnit_C* unit, const char* format, ...) {
     char line[256];
@@ -8256,6 +8262,18 @@ static bool IsAbilityAnim(uint32_t anim) {
 }
 
 static void NoteAbilityAnim(CGUnit_C* unit, uint32_t requested, uint32_t played) {
+    AnimationDataRec* rec = g_animationDataDB.GetRecord(static_cast<int32_t>(requested));
+
+    // Any spell animation (ReadySpell*, SpellCast*, ChannelCast*, Retail's *Spell* and Cast*) starts the caster's
+    // ready stance, see ChooseCasterReadyAnim.
+    if (rec && rec->m_name && (SStrStr(rec->m_name, "Spell") || SStrStr(rec->m_name, "Cast"))) {
+        if (s_lastSpellCast.size() > 4096) {
+            s_lastSpellCast.clear();
+        }
+
+        s_lastSpellCast[unit->m_obj->m_guid.m_guid] = OsGetAsyncTimeMs();
+    }
+
     if (!IsAbilityAnim(requested)) {
         return;
     }
@@ -8285,6 +8303,51 @@ static void NoteAbilityAnim(CGUnit_C* unit, uint32_t requested, uint32_t played)
     }
 
     s_abilityUntil[unit->m_obj->m_guid.m_guid] = OsGetAsyncTimeMs() + info.m_duration * 9 / 10;
+}
+
+// Retail casters take their class's spell ready stance in combat: where the client would otherwise stand, a mage,
+// priest, warlock, shaman or caster-form druid in combat who cast a spell in the last 10 seconds holds
+// MagReadySpellCast, PriReadySpellCast, LocReadySpellCast, ShaReadySpellCast or DruReadySpellCast. Auto attack
+// keeps the weapon stance (chosen earlier); models without the stance stand as before.
+static bool ChooseCasterReadyAnim(CGUnit_C* unit, uint32_t* anim) {
+    if (s_lastSpellCast.empty() || unit->m_mountModel) {
+        return false;
+    }
+
+    uint32_t ready;
+
+    switch (unit->m_unit->m_unitFieldBytes0[1]) {
+        case 5:  ready = 874; break;    // Priest: PriReadySpellCast
+        case 7:  ready = 860; break;    // Shaman: ShaReadySpellCast
+        case 8:  ready = 896; break;    // Mage: MagReadySpellCast
+        case 9:  ready = 918; break;    // Warlock: LocReadySpellCast
+        case 11: ready = 940; break;    // Druid: DruReadySpellCast
+        default: return false;
+    }
+
+    if (unit->m_unit->m_unitFieldBytes0[1] == 11 && unit->GetShapeshiftForm() != 0) {
+        return false;
+    }
+
+    auto cast = s_lastSpellCast.find(unit->m_obj->m_guid.m_guid);
+
+    if (cast == s_lastSpellCast.end() || !unit->IsInCombat()) {
+        return false;
+    }
+
+    if (OsGetAsyncTimeMs() - cast->second > 10000) {
+        s_lastSpellCast.erase(cast);
+        return false;
+    }
+
+    CM2Model* model = unit->GetObjectModel();
+
+    if (!model || !model->IsLoaded(0, 0) || !model->HasSequence(ready)) {
+        return false;
+    }
+
+    *anim = ready;
+    return true;
 }
 
 static bool HoldForChargeEnd(CGUnit_C* unit, uint32_t* anim) {
