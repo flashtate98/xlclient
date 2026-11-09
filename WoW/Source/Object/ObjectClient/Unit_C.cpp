@@ -2600,6 +2600,8 @@ int32_t CGUnit_C::ChooseSpellVisualKitAnim(uint32_t mask, uint32_t* anim, uint32
     return 1;
 }
 
+static bool ChooseCasterReadyAnim(CGUnit_C* unit, uint32_t* anim);    // Not in the original: FlashWOW, defined by ChooseMovementAnim
+
 // VERIFY: a6f466cd auto
 // OFFSET: 0x0071E0D0
 int32_t CGUnit_C::ChooseCombatAnim(uint32_t mask, uint32_t* anim, uint32_t* animFlags) {
@@ -2628,7 +2630,9 @@ int32_t CGUnit_C::ChooseCombatAnim(uint32_t mask, uint32_t* anim, uint32_t* anim
             return 1;
         }
 
-        meleeAnim = this->GetCombatReadyAnim();
+        uint32_t casterReady;   // Not in the original: FlashWOW Retail animations, a caster who last cast a spell
+
+        meleeAnim = ChooseCasterReadyAnim(this, &casterReady) ? casterReady : this->GetCombatReadyAnim();
     }
 
     *anim = meleeAnim;
@@ -8153,6 +8157,7 @@ static std::unordered_set<uint64_t> s_chargingUnits;
 static std::unordered_map<uint64_t, uint32_t> s_chargeEndUntil;
 static std::unordered_map<uint64_t, uint32_t> s_abilityUntil;
 static std::unordered_map<uint64_t, uint32_t> s_lastSpellCast;
+static std::unordered_map<uint64_t, uint32_t> s_lastSwing;
 
 static void ChargeLog(const CGUnit_C* unit, const char* format, ...) {
     char line[256];
@@ -8272,6 +8277,8 @@ static void NoteAbilityAnim(CGUnit_C* unit, uint32_t requested, uint32_t played)
         }
 
         s_lastSpellCast[unit->m_obj->m_guid.m_guid] = OsGetAsyncTimeMs();
+    } else if (!s_lastSpellCast.empty() && IsAutoAttackSwingAnim(requested)) {
+        s_lastSwing[unit->m_obj->m_guid.m_guid] = OsGetAsyncTimeMs();
     }
 
     if (!IsAbilityAnim(requested)) {
@@ -8305,10 +8312,11 @@ static void NoteAbilityAnim(CGUnit_C* unit, uint32_t requested, uint32_t played)
     s_abilityUntil[unit->m_obj->m_guid.m_guid] = OsGetAsyncTimeMs() + info.m_duration * 9 / 10;
 }
 
-// Retail casters take their class's spell ready stance in combat: where the client would otherwise stand, a mage,
-// priest, warlock, shaman or caster-form druid in combat who cast a spell in the last 10 seconds holds
-// MagReadySpellCast, PriReadySpellCast, LocReadySpellCast, ShaReadySpellCast or DruReadySpellCast. Auto attack
-// keeps the weapon stance (chosen earlier); models without the stance stand as before.
+// Retail casters take their class's spell ready stance in combat. Where the client would otherwise stand, or take the
+// weapon stance between auto attack swings (casting on a target marks it attacked), a mage, priest, warlock, shaman
+// or caster-form druid in combat whose last action was a spell, cast in the last 10 seconds, holds MagReadySpellCast,
+// PriReadySpellCast, LocReadySpellCast, ShaReadySpellCast or DruReadySpellCast. A melee swing since then brings the
+// weapon stance back; models without the stance stand as before.
 static bool ChooseCasterReadyAnim(CGUnit_C* unit, uint32_t* anim) {
     if (s_lastSpellCast.empty() || unit->m_mountModel) {
         return false;
@@ -8337,6 +8345,14 @@ static bool ChooseCasterReadyAnim(CGUnit_C* unit, uint32_t* anim) {
 
     if (OsGetAsyncTimeMs() - cast->second > 10000) {
         s_lastSpellCast.erase(cast);
+        s_lastSwing.erase(unit->m_obj->m_guid.m_guid);
+        return false;
+    }
+
+    // Auto attacking: the stance follows whichever came last, the spell or the swing.
+    auto swing = s_lastSwing.find(unit->m_obj->m_guid.m_guid);
+
+    if (swing != s_lastSwing.end() && static_cast<int32_t>(swing->second - cast->second) > 0) {
         return false;
     }
 
