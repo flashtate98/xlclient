@@ -8271,8 +8271,11 @@ static void NoteAbilityAnim(CGUnit_C* unit, uint32_t requested, uint32_t played)
     AnimationDataRec* rec = g_animationDataDB.GetRecord(static_cast<int32_t>(requested));
 
     // Any spell animation (ReadySpell*, SpellCast*, ChannelCast*, Retail's *Spell* and Cast*) starts the caster's
-    // ready stance, see ChooseCasterReadyAnim.
-    if (rec && rec->m_name && (SStrStr(rec->m_name, "Spell") || SStrStr(rec->m_name, "Cast"))) {
+    // ready stance, see ChooseCasterReadyAnim. The stances themselves (*ReadySpellCast, PriReadyPostSpellCast) are not
+    // casts: counting them kept the stance up for the whole fight.
+    bool stance = requested == 860 || requested == 874 || requested == 896 || requested == 918 || requested == 940 || requested == 988;
+
+    if (!stance && rec && rec->m_name && (SStrStr(rec->m_name, "Spell") || SStrStr(rec->m_name, "Cast"))) {
         if (s_lastSpellCast.size() > 4096) {
             s_lastSpellCast.clear();
         }
