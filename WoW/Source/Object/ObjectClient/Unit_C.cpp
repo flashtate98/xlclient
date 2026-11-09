@@ -2733,6 +2733,7 @@ int32_t CGUnit_C::ChooseStandStateAnim(uint32_t mask, uint32_t* anim) {
 
 static bool ChooseChargeEndAnim(CGUnit_C* unit, uint32_t* anim);    // Not in the original: FlashWOW, defined by ChooseMovementAnim
 static bool HoldForChargeEnd(CGUnit_C* unit, uint32_t* anim);      // Not in the original: FlashWOW, defined by ChooseMovementAnim
+static void NoteAbilityAnim(CGUnit_C* unit, uint32_t requested, uint32_t played);    // Not in the original: FlashWOW, same place
 
 // VERIFY: c45e9335 auto
 // OFFSET: 0x00724500
@@ -4523,6 +4524,8 @@ void CGUnit_C::PlayBaseAnimation(uint32_t animId, int32_t flags) {
 
         anim = (flags & 0x4) ? animId : this->ResolveAnimForModel(animId, nullptr);
     }
+
+    NoteAbilityAnim(this, animId, anim);    // Not in the original: FlashWOW Retail animations
 
     M2BoneSequenceInfo mount;
     M2BoneSequenceInfo base;
@@ -8143,6 +8146,7 @@ int32_t CGUnit_C::IsRunning() const {
 // CombatChargeEnd plays only on models that have it. Units seen charging are kept by guid until they arrive.
 static std::unordered_set<uint64_t> s_chargingUnits;
 static std::unordered_map<uint64_t, uint32_t> s_chargeEndUntil;
+static std::unordered_map<uint64_t, uint32_t> s_abilityUntil;
 
 static void ChargeLog(const CGUnit_C* unit, const char* format, ...) {
     char line[256];
@@ -8226,12 +8230,81 @@ static bool IsChargeEndWaiter(uint32_t anim) {
     return anim == ANIM_STAND || (anim >= ANIM_READY_UNARMED && anim <= ANIM_READY_2HL) || IsAutoAttackSwingAnim(anim);
 }
 
+// A melee ability's animation (Special1H/2H, Kick, ShieldBash, the druid feral attacks, Retail's Combat* abilities,
+// SpecialFist1H, Slam, PalSpellCast1HUp, DkCast1HFront) likewise keeps the auto attack's swings and the combat stance off it for 90% of its length; dual wield swings
+// often enough to cut most abilities short otherwise. Another ability, a cast, a hit or death still plays at once.
+static bool IsAbilityAnim(uint32_t anim) {
+    if (anim == 816 || anim == 820) {
+        return false;   // the charge has its own rules
+    }
+
+    AnimationDataRec* rec = g_animationDataDB.GetRecord(static_cast<int32_t>(anim));
+
+    if (!rec) {
+        return false;
+    }
+
+    // Melee only: casters do not auto attack, and a precast loop held this way would hold the stance after a cancel.
+    int32_t behavior = rec->m_behaviorID;
+
+    if (behavior == 57 || behavior == 58 || behavior == 59 || behavior == 95 || behavior == 118 || behavior == 212
+        || (behavior >= 170 && behavior <= 179)) {
+        return true;
+    }
+
+    return anim >= 0x1FA && ((rec->m_name && !SStrCmpI(rec->m_name, "Combat", 6)) || anim == 516 || anim == 654 || anim == 984 || anim == 1104);
+}
+
+static void NoteAbilityAnim(CGUnit_C* unit, uint32_t requested, uint32_t played) {
+    if (!IsAbilityAnim(requested)) {
+        return;
+    }
+
+    CM2Model* model = unit->GetObjectModel();
+
+    if (!model || !model->IsLoaded(0, 0)) {
+        return;
+    }
+
+    uint32_t sequence = model->ResolveSequenceFallback(played);
+
+    if (sequence == 0xFFFFFFFF) {
+        return;
+    }
+
+    M2SequenceInfo info;
+    info.Clear();
+    model->GetSequenceInfo(sequence, 0, info);
+
+    if (!info.m_duration) {
+        return;
+    }
+
+    if (s_abilityUntil.size() > 4096) {
+        s_abilityUntil.clear();
+    }
+
+    s_abilityUntil[unit->m_obj->m_guid.m_guid] = OsGetAsyncTimeMs() + info.m_duration * 9 / 10;
+}
+
 static bool HoldForChargeEnd(CGUnit_C* unit, uint32_t* anim) {
-    if (s_chargingUnits.empty() && s_chargeEndUntil.empty()) {
+    if (s_chargingUnits.empty() && s_chargeEndUntil.empty() && s_abilityUntil.empty()) {
         return false;
     }
 
     const uint64_t guid = unit->m_obj->m_guid.m_guid;
+
+    if (!s_abilityUntil.empty()) {
+        auto ability = s_abilityUntil.find(guid);
+
+        if (ability != s_abilityUntil.end()) {
+            if (static_cast<int32_t>(OsGetAsyncTimeMs() - ability->second) >= 0) {
+                s_abilityUntil.erase(ability);
+            } else if (IsChargeEndWaiter(*anim)) {
+                return true;
+            }
+        }
+    }
 
     // The server can swing a few ms before the client's charge path ends; that swing would play over the loop
     // and CombatChargeEnd would then blend in from it.
