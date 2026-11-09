@@ -4384,6 +4384,48 @@ static const uint32_t s_weaponVariantAnims[][4] = {
     { 1080, 844,  824,  850  },   // CombatAbility2H03 (Victory Rush: one-hand plays CombatAbility1HBig01)
 };
 
+// Retail's CastStrong, CastCurse, CastSweep and CastStrongUp are in no player model: Retail plays them as the
+// matching right or left hand cast (flag 0x80000000 on the generic row), alternating between casts. While one of
+// the pair is still playing (the same cast asking again) the hand stays; otherwise the other hand casts.
+static const uint32_t s_castHandAnims[][3] = {
+    // generic  right  left
+    { 1288,     1106,  1108 },  // CastStrong
+    { 1290,     1110,  1112 },  // CastCurse
+    { 1292,     1114,  1116 },  // CastSweep
+    { 1294,     1148,  1118 },  // CastStrongUp
+};
+static std::unordered_map<uint64_t, uint8_t> s_castHand;
+
+static uint32_t ChooseCastHandAnim(const CGUnit_C* unit, uint32_t animId) {
+    for (const auto& row : s_castHandAnims) {
+        if (row[0] != animId) {
+            continue;
+        }
+
+        CM2Model* model = unit->GetObjectModel();
+
+        if (!model || !model->IsLoaded(0, 0) || model->HasSequence(animId)) {
+            return animId;
+        }
+
+        uint32_t current = unit->GetCurrentTorsoAnimId();
+
+        if (current == row[1] || current == row[2]) {
+            return current;
+        }
+
+        if (s_castHand.size() > 4096) {
+            s_castHand.clear();
+        }
+
+        uint8_t& hand = s_castHand[unit->m_obj->m_guid.m_guid];
+        hand ^= 1;
+        return row[1 + hand];
+    }
+
+    return animId;
+}
+
 uint32_t ChooseWeaponVariantAnim(const CGUnit_C* unit, uint32_t animId) {
     for (const auto& row : s_weaponVariantAnims) {
         for (uint32_t version : row) {
@@ -4413,7 +4455,7 @@ uint32_t ChooseWeaponVariantAnim(const CGUnit_C* unit, uint32_t animId) {
         }
     }
 
-    return animId;
+    return ChooseCastHandAnim(unit, animId);
 }
 
 // VERIFY: 4d39ab41 manual
