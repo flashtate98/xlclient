@@ -2739,6 +2739,7 @@ static bool ChooseChargeEndAnim(CGUnit_C* unit, uint32_t* anim);    // Not in th
 static bool HoldForChargeEnd(CGUnit_C* unit, uint32_t* anim);      // Not in the original: FlashWOW, defined by ChooseMovementAnim
 static void NoteAbilityAnim(CGUnit_C* unit, uint32_t requested, uint32_t played);    // Not in the original: FlashWOW, same place
 static bool ChooseCasterReadyAnim(CGUnit_C* unit, uint32_t* anim);                    // Not in the original: FlashWOW, same place
+static bool IsAbilityAnim(uint32_t anim);                                              // Not in the original: FlashWOW, same place
 static void ChargeLog(const CGUnit_C* unit, const char* format, ...);                    // Not in the original: FlashWOW, same place
 
 // VERIFY: c45e9335 auto
@@ -4649,7 +4650,14 @@ void CGUnit_C::PlayBaseAnimation(uint32_t animId, int32_t flags) {
         hasTorso = 0;
     }
 
-    if ((this->m_animationState & 0x20) && IsMeleeAttackAnim(previousAnim) && IsMeleeAttackAnim(anim)) {
+    // Not in the original: FlashWOW. This shortcut (a swing asked for while one plays speeds the playing one up) also
+    // took Special1H/2H, ShieldBash and Kick, dropping an ability pressed mid-swing; abilities now play.
+    if ((this->m_animationState & 0x20) && IsMeleeAttackAnim(previousAnim) && IsMeleeAttackAnim(anim) && IsAbilityAnim(animId)
+        && this->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
+        ChargeLog(this, "ability %u over the playing swing %u", animId, previousAnim);
+    }
+
+    if ((this->m_animationState & 0x20) && IsMeleeAttackAnim(previousAnim) && IsMeleeAttackAnim(anim) && !IsAbilityAnim(animId)) {
         this->SetKeyBoneSequenceSpeed(this->m_worldModel, hasTorso ? this->m_torsoKeyBone : 0xFFFFFFFF, 2.0f, 0);
         this->m_meleeAttackAnimId = anim;
         return;
@@ -8456,6 +8464,11 @@ static void NoteAbilityAnim(CGUnit_C* unit, uint32_t requested, uint32_t played)
     }
 
     s_abilityUntil[unit->m_obj->m_guid.m_guid] = OsGetAsyncTimeMs() + info.m_duration * 9 / 10;
+
+    if (unit->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
+        ChargeLog(unit, "ability %u %s, model plays %u %s, swings wait %u ms", requested, AnimName(requested), sequence,
+            AnimName(sequence), info.m_duration * 9 / 10);
+    }
 }
 
 // Retail casters take their class's spell ready stance in combat. Where the client would otherwise stand, or take the
@@ -8567,8 +8580,17 @@ static bool HoldForChargeEnd(CGUnit_C* unit, uint32_t* anim) {
         if (ability != s_abilityUntil.end()) {
             if (static_cast<int32_t>(OsGetAsyncTimeMs() - ability->second) >= 0) {
                 s_abilityUntil.erase(ability);
-            } else if (IsChargeEndWaiter(*anim)) {
-                return true;
+            } else {
+                bool hold = IsChargeEndWaiter(*anim);
+
+                if (unit->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
+                    ChargeLog(unit, "%s %u %s during the ability, %d ms left", hold ? "held" : "let through", *anim,
+                        AnimName(*anim), static_cast<int32_t>(ability->second - OsGetAsyncTimeMs()));
+                }
+
+                if (hold) {
+                    return true;
+                }
             }
         }
     }
