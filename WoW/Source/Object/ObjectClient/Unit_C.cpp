@@ -4517,7 +4517,7 @@ uint32_t ChooseWeaponVariantAnim(const CGUnit_C* unit, uint32_t animId) {
 
 // Not in the original: FlashWOW Retail animations. A hovering priest floats the whole time with Retail's priest hover
 // set: PriHoverForward/Backward/Left/Right to move, Hover (193) standing out of combat, PriReadySpellCast (floating) in
-// combat. She hovers while levitating (Levitate sets MOVEMENTFLAG_HOVER), and, as in Retail, purely for looks from
+// combat, and her casts as their hovering priest versions. She hovers while levitating (Levitate sets MOVEMENTFLAG_HOVER), and, as in Retail, purely for looks from
 // her first hovering priest spell animation in combat until the combat ends. Priests only; others keep their
 // animations while levitated.
 static std::unordered_set<uint64_t> s_priestCombatHover;
@@ -4584,6 +4584,30 @@ static uint32_t ChooseLevitateAnim(const CGUnit_C* unit, uint32_t animId) {
         case ANIM_READY_2HL:
         case 988:           // PriReadyPostSpellCast
             hover = 874;    // PriReadySpellCast
+            break;
+        // Casting while hovering: the standing casts play as their hovering priest versions, so she stays up.
+        case 51:            // ReadySpellDirected
+        case 52:            // ReadySpellOmni
+            hover = 878;    // PriSpellPrecastBothChannel
+            break;
+        case 53:            // SpellCastDirected
+        case 1106: case 1108: case 1288:    // CastStrong
+        case 1110: case 1112: case 1290:    // CastCurse
+        case 1114: case 1116: case 1292:    // CastSweep
+            hover = 882;    // PriSpellCastBothFront
+            break;
+        case 54:            // SpellCastOmni
+        case 1118: case 1148: case 1294:    // CastStrongUp
+        case 1120:          // CastTwistUpBoth
+        case 1122:          // CastOutStrong
+            hover = 880;    // PriSpellCastBothUp
+            break;
+        case 124:           // ChannelCastDirected
+            hover = 890;    // PriSpellCastBothFrontChannel
+            break;
+        case 125:           // ChannelCastOmni
+        case 1448:          // ChannelCastOmniUp
+            hover = 888;    // PriSpellCastBothUpChannel
             break;
         default:
             return animId;
