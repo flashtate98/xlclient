@@ -2741,6 +2741,7 @@ static void NoteAbilityAnim(CGUnit_C* unit, uint32_t requested, uint32_t played)
 static bool ChooseCasterReadyAnim(CGUnit_C* unit, uint32_t* anim);                    // Not in the original: FlashWOW, same place
 static bool IsAbilityAnim(uint32_t anim);                                              // Not in the original: FlashWOW, same place
 static void ChargeLog(const CGUnit_C* unit, const char* format, ...);                    // Not in the original: FlashWOW, same place
+static const char* AnimName(uint32_t anim);                                            // Not in the original: FlashWOW, same place
 
 // VERIFY: c45e9335 auto
 // OFFSET: 0x00724500
@@ -4520,10 +4521,12 @@ uint32_t ChooseWeaponVariantAnim(const CGUnit_C* unit, uint32_t animId) {
 // combat, and her casts as their hovering priest versions. She hovers while levitating (Levitate sets MOVEMENTFLAG_HOVER), and, as in Retail, purely for looks from
 // her first hovering priest spell animation in combat until the combat ends. Priests only; others keep their
 // animations while levitated.
-static std::unordered_set<uint64_t> s_priestCombatHover;
+// When each priest last had a reason to hover (her hovering precast, or a hover animation while up), by guid.
+static std::unordered_map<uint64_t, uint32_t> s_priestHover;
+static const uint32_t kPriestHoverLinger = 6000;    // out of combat she comes down this long after (ms)
 
-static bool IsPriestHoverAnim(uint32_t anim) {
-    return anim == 876 || anim == 878 || anim == 880 || anim == 882 || anim == 888 || anim == 890;
+static bool IsPriestHoverPrecast(uint32_t anim) {
+    return anim == 876 || anim == 878;  // PriSpellPrecastBoth, PriSpellPrecastBothChannel
 }
 
 static bool IsPriestLevitating(const CGUnit_C* unit) {
@@ -4535,26 +4538,77 @@ static bool IsPriestLevitating(const CGUnit_C* unit) {
         return true;
     }
 
-    if (s_priestCombatHover.empty()) {
+    if (s_priestHover.empty()) {
         return false;
     }
 
-    auto hover = s_priestCombatHover.find(unit->m_obj->m_guid.m_guid);
+    auto hover = s_priestHover.find(unit->m_obj->m_guid.m_guid);
 
-    if (hover == s_priestCombatHover.end()) {
+    if (hover == s_priestHover.end()) {
         return false;
     }
 
-    if (!(unit->m_unit->m_unitFieldFlags & 0x80000)) {
-        s_priestCombatHover.erase(hover);   // out of combat: she lands
-        return false;
+    if (unit->m_unit->m_unitFieldFlags & 0x80000) {
+        hover->second = OsGetAsyncTimeMs();     // in combat she stays up
+        return true;
     }
 
-    return true;
+    if (OsGetAsyncTimeMs() - hover->second < kPriestHoverLinger) {
+        return true;
+    }
+
+    s_priestHover.erase(hover);
+
+    if (unit->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
+        ChargeLog(unit, "priest hover ends");
+    }
+
+    return false;
+}
+
+// Not hovering, her hovering casts play as their ground versions: no floating cast after a ground precast.
+static uint32_t GroundPriestAnim(uint32_t animId) {
+    switch (animId) {
+        case 880: return 54;    // PriSpellCastBothUp -> SpellCastOmni
+        case 882: return 53;    // PriSpellCastBothFront -> SpellCastDirected
+        case 888: return 125;   // PriSpellCastBothUpChannel -> ChannelCastOmni
+        case 890: return 124;   // PriSpellCastBothFrontChannel -> ChannelCastDirected
+        case 874: return 988;   // PriReadySpellCast -> PriReadyPostSpellCast
+        default:  return animId;
+    }
 }
 
 static uint32_t ChooseLevitateAnim(const CGUnit_C* unit, uint32_t animId) {
+    if (unit->m_unit->m_unitFieldBytes0[1] != 5) {
+        return animId;
+    }
+
+    // Only her hovering precast lifts her (PriSpellPrecastBoth); then she stays up for the combat.
+    if (IsPriestHoverPrecast(animId) && !unit->m_mountModel) {
+        uint32_t& since = s_priestHover[unit->m_obj->m_guid.m_guid];
+
+        if (!since && unit->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
+            ChargeLog(unit, "priest hover starts with %u %s", animId, AnimName(animId));
+        }
+
+        since = OsGetAsyncTimeMs();
+    }
+
     if (!IsPriestLevitating(unit)) {
+        uint32_t ground = GroundPriestAnim(animId);
+
+        if (ground != animId) {
+            CM2Model* model = unit->GetObjectModel();
+
+            if (model && model->IsLoaded(0, 0) && model->HasSequence(ground)) {
+                if (unit->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
+                    ChargeLog(unit, "priest not hovering: %u %s plays as %u %s", animId, AnimName(animId), ground, AnimName(ground));
+                }
+
+                return ground;
+            }
+        }
+
         return animId;
     }
 
@@ -8520,13 +8574,6 @@ static void NoteAbilityAnim(CGUnit_C* unit, uint32_t requested, uint32_t played)
         s_lastSpellCast[unit->m_obj->m_guid.m_guid] = OsGetAsyncTimeMs();
         s_lastSpellAnim[unit->m_obj->m_guid.m_guid] = requested;
 
-        if (IsPriestHoverAnim(requested) && unit->m_unit->m_unitFieldBytes0[1] == 5 && (unit->m_unit->m_unitFieldFlags & 0x80000)) {
-            if (s_priestCombatHover.size() > 4096) {
-                s_priestCombatHover.clear();
-            }
-
-            s_priestCombatHover.insert(unit->m_obj->m_guid.m_guid);
-        }
 
         if (unit->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
             ChargeLog(unit, "spell animation %u %s (combat flags %s)", requested, rec->m_name,
@@ -8636,12 +8683,8 @@ static bool ChooseCasterReadyAnim(CGUnit_C* unit, uint32_t* anim) {
 
     switch (unit->m_unit->m_unitFieldBytes0[1]) {
         case 5: {
-            // Priest: floating PriReadySpellCast after one of the hovering priest animations (or while levitating),
-            // otherwise the grounded PriReadyPostSpellCast.
-            auto last = s_lastSpellAnim.find(unit->m_obj->m_guid.m_guid);
-            uint32_t spell = last == s_lastSpellAnim.end() ? 0 : last->second;
-            bool hovering = IsPriestHoverAnim(spell);
-            ready = (hovering || IsPriestLevitating(unit)) ? 874 : 988;
+            // Priest: floating PriReadySpellCast while she hovers, otherwise the grounded PriReadyPostSpellCast.
+            ready = IsPriestLevitating(unit) ? 874 : 988;
             break;
         }
         case 7:  ready = 860; break;    // Shaman: ShaReadySpellCast
