@@ -4524,16 +4524,19 @@ static bool AnimNameHas(uint32_t anim, const char* part) {
     return rec && rec->m_name && SStrStr(rec->m_name, part);
 }
 
+// A spell's release (SpellCast*, Cast*, the class casts), and what follows one while casting on (a precast, a spell
+// ready pose or caster stance, a channel).
+static bool IsSpellReleaseAnim(uint32_t anim) {
+    return anim < ANIM_COUNT && AnimNameHas(anim, "Cast") && !AnimNameHas(anim, "Ready") && !AnimNameHas(anim, "Precast")
+        && !AnimNameHas(anim, "Channel");
+}
+
+static bool IsSpellPrepareAnim(uint32_t anim) {
+    return anim < ANIM_COUNT && (AnimNameHas(anim, "Precast") || AnimNameHas(anim, "ReadySpell") || AnimNameHas(anim, "Channel"));
+}
+
 static uint32_t CastBlendTime(const CGUnit_C* unit, uint32_t previous, uint32_t next, const M2BoneSequenceInfo& playing) {
-    if (previous == next || previous >= ANIM_COUNT || next >= ANIM_COUNT) {
-        return 0;
-    }
-
-    bool fromCast = AnimNameHas(previous, "Cast") && !AnimNameHas(previous, "Ready") && !AnimNameHas(previous, "Precast")
-        && !AnimNameHas(previous, "Channel");
-    bool toPrepare = AnimNameHas(next, "Precast") || AnimNameHas(next, "ReadySpell") || AnimNameHas(next, "Channel");
-
-    if (!fromCast || !toPrepare) {
+    if (previous == next || !IsSpellReleaseAnim(previous) || !IsSpellPrepareAnim(next)) {
         return 0;
     }
 
@@ -8240,6 +8243,7 @@ int32_t CGUnit_C::IsRunning() const {
 static std::unordered_set<uint64_t> s_chargingUnits;
 static std::unordered_map<uint64_t, uint32_t> s_chargeEndUntil;
 static std::unordered_map<uint64_t, uint32_t> s_abilityUntil;
+static std::unordered_map<uint64_t, uint32_t> s_releaseUntil;    // a spell release plays on until then
 static std::unordered_map<uint64_t, uint32_t> s_lastSpellCast;
 static std::unordered_map<uint64_t, uint32_t> s_lastSwing;
 static std::unordered_map<uint64_t, const char*> s_casterStanceLogged;   // the last outcome logged, per unit
@@ -8378,6 +8382,33 @@ static void NoteAbilityAnim(CGUnit_C* unit, uint32_t requested, uint32_t played)
         s_lastSwing[unit->m_obj->m_guid.m_guid] = OsGetAsyncTimeMs();
     }
 
+    // A queued cast starts its precast the frame its release starts (Animations.log: cut at 0-60 ms). The release
+    // plays its first 60%, at most 400 ms, before a precast, ready pose or channel takes over; the cast bar is not
+    // affected. Blending (CastBlendTime) then takes it from there.
+    if (IsSpellReleaseAnim(requested)) {
+        CM2Model* model = unit->GetObjectModel();
+        uint32_t sequence = (model && model->IsLoaded(0, 0)) ? model->ResolveSequenceFallback(played) : 0xFFFFFFFF;
+
+        if (sequence != 0xFFFFFFFF) {
+            M2SequenceInfo info;
+            info.Clear();
+            model->GetSequenceInfo(sequence, 0, info);
+            uint32_t hold = info.m_duration * 6 / 10;
+
+            if (hold > 400) {
+                hold = 400;
+            }
+
+            if (hold) {
+                if (s_releaseUntil.size() > 4096) {
+                    s_releaseUntil.clear();
+                }
+
+                s_releaseUntil[unit->m_obj->m_guid.m_guid] = OsGetAsyncTimeMs() + hold;
+            }
+        }
+    }
+
     if (!IsAbilityAnim(requested)) {
         return;
     }
@@ -8488,11 +8519,29 @@ static bool ChooseCasterReadyAnim(CGUnit_C* unit, uint32_t* anim) {
 }
 
 static bool HoldForChargeEnd(CGUnit_C* unit, uint32_t* anim) {
-    if (s_chargingUnits.empty() && s_chargeEndUntil.empty() && s_abilityUntil.empty()) {
+    if (s_chargingUnits.empty() && s_chargeEndUntil.empty() && s_abilityUntil.empty() && s_releaseUntil.empty()) {
         return false;
     }
 
     const uint64_t guid = unit->m_obj->m_guid.m_guid;
+
+    if (!s_releaseUntil.empty()) {
+        auto release = s_releaseUntil.find(guid);
+
+        if (release != s_releaseUntil.end()) {
+            int32_t left = static_cast<int32_t>(release->second - OsGetAsyncTimeMs());
+
+            if (left <= 0) {
+                s_releaseUntil.erase(release);
+            } else if (IsSpellPrepareAnim(*anim)) {
+                if (unit->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
+                    ChargeLog(unit, "held %u %s for the release, %d ms left", *anim, AnimName(*anim), left);
+                }
+
+                return true;
+            }
+        }
+    }
 
     if (!s_abilityUntil.empty()) {
         auto ability = s_abilityUntil.find(guid);
