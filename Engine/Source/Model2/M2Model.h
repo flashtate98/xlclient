@@ -226,6 +226,10 @@ class CM2Model {
 
     static void (*s_transformVertices[5])(CM2Model*, M2SkinSection*, uint8_t*, int32_t);
     static TSGrowableArray<M2ModelCallback> s_sequenceCallbacks;
+    // Not in the original: FlashWOW. When nonzero, the blend time (ms) for the next primary sequence change instead of
+    // the new sequence's own; the caller sets it around one change and clears it.
+    static uint32_t s_nextBlendTime;
+    static void SetNextBlendTime(uint32_t ms) { s_nextBlendTime = ms; }
     static TSGrowableArray<C3Vector> s_collisionPositions;
     static TSGrowableArray<uint32_t> s_collisionCodes;
 

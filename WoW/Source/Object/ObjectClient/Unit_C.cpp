@@ -2739,6 +2739,7 @@ static bool ChooseChargeEndAnim(CGUnit_C* unit, uint32_t* anim);    // Not in th
 static bool HoldForChargeEnd(CGUnit_C* unit, uint32_t* anim);      // Not in the original: FlashWOW, defined by ChooseMovementAnim
 static void NoteAbilityAnim(CGUnit_C* unit, uint32_t requested, uint32_t played);    // Not in the original: FlashWOW, same place
 static bool ChooseCasterReadyAnim(CGUnit_C* unit, uint32_t* anim);                    // Not in the original: FlashWOW, same place
+static void ChargeLog(const CGUnit_C* unit, const char* format, ...);                    // Not in the original: FlashWOW, same place
 
 // VERIFY: c45e9335 auto
 // OFFSET: 0x00724500
@@ -4513,6 +4514,40 @@ uint32_t ChooseWeaponVariantAnim(const CGUnit_C* unit, uint32_t animId) {
     return ChooseCastHandAnim(unit, animId);
 }
 
+// Not in the original: FlashWOW Retail animations. Spamming a cast cut its release short with the next precast, over
+// the precast's own 150 ms blend: a snap. A spell cast (SpellCast*, Cast*, the class casts) handing over to a
+// precast, a spell ready pose, a caster stance or a channel now blends over kCastBlendMs. Logged for the player.
+static const uint32_t kCastBlendMs = 300;
+
+static bool AnimNameHas(uint32_t anim, const char* part) {
+    AnimationDataRec* rec = g_animationDataDB.GetRecord(static_cast<int32_t>(anim));
+    return rec && rec->m_name && SStrStr(rec->m_name, part);
+}
+
+static uint32_t CastBlendTime(const CGUnit_C* unit, uint32_t previous, uint32_t next, const M2BoneSequenceInfo& playing) {
+    if (previous == next || previous >= ANIM_COUNT || next >= ANIM_COUNT) {
+        return 0;
+    }
+
+    bool fromCast = AnimNameHas(previous, "Cast") && !AnimNameHas(previous, "Ready") && !AnimNameHas(previous, "Precast")
+        && !AnimNameHas(previous, "Channel");
+    bool toPrepare = AnimNameHas(next, "Precast") || AnimNameHas(next, "ReadySpell") || AnimNameHas(next, "Channel");
+
+    if (!fromCast || !toPrepare) {
+        return 0;
+    }
+
+    if (unit->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
+        AnimationDataRec* a = g_animationDataDB.GetRecord(static_cast<int32_t>(previous));
+        AnimationDataRec* b = g_animationDataDB.GetRecord(static_cast<int32_t>(next));
+        uint32_t length = playing.m_endTime - playing.m_startTime;
+        ChargeLog(unit, "blend %u %s -> %u %s at %u of %u ms, %u ms", previous, a->m_name, next, b->m_name,
+            playing.m_time, length, kCastBlendMs);
+    }
+
+    return kCastBlendMs;
+}
+
 // VERIFY: 4d39ab41 manual
 // OFFSET: 0x007385C0
 void CGUnit_C::PlayBaseAnimation(uint32_t animId, int32_t flags) {
@@ -4859,6 +4894,8 @@ void CGUnit_C::PlayBaseAnimation(uint32_t animId, int32_t flags) {
         this->UnsetKeyBoneSequence(this->m_worldModel, 0xFFFFFFFF, 1, 0, 0);
     }
 
+    CM2Model::SetNextBlendTime(CastBlendTime(this, previousAnim, anim, hasTorso ? torso : base));    // Not in the original: FlashWOW
+
     if ((!updateBase || torsoSlot.m_sequenceId != 0xFFFFFFFF || baseSlot.m_sequenceId != torso.m_sequenceId) && updateTorso) {
         int32_t torsoBlend;
 
@@ -4875,6 +4912,8 @@ void CGUnit_C::PlayBaseAnimation(uint32_t animId, int32_t flags) {
     if (updateBase) {
         this->ProcessAnimationEvent(&baseSlot, base.m_sequenceId, 0, previousAnim, blendBase, keepBase);
     }
+
+    CM2Model::SetNextBlendTime(0);    // Not in the original: FlashWOW
 
     this->UpdateHandItemAnimEffects((flags >> 5) & 0x1);
     this->UpdateObjectEffectAnimationStates();

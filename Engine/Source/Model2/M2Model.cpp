@@ -147,6 +147,7 @@ TSGrowableArray<uint32_t> CM2Model::s_collisionCodes;
 
 // STATIC: 0x00D411C0
 TSGrowableArray<M2ModelCallback> CM2Model::s_sequenceCallbacks;
+uint32_t CM2Model::s_nextBlendTime;   // Not in the original: FlashWOW
 
 // INLINED
 CM2ModelCall::CM2ModelCall() {
@@ -1729,8 +1730,9 @@ void CM2Model::SetPrimaryBoneSequence(uint16_t sequenceIndex, uint16_t boneIndex
 
             if (bone->m_secondarySequence.m_sequenceIndex == 0xFFFF || weight * bone->m_blendWeightMax <= 0.5f) {
                 bone->m_secondarySequence = bone->m_sequence;
-                bone->m_blendEndTime = sequence->m_blendTime + this->m_scene->m_time;
-                bone->m_invBlendDuration = sequence->m_blendTime ? 1.0f / sequence->m_blendTime : 1.0f;
+                uint32_t blendTime = CM2Model::s_nextBlendTime ? CM2Model::s_nextBlendTime : sequence->m_blendTime;   // Not in the original: FlashWOW
+                bone->m_blendEndTime = blendTime + this->m_scene->m_time;
+                bone->m_invBlendDuration = blendTime ? 1.0f / blendTime : 1.0f;
                 bone->m_blendWeightMax = 1.0f;
             }
         }
