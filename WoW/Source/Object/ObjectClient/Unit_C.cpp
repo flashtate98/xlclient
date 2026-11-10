@@ -4515,11 +4515,42 @@ uint32_t ChooseWeaponVariantAnim(const CGUnit_C* unit, uint32_t animId) {
     return ChooseCastHandAnim(unit, animId);
 }
 
-// Not in the original: FlashWOW Retail animations. A levitating priest (Levitate sets MOVEMENTFLAG_HOVER) floats the
-// whole time with Retail's priest hover set: PriHoverForward/Backward/Left/Right to move, Hover (193) standing out of
-// combat, PriReadySpellCast (floating) in combat. Priests only; others keep their animations while levitated.
+// Not in the original: FlashWOW Retail animations. A hovering priest floats the whole time with Retail's priest hover
+// set: PriHoverForward/Backward/Left/Right to move, Hover (193) standing out of combat, PriReadySpellCast (floating) in
+// combat. She hovers while levitating (Levitate sets MOVEMENTFLAG_HOVER), and, as in Retail, purely for looks from
+// her first hovering priest spell animation in combat until the combat ends. Priests only; others keep their
+// animations while levitated.
+static std::unordered_set<uint64_t> s_priestCombatHover;
+
+static bool IsPriestHoverAnim(uint32_t anim) {
+    return anim == 876 || anim == 878 || anim == 880 || anim == 882 || anim == 888 || anim == 890;
+}
+
 static bool IsPriestLevitating(const CGUnit_C* unit) {
-    return unit->m_unit->m_unitFieldBytes0[1] == 5 && (unit->m_movementData.m_flags & MOVEMENTFLAG_HOVER) && !unit->m_mountModel;
+    if (unit->m_unit->m_unitFieldBytes0[1] != 5 || unit->m_mountModel) {
+        return false;
+    }
+
+    if (unit->m_movementData.m_flags & MOVEMENTFLAG_HOVER) {
+        return true;
+    }
+
+    if (s_priestCombatHover.empty()) {
+        return false;
+    }
+
+    auto hover = s_priestCombatHover.find(unit->m_obj->m_guid.m_guid);
+
+    if (hover == s_priestCombatHover.end()) {
+        return false;
+    }
+
+    if (!(unit->m_unit->m_unitFieldFlags & 0x80000)) {
+        s_priestCombatHover.erase(hover);   // out of combat: she lands
+        return false;
+    }
+
+    return true;
 }
 
 static uint32_t ChooseLevitateAnim(const CGUnit_C* unit, uint32_t animId) {
@@ -8465,6 +8496,14 @@ static void NoteAbilityAnim(CGUnit_C* unit, uint32_t requested, uint32_t played)
         s_lastSpellCast[unit->m_obj->m_guid.m_guid] = OsGetAsyncTimeMs();
         s_lastSpellAnim[unit->m_obj->m_guid.m_guid] = requested;
 
+        if (IsPriestHoverAnim(requested) && unit->m_unit->m_unitFieldBytes0[1] == 5 && (unit->m_unit->m_unitFieldFlags & 0x80000)) {
+            if (s_priestCombatHover.size() > 4096) {
+                s_priestCombatHover.clear();
+            }
+
+            s_priestCombatHover.insert(unit->m_obj->m_guid.m_guid);
+        }
+
         if (unit->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
             ChargeLog(unit, "spell animation %u %s (combat flags %s)", requested, rec->m_name,
                 (unit->m_unit->m_unitFieldFlags & 0x80000) ? "in combat" : "out of combat");
@@ -8577,7 +8616,7 @@ static bool ChooseCasterReadyAnim(CGUnit_C* unit, uint32_t* anim) {
             // otherwise the grounded PriReadyPostSpellCast.
             auto last = s_lastSpellAnim.find(unit->m_obj->m_guid.m_guid);
             uint32_t spell = last == s_lastSpellAnim.end() ? 0 : last->second;
-            bool hovering = spell == 876 || spell == 878 || spell == 880 || spell == 882 || spell == 888 || spell == 890;
+            bool hovering = IsPriestHoverAnim(spell);
             ready = (hovering || IsPriestLevitating(unit)) ? 874 : 988;
             break;
         }
