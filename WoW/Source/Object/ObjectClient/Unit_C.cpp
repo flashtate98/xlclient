@@ -4789,7 +4789,10 @@ void CGUnit_C::PlayBaseAnimation(uint32_t animId, int32_t flags) {
             keepBase = 0;
             baseSlot = newSlot;
         }
-    } else if (IsLocomotionAnimId(anim) && (IsMeleeAttackAnim(base.m_sequenceId) || IsSpellCastAnim(base.m_sequenceId))) {
+    } else if (IsLocomotionAnimId(anim) && (IsMeleeAttackAnim(base.m_sequenceId) || IsSpellCastAnim(base.m_sequenceId)
+        // Not in the original: FlashWOW Retail animations. Moving kept only 3.3.5 attacks and casts on the upper body;
+        // CombatChargeEnd, Retail's abilities and Retail's casts were replaced by the run. They stay on the torso now.
+        || base.m_sequenceId == 820 || IsAbilityAnim(base.m_sequenceId) || IsSpellReleaseAnim(base.m_sequenceId))) {
         updateTorso = 1;
         torsoSlot = base;
         keepTorso = 1;
