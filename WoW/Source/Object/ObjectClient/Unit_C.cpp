@@ -4436,6 +4436,51 @@ static uint32_t ChooseCastHandAnim(const CGUnit_C* unit, uint32_t animId) {
     return animId;
 }
 
+// The hand a spell's hand-sided cast plays with (0 right, 1 left, -1 not one): an explicit Left/Right cast, or the
+// hand ChooseCastHandAnim gives a generic one. A cast already playing keeps its hand; otherwise the one it is about
+// to take (the other hand from the last cast). For the missile to leave from the hand that casts it.
+static int32_t CastHandForSpell(const CGUnit_C* unit, const SpellRec* spell) {
+    const SpellVisualRec* visual = GetSpellVisual(spell);
+    SpellVisualKitRec* kit = visual ? g_spellVisualKitDB.GetRecord(visual->m_castKit) : nullptr;
+
+    if (!kit || kit->m_animID < 0) {
+        return -1;
+    }
+
+    uint32_t anim = static_cast<uint32_t>(kit->m_animID);
+
+    for (const auto& row : s_castHandAnims) {
+        if (anim == row[1]) {
+            return 0;
+        }
+
+        if (anim == row[2]) {
+            return 1;
+        }
+
+        if (anim != row[0]) {
+            continue;
+        }
+
+        CM2Model* model = unit->GetObjectModel();
+
+        if (!model || !model->IsLoaded(0, 0) || model->HasSequence(anim)) {
+            return -1;
+        }
+
+        uint32_t current = unit->GetCurrentTorsoAnimId();
+
+        if (current == row[1] || current == row[2]) {
+            return current == row[1] ? 0 : 1;
+        }
+
+        auto hand = s_castHand.find(unit->m_obj->m_guid.m_guid);
+        return (hand == s_castHand.end() ? 0 : hand->second) ^ 1;
+    }
+
+    return -1;
+}
+
 uint32_t ChooseWeaponVariantAnim(const CGUnit_C* unit, uint32_t animId) {
     for (const auto& row : s_weaponVariantAnims) {
         for (uint32_t version : row) {
@@ -22363,6 +22408,21 @@ int32_t CGUnit_C::OverrideMissileFirePos(C3Vector* position, const SpellRec* spe
 
     C3Vector offset;
 
+    // Not in the original: FlashWOW Retail animations. A hand-sided cast fires from the hand that casts it. Most
+    // missiles name no attachment and come from GetMissileFirePosition, which takes the model's $CSL (left hand)
+    // event whenever the model has one; such a cast now takes $CSR or $CSL by its hand.
+    int32_t hand = CastHandForSpell(this, spell);
+
+    if (hand >= 0 && visual->m_missileAttachment == -1
+        && 0.0f == visual->m_missileCastOffset[0] && 0.0f == visual->m_missileCastOffset[1] && 0.0f == visual->m_missileCastOffset[2]) {
+        uint32_t handEvent = hand ? 0x4C534324 : 0x52534324;    // $CSL : $CSR
+
+        if (this->m_worldModel->HasEvent(handEvent)) {
+            *position = this->m_worldModel->GetEventPosition(handEvent);
+            return 1;
+        }
+    }
+
     if (visual->m_missileAttachment == -1) {
         if (0.0f == visual->m_missileCastOffset[0] && 0.0f == visual->m_missileCastOffset[1] && 0.0f == visual->m_missileCastOffset[2]) {
             return 0;
@@ -22391,15 +22451,26 @@ int32_t CGUnit_C::OverrideMissileFirePos(C3Vector* position, const SpellRec* spe
     }
 
     int32_t raw = visual->m_flags & 0x200;
+    int32_t attachment = visual->m_missileAttachment;
 
-    if (!this->HasAttachmentForEffect(visual->m_missileAttachment, raw)) {
+    // Not in the original: FlashWOW Retail animations. A hand-sided cast whose visual names a hand fires from the hand
+    // that casts (effect attachments 3 SpellLeftHand, 4 and 13 SpellRightHand; raw 21 and 22).
+    if (hand >= 0) {
+        if (!raw && (attachment == 3 || attachment == 4 || attachment == 13)) {
+            attachment = hand ? 3 : 4;
+        } else if (raw && (attachment == 21 || attachment == 22)) {
+            attachment = hand ? 21 : 22;
+        }
+    }
+
+    if (!this->HasAttachmentForEffect(attachment, raw)) {
         return 0;
     }
 
     offset.x = visual->m_missileCastOffset[0];
     offset.y = -visual->m_missileCastOffset[1];
     offset.z = visual->m_missileCastOffset[2];
-    *position = this->GetAttachmentPositionForEffect(visual->m_missileAttachment, offset, raw);
+    *position = this->GetAttachmentPositionForEffect(attachment, offset, raw);
     return 1;
 }
 
