@@ -4514,6 +4514,20 @@ uint32_t ChooseWeaponVariantAnim(const CGUnit_C* unit, uint32_t animId) {
     return ChooseCastHandAnim(unit, animId);
 }
 
+// Not in the original: FlashWOW. Some old animations play far slower than the Retail ones around them (the cat's
+// Rake and Ravage look like slow motion next to Shred). They play faster by this factor; 1 for everything else.
+static float AnimSpeedScale(uint32_t anim) {
+    switch (anim) {
+        case 172:   // DruidCatRake
+        case 173:   // DruidCatRavage
+        case 401:   // FlyDruidCatRake
+        case 402:   // FlyDruidCatRavage
+            return 1.5f;
+        default:
+            return 1.0f;
+    }
+}
+
 // Not in the original: FlashWOW Retail animations. Spamming a cast cut its release short with the next precast, over
 // the precast's own 150 ms blend: a snap. A spell cast (SpellCast*, Cast*, the class casts) handing over to a
 // precast, a spell ready pose, a caster stance or a channel now blends over kCastBlendMs. Logged for the player.
@@ -4676,6 +4690,8 @@ void CGUnit_C::PlayBaseAnimation(uint32_t animId, int32_t flags) {
             }
         }
     }
+
+    speed *= AnimSpeedScale(anim);    // Not in the original: FlashWOW
 
     int32_t blend = !(flags & 0x1);
     int32_t blendMount = blend;
@@ -8432,6 +8448,8 @@ static void NoteAbilityAnim(CGUnit_C* unit, uint32_t requested, uint32_t played)
     if (!info.m_duration) {
         return;
     }
+
+    info.m_duration = static_cast<uint32_t>(info.m_duration / AnimSpeedScale(sequence));    // played faster, see AnimSpeedScale
 
     if (s_abilityUntil.size() > 4096) {
         s_abilityUntil.clear();
