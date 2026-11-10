@@ -4515,6 +4515,67 @@ uint32_t ChooseWeaponVariantAnim(const CGUnit_C* unit, uint32_t animId) {
     return ChooseCastHandAnim(unit, animId);
 }
 
+// Not in the original: FlashWOW Retail animations. A levitating priest (Levitate sets MOVEMENTFLAG_HOVER) floats the
+// whole time with Retail's priest hover set: PriHoverForward/Backward/Left/Right to move, Hover (193) standing out of
+// combat, PriReadySpellCast (floating) in combat. Priests only; others keep their animations while levitated.
+static bool IsPriestLevitating(const CGUnit_C* unit) {
+    return unit->m_unit->m_unitFieldBytes0[1] == 5 && (unit->m_movementData.m_flags & MOVEMENTFLAG_HOVER) && !unit->m_mountModel;
+}
+
+static uint32_t ChooseLevitateAnim(const CGUnit_C* unit, uint32_t animId) {
+    if (!IsPriestLevitating(unit)) {
+        return animId;
+    }
+
+    uint32_t hover;
+
+    switch (animId) {
+        case ANIM_WALK:
+        case ANIM_RUN:
+        case ANIM_SPRINT:
+            hover = 1138;   // PriHoverForward
+            break;
+        case ANIM_WALKBACKWARDS:
+            hover = 1140;   // PriHoverBackward
+            break;
+        case ANIM_SHUFFLE_LEFT:
+            hover = 1144;   // PriHoverLeft
+            break;
+        case ANIM_SHUFFLE_RIGHT:
+            hover = 1142;   // PriHoverRight
+            break;
+        case ANIM_STAND:
+            hover = (unit->m_unit->m_unitFieldFlags & 0x80000) ? 874 : ANIM_HOVER;     // PriReadySpellCast : Hover
+            break;
+        case ANIM_READY_UNARMED:
+        case ANIM_READY_1H:
+        case ANIM_READY_2H:
+        case ANIM_READY_2HL:
+        case 988:           // PriReadyPostSpellCast
+            hover = 874;    // PriReadySpellCast
+            break;
+        default:
+            return animId;
+    }
+
+    CM2Model* model = unit->GetObjectModel();
+
+    if (!model || !model->IsLoaded(0, 0) || !model->HasSequence(hover)) {
+        return animId;
+    }
+
+    if (unit->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
+        static uint32_t s_lastLogged = ANIM_COUNT;
+
+        if (s_lastLogged != hover) {
+            s_lastLogged = hover;
+            ChargeLog(unit, "levitating: %u plays as %u", animId, hover);
+        }
+    }
+
+    return hover;
+}
+
 // Not in the original: FlashWOW. Some old animations play far slower than the Retail ones around them (the cat's
 // Rake and Ravage look like slow motion next to Shred). They play faster by this factor; 1 for everything else.
 static float AnimSpeedScale(uint32_t anim) {
@@ -4626,7 +4687,7 @@ void CGUnit_C::PlayBaseAnimation(uint32_t animId, int32_t flags) {
                 animId = ANIM_SPECIAL_1H;
             }
         } else if (!(flags & 0x8)) {
-            animId = ChooseWeaponVariantAnim(this, animId);    // Not in the original: FlashWOW Retail animations
+            animId = ChooseLevitateAnim(this, ChooseWeaponVariantAnim(this, animId));    // Not in the original: FlashWOW Retail animations
         }
 
         anim = (flags & 0x4) ? animId : this->ResolveAnimForModel(animId, nullptr);
@@ -8273,6 +8334,7 @@ static std::unordered_map<uint64_t, uint32_t> s_abilityUntil;
 static std::unordered_map<uint64_t, uint32_t> s_releaseUntil;    // a spell release plays on until then
 static std::unordered_map<uint64_t, uint32_t> s_lastSpellCast;
 static std::unordered_map<uint64_t, uint32_t> s_lastSwing;
+static std::unordered_map<uint64_t, uint32_t> s_lastSpellAnim;   // the last spell animation, per unit
 static std::unordered_map<uint64_t, const char*> s_casterStanceLogged;   // the last outcome logged, per unit
 
 static void ChargeLog(const CGUnit_C* unit, const char* format, ...) {
@@ -8397,9 +8459,11 @@ static void NoteAbilityAnim(CGUnit_C* unit, uint32_t requested, uint32_t played)
 
         if (s_lastSpellCast.size() > 4096) {
             s_casterStanceLogged.clear();
+            s_lastSpellAnim.clear();
         }
 
         s_lastSpellCast[unit->m_obj->m_guid.m_guid] = OsGetAsyncTimeMs();
+        s_lastSpellAnim[unit->m_obj->m_guid.m_guid] = requested;
 
         if (unit->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
             ChargeLog(unit, "spell animation %u %s (combat flags %s)", requested, rec->m_name,
@@ -8508,7 +8572,15 @@ static bool ChooseCasterReadyAnim(CGUnit_C* unit, uint32_t* anim) {
     uint32_t ready;
 
     switch (unit->m_unit->m_unitFieldBytes0[1]) {
-        case 5:  ready = 874; break;    // Priest: PriReadySpellCast
+        case 5: {
+            // Priest: floating PriReadySpellCast after one of the hovering priest animations (or while levitating),
+            // otherwise the grounded PriReadyPostSpellCast.
+            auto last = s_lastSpellAnim.find(unit->m_obj->m_guid.m_guid);
+            uint32_t spell = last == s_lastSpellAnim.end() ? 0 : last->second;
+            bool hovering = spell == 876 || spell == 878 || spell == 880 || spell == 882 || spell == 888 || spell == 890;
+            ready = (hovering || IsPriestLevitating(unit)) ? 874 : 988;
+            break;
+        }
         case 7:  ready = 860; break;    // Shaman: ShaReadySpellCast
         case 8:  ready = 896; break;    // Mage: MagReadySpellCast
         case 9:  ready = 918; break;    // Warlock: LocReadySpellCast
