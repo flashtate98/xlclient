@@ -4537,6 +4537,23 @@ bool SkipTriggeredCastAnim(CGUnit_C* unit, const SpellRec* spell, const SpellVis
 static const float kUpwardShotSlope = 0.7002f;      // tan(35 degrees)
 
 uint32_t ChooseRangedShotAnim(const CGUnit_C* unit, uint32_t animId) {
+    // Our AnimationData rows for the upward shots carry their own behavior, so the client sheathed the bow for them and
+    // fired from no bow. They are a bow shot (AttackBow) and a rifle shot (AttackRifle) to everything that asks: weapon
+    // in hand, arrow from the bow, bullet hidden.
+    static bool s_upwardBehaviors = false;
+
+    if (!s_upwardBehaviors) {
+        s_upwardBehaviors = true;
+
+        if (AnimationDataRec* rec = g_animationDataDB.GetRecord(1778)) {
+            rec->m_behaviorID = ANIM_ATTACK_BOW;
+        }
+
+        if (AnimationDataRec* rec = g_animationDataDB.GetRecord(1780)) {
+            rec->m_behaviorID = ANIM_ATTACK_RIFLE;
+        }
+    }
+
     if (animId != ANIM_ATTACK_BOW && animId != ANIM_ATTACK_RIFLE && animId != 1778 && animId != 1780) {
         return animId;
     }
@@ -4573,6 +4590,21 @@ uint32_t ChooseRangedShotAnim(const CGUnit_C* unit, uint32_t animId) {
 
     if (animId == 1778 || animId == 1780) {
         return up;
+    }
+
+    // Volley: every arrow is its own triggered spell playing the ordinary shot; inside a channel whose own cast is the
+    // upward shot, they all go up.
+    if (uint32_t channel = unit->m_unit->m_unitChannelSpell) {
+        SpellRec channelSpell;
+
+        if (g_spellDB.GetRecord(channel, &channelSpell)) {
+            const SpellVisualRec* visual = GetSpellVisual(&channelSpell);
+            const SpellVisualKitRec* kit = visual ? g_spellVisualKitDB.GetRecord(visual->m_castKit) : nullptr;
+
+            if (kit && (kit->m_animID == 1778 || kit->m_animID == 1780)) {
+                return up;
+            }
+        }
     }
 
     WOWGUID targetGuid = unit->m_unit->m_unitFieldTarget;
