@@ -2056,6 +2056,9 @@ void PendingSpellCast::OnSpellGo(CDataStore* msg) {
                 kitData.m_playAnim = 0;
             }
 
+            // Not in the original: FlashWOW Retail animations. A hunter's trap tosses in combat, kneels out of it.
+            kitData.m_impactVisualKit = ChooseTrapCastKit(unit, &spell, castKit);
+
             unit->PlaySpellVisualKit(kitData);
         }
 

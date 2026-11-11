@@ -4112,7 +4112,7 @@ int32_t CGUnit_C::ApplyAttachmentAnimOverride(const M2BoneSequenceInfo* mount, c
 
         // Not in the original: FlashWOW Retail animations. This kit animation goes straight to the model, so it gets
         // the same weapon, hand and priest hover/ground versions as PlayBaseAnimation (Mind Flay's channel).
-        uint32_t kitAnim = ChooseLevitateAnim(this, ChooseWeaponVariantAnim(this, static_cast<uint32_t>(effect->m_kitRec->m_animID)));
+        uint32_t kitAnim = ChooseLevitateAnim(this, ChooseWeaponVariantAnim(this, ChooseRangedShotAnim(this, static_cast<uint32_t>(effect->m_kitRec->m_animID))));
 
         if (baseOut->m_sequenceId != kitAnim) {
             baseOut->m_time = 0;
@@ -4530,7 +4530,106 @@ bool SkipTriggeredCastAnim(CGUnit_C* unit, const SpellRec* spell, const SpellVis
     return true;
 }
 
-uint32_t ChooseWeaponVariantAnim(const CGUnit_C* unit, uint32_t animId) {
+// Not in the original: FlashWOW Retail animations. Retail's upward ranged shot: 1778 with a bow, 1780 with a gun or
+// crossbow (no names in the data). Flare and Volley name 1778 and play the one for the weapon held; a player's
+// ordinary shot (AttackBow, AttackRifle) plays it when the target is more than 35 degrees above her (a dragon, a
+// ledge). Wands and thrown weapons have no upward version and keep their shot.
+static const float kUpwardShotSlope = 0.7002f;      // tan(35 degrees)
+
+uint32_t ChooseRangedShotAnim(const CGUnit_C* unit, uint32_t animId) {
+    if (animId != ANIM_ATTACK_BOW && animId != ANIM_ATTACK_RIFLE && animId != 1778 && animId != 1780) {
+        return animId;
+    }
+
+    if (!(unit->m_obj->m_type & TYPEMASK_PLAYER)) {
+        return animId;
+    }
+
+    const CGUnitVirtualItem* item = unit->GetVirtualItem(2, false);
+
+    if (!item || item->m_classID != 2) {
+        return animId;
+    }
+
+    uint32_t up;
+
+    switch (item->m_subclassID) {
+        case 2:             // bow
+            up = 1778;
+            break;
+        case 3:             // gun
+        case 18:            // crossbow
+            up = 1780;
+            break;
+        default:
+            return animId;
+    }
+
+    CM2Model* model = unit->GetObjectModel();
+
+    if (!model || !model->IsLoaded(0, 0) || !model->HasSequence(up)) {
+        return animId;
+    }
+
+    if (animId == 1778 || animId == 1780) {
+        return up;
+    }
+
+    WOWGUID targetGuid = unit->m_unit->m_unitFieldTarget;
+
+    if (!targetGuid.m_guid) {
+        return animId;
+    }
+
+    CGUnit_C* target = static_cast<CGUnit_C*>(ClntObjMgrObjectPtr(targetGuid, TYPEMASK_UNIT, __FILE__, __LINE__));
+
+    if (!target) {
+        return animId;
+    }
+
+    C3Vector from = unit->GetPosition();
+    C3Vector to = target->GetPosition();
+    float dx = to.x - from.x;
+    float dy = to.y - from.y;
+    float dz = to.z - from.z;
+    float flat = sqrtf(dx * dx + dy * dy);
+
+    if (dz <= 0.0f || dz < flat * kUpwardShotSlope) {
+        return animId;
+    }
+
+    if (unit->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
+        ChargeLog(unit, "upward shot: target %.0f degrees up, %u %s plays as %u", atan2f(dz, flat) * 57.29578f, animId, AnimName(animId), up);
+    }
+
+    return up;
+}
+
+// Not in the original: FlashWOW Retail animations. A hunter sets a trap kneeling (Wrath's EmoteKneel) out of combat and
+// tosses it (Retail's ShieldBash) in combat: her trap's kneeling cast kit is swapped for a copy that tosses. The copies
+// live as long as the client, one per kit.
+const SpellVisualKitRec* ChooseTrapCastKit(CGUnit_C* unit, const SpellRec* spell, const SpellVisualKitRec* kit) {
+    if (!unit || !kit || kit->m_animID != ANIM_EMOTE_KNEEL || spell->m_spellClassSet != 9
+        || !(unit->m_obj->m_type & TYPEMASK_PLAYER) || !(unit->m_unit->m_unitFieldFlags & 0x80000)) {
+        return kit;
+    }
+
+    static std::unordered_map<const SpellVisualKitRec*, SpellVisualKitRec*> s_tossKits;
+    SpellVisualKitRec*& toss = s_tossKits[kit];
+
+    if (!toss) {
+        toss = new SpellVisualKitRec(*kit);
+        toss->m_animID = ANIM_SHIELD_BASH;
+    }
+
+    if (unit->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
+        ChargeLog(unit, "trap in combat: spell %u tosses instead of kneeling", spell->m_id);
+    }
+
+    return toss;
+}
+
+
     for (const auto& row : s_weaponVariantAnims) {
         for (uint32_t version : row) {
             if (version != animId) {
@@ -4862,7 +4961,7 @@ void CGUnit_C::PlayBaseAnimation(uint32_t animId, int32_t flags) {
     // 0x8 from kit flags 0x4, 0x10) still names a Retail animation that has to be turned into the one this unit plays
     // (Mind Flay's channel stayed the floating one on the ground). 0x40000000: none of this (FlashPlayAnimation).
     if (!(flags & 0x40000000) && animId != ANIM_SPECIAL_1H && animId != ANIM_SPECIAL_2H) {
-        animId = ChooseLevitateAnim(this, ChooseWeaponVariantAnim(this, animId));
+        animId = ChooseLevitateAnim(this, ChooseWeaponVariantAnim(this, ChooseRangedShotAnim(this, animId)));
     }
 
     if (flags & 0x2) {

@@ -1171,4 +1171,12 @@ uint32_t ChooseWeaponVariantAnim(const CGUnit_C* unit, uint32_t animId);
 // cast the unit just pressed alone (records pressed ones) (Unit_C.cpp).
 bool SkipTriggeredCastAnim(CGUnit_C* unit, const SpellRec* spell, const SpellVisualKitRec* kit, bool triggered);
 
+// Not in the original: FlashWOW Retail animations. Retail's upward ranged shot for the weapon held: Flare and Volley,
+// and a player's shot at a target more than 35 degrees up (Unit_C.cpp).
+uint32_t ChooseRangedShotAnim(const CGUnit_C* unit, uint32_t animId);
+
+// Not in the original: FlashWOW Retail animations. A hunter's trap cast kit: kneeling out of combat, a toss in combat
+// (Unit_C.cpp).
+const SpellVisualKitRec* ChooseTrapCastKit(CGUnit_C* unit, const SpellRec* spell, const SpellVisualKitRec* kit);
+
 #endif
