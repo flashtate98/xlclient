@@ -4685,8 +4685,10 @@ static uint32_t ChooseLevitateAnim(const CGUnit_C* unit, uint32_t animId) {
             hover = 890;    // PriSpellCastBothFrontChannel
             break;
         case 125:           // ChannelCastOmni
-        case 1448:          // ChannelCastOmniUp
             hover = 888;    // PriSpellCastBothUpChannel
+            break;
+        case 1448:          // ChannelCastOmniUp: her calm channels (the hymns) hold arms wide, floating
+            hover = 878;    // PriSpellPrecastBothChannel
             break;
         default:
             return animId;
