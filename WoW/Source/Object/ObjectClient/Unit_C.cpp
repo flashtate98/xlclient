@@ -4540,6 +4540,17 @@ uint32_t ChooseWeaponVariantAnim(const CGUnit_C* unit, uint32_t animId) {
 static std::unordered_map<uint64_t, uint32_t> s_priestHover;
 static const uint32_t kPriestHoverLinger = 6000;    // out of combat she comes down this long after (ms)
 
+// Losing control (feared, stunned, confused) or a knockback brings her spell-made hover down; Levitate is the server's.
+static void EndPriestHover(const CGUnit_C* unit, const char* why) {
+    if (s_priestHover.empty() || !s_priestHover.erase(unit->m_obj->m_guid.m_guid)) {
+        return;
+    }
+
+    if (unit->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
+        ChargeLog(unit, "priest hover ends: %s", why);
+    }
+}
+
 static bool IsPriestHoverPrecast(uint32_t anim) {
     return anim == 876 || anim == 878;  // PriSpellPrecastBoth, PriSpellPrecastBothChannel
 }
@@ -4560,6 +4571,13 @@ static bool IsPriestLevitating(const CGUnit_C* unit) {
     auto hover = s_priestHover.find(unit->m_obj->m_guid.m_guid);
 
     if (hover == s_priestHover.end()) {
+        return false;
+    }
+
+    const uint32_t lost = unit->m_unit->m_unitFieldFlags & (0x40000 | 0x400000 | 0x800000);   // stunned, confused, fleeing
+
+    if (lost) {
+        EndPriestHover(unit, (lost & 0x800000) ? "feared" : (lost & 0x40000) ? "stunned" : "confused");
         return false;
     }
 
@@ -13422,6 +13440,7 @@ int32_t CGUnit_C::OnUnitMoveEvent(uint32_t time, const CMovementStatus& status) 
 // VERIFY: 2f664d59 auto
 // OFFSET: 0x007187F0
 int32_t CGUnit_C::OnKnockBack(uint32_t time, const CMovementStatus& status, CDataStore* msg) {
+    EndPriestHover(this, "knocked back");    // Not in the original: FlashWOW Retail animations
     C2Vector direction = { 0.0f, 0.0f };
     float speed;
     float verticalSpeed;
@@ -14401,6 +14420,7 @@ void CGUnit_C::OnMovementInitiated(bool clearTracking, bool keepLoot) {
 // VERIFY: 106d473a manual
 // OFFSET: 0x0072D1B0
 void CGUnit_C::OnKnockBackLocal(uint32_t time, uint32_t ackCounter, CDataStore* msg) {
+    EndPriestHover(this, "knocked back");    // Not in the original: FlashWOW Retail animations
     this->OnMovementInitiated(true, false);
     C2Vector direction = { 0.0f, 0.0f };
     float speed;
