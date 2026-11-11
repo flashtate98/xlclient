@@ -4511,7 +4511,7 @@ static int32_t Script_FlashPlayAnimation(lua_State* L) {
         played = sequence;
     }
 
-    unit->PlayBaseAnimation(chosen, 0x8);
+    unit->PlayBaseAnimation(chosen, 0x8 | 0x40000000);    // exactly this animation: no FlashWOW substitutions
     AnimationDataRec* playedRec = g_animationDataDB.GetRecord(static_cast<int32_t>(played));
 
     lua_pushnumber(L, static_cast<double>(played));

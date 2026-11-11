@@ -4781,6 +4781,14 @@ void CGUnit_C::PlayBaseAnimation(uint32_t animId, int32_t flags) {
 
     uint32_t anim;
 
+    // Not in the original: FlashWOW Retail animations. The weapon and hand versions of Retail's animations and the
+    // priest's hover/ground versions apply whatever the kit's flags say: a kit asking for its exact animation (0x2,
+    // 0x8 from kit flags 0x4, 0x10) still names a Retail animation that has to be turned into the one this unit plays
+    // (Mind Flay's channel stayed the floating one on the ground). 0x40000000: none of this (FlashPlayAnimation).
+    if (!(flags & 0x40000000) && animId != ANIM_SPECIAL_1H && animId != ANIM_SPECIAL_2H) {
+        animId = ChooseLevitateAnim(this, ChooseWeaponVariantAnim(this, animId));
+    }
+
     if (flags & 0x2) {
         anim = animId;
     } else {
@@ -4795,8 +4803,6 @@ void CGUnit_C::PlayBaseAnimation(uint32_t animId, int32_t flags) {
             } else {
                 animId = ANIM_SPECIAL_1H;
             }
-        } else if (!(flags & 0x8)) {
-            animId = ChooseLevitateAnim(this, ChooseWeaponVariantAnim(this, animId));    // Not in the original: FlashWOW Retail animations
         }
 
         anim = (flags & 0x4) ? animId : this->ResolveAnimForModel(animId, nullptr);
