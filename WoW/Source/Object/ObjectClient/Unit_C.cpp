@@ -4379,6 +4379,15 @@ void CGUnit_C::UpdateHandItemAnimEffects(bool force) {
     }
 
     if (this->m_combat.m_attacking.m_guid) {
+        // Not in the original: FlashWOW Retail animations. A caster in her class stance (auto attack on, no melee swing
+        // yet) keeps her weapons away; they came out, then went away again when the stance played.
+        uint32_t casterReady;
+
+        if (ChooseCasterReadyAnim(this, &casterReady, true)) {
+            this->SetSheatheState(0, 1, 0);
+            return;
+        }
+
         this->SetSheatheState(1, 1, 0);
         return;
     }
@@ -11134,6 +11143,14 @@ void CGUnit_C::SetCharacterModel(CM2Model* model) {
 void CGUnit_C::SetAttacking(WOWGUID guid) {
     this->m_combat.SetAttacking(guid);
     this->m_combat.m_attackSent = 0;
+
+    // Not in the original: FlashWOW Retail animations. A caster who turns auto attack on out of reach takes her class
+    // stance at once (ChooseCombatAnim); nothing chose the animation again until she moved.
+    uint8_t unitClass = this->m_unit->m_unitFieldBytes0[1];
+
+    if (guid.m_guid && (unitClass == 5 || unitClass == 7 || unitClass == 8 || unitClass == 9 || unitClass == 11)) {
+        this->UpdateBaseAnimation(false, -1);
+    }
 }
 
 // VERIFY: 3ea9a78e manual
