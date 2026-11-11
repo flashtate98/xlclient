@@ -22821,6 +22821,20 @@ int32_t CGUnit_C::OverrideMissileFirePos(C3Vector* position, const SpellRec* spe
         }
     }
 
+    // Not in the original: FlashWOW Retail animations. A player's missile with no hand of its own (Arcane Missiles'
+    // channel) leaves from whichever casting hand is further forward right now, so it comes from the pointing hand
+    // whatever the race's pose, instead of always the left.
+    if (hand < 0 && (this->m_obj->m_type & TYPEMASK_PLAYER) && visual->m_missileAttachment == -1
+        && 0.0f == visual->m_missileCastOffset[0] && 0.0f == visual->m_missileCastOffset[1] && 0.0f == visual->m_missileCastOffset[2]
+        && this->m_worldModel->HasEvent(0x52534324) && this->m_worldModel->HasEvent(0x4C534324)) {
+        C3Vector right = this->m_worldModel->GetEventPosition(0x52534324);    // $CSR
+        C3Vector left = this->m_worldModel->GetEventPosition(0x4C534324);     // $CSL
+        float facing = this->GetFacing();
+        float forward = (right.x - left.x) * cosf(facing) + (right.y - left.y) * sinf(facing);
+        *position = forward > 0.0f ? right : left;
+        return 1;
+    }
+
     if (visual->m_missileAttachment == -1) {
         if (0.0f == visual->m_missileCastOffset[0] && 0.0f == visual->m_missileCastOffset[1] && 0.0f == visual->m_missileCastOffset[2]) {
             return 0;
