@@ -4563,8 +4563,8 @@ static bool IsPriestLevitating(const CGUnit_C* unit) {
         return false;
     }
 
-    if (unit->m_unit->m_unitFieldFlags & 0x80000) {
-        hover->second = OsGetAsyncTimeMs();     // in combat she stays up
+    if ((unit->m_unit->m_unitFieldFlags & 0x80000) || unit->m_unit->m_unitChannelSpell) {
+        hover->second = OsGetAsyncTimeMs();     // in combat, or channeling, she stays up
         return true;
     }
 
@@ -8783,6 +8783,15 @@ static bool ChooseCasterReadyAnim(CGUnit_C* unit, uint32_t* anim, bool attacking
 }
 
 static bool HoldForChargeEnd(CGUnit_C* unit, uint32_t* anim) {
+    // A hovering priest does not dodge or flinch: those animations stand her on the ground for a moment.
+    if ((*anim == ANIM_DODGE || *anim == ANIM_COMBAT_WOUND || *anim == ANIM_COMBAT_CRITICAL) && IsPriestLevitating(unit)) {
+        if (unit->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
+            ChargeLog(unit, "hovering: skipped %u %s", *anim, AnimName(*anim));
+        }
+
+        return true;
+    }
+
     if (s_chargingUnits.empty() && s_chargeEndUntil.empty() && s_abilityUntil.empty() && s_releaseUntil.empty()) {
         return false;
     }
