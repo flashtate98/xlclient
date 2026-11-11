@@ -4070,6 +4070,8 @@ void CGUnit_C::UpdateWeaponTrails(const uint32_t* a2, uint32_t a3) {
     }
 }
 
+static uint32_t ChooseLevitateAnim(const CGUnit_C* unit, uint32_t animId);    // Not in the original: FlashWOW, defined by PlayBaseAnimation
+
 // VERIFY: 03d43f0a manual
 // OFFSET: 0x0071E400
 int32_t CGUnit_C::ApplyAttachmentAnimOverride(const M2BoneSequenceInfo* mount, const M2BoneSequenceInfo* base, const M2BoneSequenceInfo* torso, int32_t hasTorso, M2BoneSequenceInfo* mountOut, M2BoneSequenceInfo* baseOut, M2BoneSequenceInfo* torsoOut, int32_t* keepBase, int32_t* keepTorso) {
@@ -4108,14 +4110,18 @@ int32_t CGUnit_C::ApplyAttachmentAnimOverride(const M2BoneSequenceInfo* mount, c
     if (base && baseOut) {
         *baseOut = *base;
 
-        if (baseOut->m_sequenceId != static_cast<uint32_t>(effect->m_kitRec->m_animID)) {
+        // Not in the original: FlashWOW Retail animations. This kit animation goes straight to the model, so it gets
+        // the same weapon, hand and priest hover/ground versions as PlayBaseAnimation (Mind Flay's channel).
+        uint32_t kitAnim = ChooseLevitateAnim(this, ChooseWeaponVariantAnim(this, static_cast<uint32_t>(effect->m_kitRec->m_animID)));
+
+        if (baseOut->m_sequenceId != kitAnim) {
             baseOut->m_time = 0;
         }
 
         if (effect->m_flags & 0x1000000) {
-            baseOut->m_sequenceId = effect->m_kitRec->m_animID;
+            baseOut->m_sequenceId = kitAnim;
         } else {
-            baseOut->m_sequenceId = this->ResolveAnimForModel(effect->m_kitRec->m_animID, this->m_worldModel);
+            baseOut->m_sequenceId = this->ResolveAnimForModel(kitAnim, this->m_worldModel);
         }
 
         baseOut->m_variationIndex = 0xFFFFFFFF;
@@ -4630,7 +4636,9 @@ static uint32_t ChooseLevitateAnim(const CGUnit_C* unit, uint32_t animId) {
             hover = 1142;   // PriHoverRight
             break;
         case ANIM_STAND:
-            hover = (unit->m_unit->m_unitFieldFlags & 0x80000) ? 874 : ANIM_HOVER;     // PriReadySpellCast : Hover
+            // Hover (193) has almost no lift of its own: only under Levitate, which raises her by its hover height.
+            // The spell-made hover (no lift) stands in PriReadySpellCast, which floats by itself.
+            hover = ((unit->m_unit->m_unitFieldFlags & 0x80000) || !(unit->m_movementData.m_flags & MOVEMENTFLAG_HOVER)) ? 874 : ANIM_HOVER;
             break;
         case ANIM_READY_UNARMED:
         case ANIM_READY_1H:
