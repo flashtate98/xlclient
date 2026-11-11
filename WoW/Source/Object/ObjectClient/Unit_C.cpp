@@ -2600,7 +2600,7 @@ int32_t CGUnit_C::ChooseSpellVisualKitAnim(uint32_t mask, uint32_t* anim, uint32
     return 1;
 }
 
-static bool ChooseCasterReadyAnim(CGUnit_C* unit, uint32_t* anim);    // Not in the original: FlashWOW, defined by ChooseMovementAnim
+static bool ChooseCasterReadyAnim(CGUnit_C* unit, uint32_t* anim, bool attacking = false);    // Not in the original: FlashWOW, defined by ChooseMovementAnim
 
 // VERIFY: a6f466cd auto
 // OFFSET: 0x0071E0D0
@@ -2632,7 +2632,7 @@ int32_t CGUnit_C::ChooseCombatAnim(uint32_t mask, uint32_t* anim, uint32_t* anim
 
         uint32_t casterReady;   // Not in the original: FlashWOW Retail animations, a caster who last cast a spell
 
-        meleeAnim = ChooseCasterReadyAnim(this, &casterReady) ? casterReady : this->GetCombatReadyAnim();
+        meleeAnim = ChooseCasterReadyAnim(this, &casterReady, true) ? casterReady : this->GetCombatReadyAnim();
     }
 
     *anim = meleeAnim;
@@ -2738,7 +2738,7 @@ int32_t CGUnit_C::ChooseStandStateAnim(uint32_t mask, uint32_t* anim) {
 static bool ChooseChargeEndAnim(CGUnit_C* unit, uint32_t* anim);    // Not in the original: FlashWOW, defined by ChooseMovementAnim
 static bool HoldForChargeEnd(CGUnit_C* unit, uint32_t* anim);      // Not in the original: FlashWOW, defined by ChooseMovementAnim
 static void NoteAbilityAnim(CGUnit_C* unit, uint32_t requested, uint32_t played);    // Not in the original: FlashWOW, same place
-static bool ChooseCasterReadyAnim(CGUnit_C* unit, uint32_t* anim);                    // Not in the original: FlashWOW, same place
+static bool ChooseCasterReadyAnim(CGUnit_C* unit, uint32_t* anim, bool attacking);    // Not in the original: FlashWOW, same place
 static bool IsAbilityAnim(uint32_t anim);                                              // Not in the original: FlashWOW, same place
 static void ChargeLog(const CGUnit_C* unit, const char* format, ...);                    // Not in the original: FlashWOW, same place
 static const char* AnimName(uint32_t anim);                                            // Not in the original: FlashWOW, same place
@@ -2769,7 +2769,7 @@ uint32_t CGUnit_C::ChooseAnimation(uint32_t mask, uint32_t* animFlags, int32_t* 
         return this->m_pendingAnimId;
     }
 
-    if (ChooseCasterReadyAnim(this, &anim)) {    // Not in the original: FlashWOW Retail animations
+    if (ChooseCasterReadyAnim(this, &anim, false)) {    // Not in the original: FlashWOW Retail animations
         return anim;
     }
 
@@ -4634,6 +4634,14 @@ static uint32_t ChooseLevitateAnim(const CGUnit_C* unit, uint32_t animId) {
             break;
         case ANIM_SHUFFLE_RIGHT:
             hover = 1142;   // PriHoverRight
+            break;
+        case ANIM_JUMP_START:
+        case ANIM_JUMP:
+        case ANIM_JUMP_END:
+        case ANIM_FALL:
+        case ANIM_JUMP_LAND_RUN:
+            // A hovering jump stays one floating shape instead of touching down: forward hover when moving forward.
+            hover = (unit->m_movementData.m_flags & MOVEMENTFLAG_FORWARD) ? 1138 : 874;
             break;
         case ANIM_STAND:
             // Hover (193) has almost no lift of its own: only under Levitate, which raises her by its hover height.
@@ -8593,7 +8601,11 @@ static void NoteAbilityAnim(CGUnit_C* unit, uint32_t requested, uint32_t played)
             ChargeLog(unit, "spell animation %u %s (combat flags %s)", requested, rec->m_name,
                 (unit->m_unit->m_unitFieldFlags & 0x80000) ? "in combat" : "out of combat");
         }
-    } else if (!s_lastSpellCast.empty() && IsAutoAttackSwingAnim(requested)) {
+    } else if (IsAutoAttackSwingAnim(requested)) {
+        if (s_lastSwing.size() > 4096) {
+            s_lastSwing.clear();
+        }
+
         s_lastSwing[unit->m_obj->m_guid.m_guid] = OsGetAsyncTimeMs();
     }
 
@@ -8682,14 +8694,8 @@ static bool CasterStanceResult(CGUnit_C* unit, const char* why, bool on) {
     return on;
 }
 
-static bool ChooseCasterReadyAnim(CGUnit_C* unit, uint32_t* anim) {
-    if (s_lastSpellCast.empty() || unit->m_mountModel) {
-        return false;
-    }
-
-    auto cast = s_lastSpellCast.find(unit->m_obj->m_guid.m_guid);
-
-    if (cast == s_lastSpellCast.end()) {
+static bool ChooseCasterReadyAnim(CGUnit_C* unit, uint32_t* anim, bool attacking) {
+    if ((s_lastSpellCast.empty() && !attacking) || unit->m_mountModel) {
         return false;
     }
 
@@ -8712,22 +8718,43 @@ static bool ChooseCasterReadyAnim(CGUnit_C* unit, uint32_t* anim) {
         return CasterStanceResult(unit, "shapeshifted", false);
     }
 
-    if (OsGetAsyncTimeMs() - cast->second > 10000) {
+    const uint64_t guid = unit->m_obj->m_guid.m_guid;
+    const uint32_t now = OsGetAsyncTimeMs();
+    auto cast = s_lastSpellCast.find(guid);
+    auto swing = s_lastSwing.find(guid);
+    bool recentSpell = cast != s_lastSpellCast.end() && now - cast->second <= 10000;
+    bool recentSwing = swing != s_lastSwing.end() && now - swing->second <= 5000;
+
+    if (cast != s_lastSpellCast.end() && !recentSpell) {
         s_lastSpellCast.erase(cast);
-        s_lastSwing.erase(unit->m_obj->m_guid.m_guid);
-        return CasterStanceResult(unit, "no spell in 10 s", false);
+        cast = s_lastSpellCast.end();
     }
 
-    // UNIT_FLAG_IN_COMBAT (0x80000). IsInCombat() reads the pet-in-combat flag (0x800) and melee attacking only.
-    if (!(unit->m_unit->m_unitFieldFlags & 0x80000) && !unit->IsInCombat()) {
-        return CasterStanceResult(unit, "not in combat", false);
-    }
+    const char* why;
 
-    // Auto attacking: the stance follows whichever came last, the spell or the swing.
-    auto swing = s_lastSwing.find(unit->m_obj->m_guid.m_guid);
+    if (attacking) {
+        // Auto attack on (a right-clicked target): the class stance until she swings in melee; 5 seconds without a
+        // swing, or a spell since the last one, brings it back.
+        if (recentSwing && !(recentSpell && static_cast<int32_t>(cast->second - swing->second) > 0)) {
+            return CasterStanceResult(unit, "melee swing since the spell", false);
+        }
 
-    if (swing != s_lastSwing.end() && static_cast<int32_t>(swing->second - cast->second) > 0) {
-        return CasterStanceResult(unit, "melee swing since the spell", false);
+        why = recentSpell ? "attacking, last action a spell" : "attacking, no melee swing in 5 s";
+    } else {
+        if (!recentSpell) {
+            return CasterStanceResult(unit, "no spell in 10 s", false);
+        }
+
+        // UNIT_FLAG_IN_COMBAT (0x80000). IsInCombat() reads the pet-in-combat flag (0x800) and melee attacking only.
+        if (!(unit->m_unit->m_unitFieldFlags & 0x80000) && !unit->IsInCombat()) {
+            return CasterStanceResult(unit, "not in combat", false);
+        }
+
+        if (recentSwing && static_cast<int32_t>(swing->second - cast->second) > 0) {
+            return CasterStanceResult(unit, "melee swing since the spell", false);
+        }
+
+        why = "in combat after a spell";
     }
 
     CM2Model* model = unit->GetObjectModel();
@@ -8741,7 +8768,7 @@ static bool ChooseCasterReadyAnim(CGUnit_C* unit, uint32_t* anim) {
     }
 
     *anim = ready;
-    return CasterStanceResult(unit, "in combat after a spell", true);
+    return CasterStanceResult(unit, why, true);
 }
 
 static bool HoldForChargeEnd(CGUnit_C* unit, uint32_t* anim) {
