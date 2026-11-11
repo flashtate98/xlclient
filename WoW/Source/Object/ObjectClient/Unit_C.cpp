@@ -4629,7 +4629,7 @@ const SpellVisualKitRec* ChooseTrapCastKit(CGUnit_C* unit, const SpellRec* spell
     return toss;
 }
 
-
+uint32_t ChooseWeaponVariantAnim(const CGUnit_C* unit, uint32_t animId) {
     for (const auto& row : s_weaponVariantAnims) {
         for (uint32_t version : row) {
             if (version != animId) {
