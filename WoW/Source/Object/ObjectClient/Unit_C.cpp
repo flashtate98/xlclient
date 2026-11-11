@@ -4499,6 +4499,37 @@ static int32_t CastHandForSpell(const CGUnit_C* unit, const SpellRec* spell) {
     return -1;
 }
 
+// Not in the original: FlashWOW Retail animations. A triggered cast (SPELL_GO cast flag 0x1) does not play its cast
+// animation over one a pressed cast started under 500 ms ago: Call of the Elements' four totems leave its CastOutStrong
+// alone, Stormstrike's main-hand strike does not restart the swing. Its effects and sounds still play.
+static std::unordered_map<uint64_t, uint32_t> s_pressedCastAnimAt;
+
+bool SkipTriggeredCastAnim(CGUnit_C* unit, const SpellRec* spell, const SpellVisualKitRec* kit, bool triggered) {
+    if (!unit || !kit || kit->m_animID < 0) {
+        return false;
+    }
+
+    uint64_t guid = unit->m_obj->m_guid.m_guid;
+    uint32_t now = OsGetAsyncTimeMs();
+
+    if (!triggered) {
+        s_pressedCastAnimAt[guid] = now;
+        return false;
+    }
+
+    auto pressed = s_pressedCastAnimAt.find(guid);
+
+    if (pressed == s_pressedCastAnimAt.end() || now - pressed->second >= 500) {
+        return false;
+    }
+
+    if (unit->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
+        ChargeLog(unit, "triggered spell %u: skipped its cast animation %d %s", spell->m_id, kit->m_animID, AnimName(kit->m_animID));
+    }
+
+    return true;
+}
+
 uint32_t ChooseWeaponVariantAnim(const CGUnit_C* unit, uint32_t animId) {
     for (const auto& row : s_weaponVariantAnims) {
         for (uint32_t version : row) {

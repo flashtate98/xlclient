@@ -1167,4 +1167,8 @@ int32_t MissileTrajectoryObjectCallback(void* param, uint32_t flags, uint64_t pa
 // (CastStrong, CastCurse, ...) (Unit_C.cpp).
 uint32_t ChooseWeaponVariantAnim(const CGUnit_C* unit, uint32_t animId);
 
+// Not in the original: FlashWOW Retail animations. Whether a triggered spell's cast kit should leave the animation of a
+// cast the unit just pressed alone (records pressed ones) (Unit_C.cpp).
+bool SkipTriggeredCastAnim(CGUnit_C* unit, const SpellRec* spell, const SpellVisualKitRec* kit, bool triggered);
+
 #endif

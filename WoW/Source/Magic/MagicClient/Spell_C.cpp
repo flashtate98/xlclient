@@ -2050,6 +2050,12 @@ void PendingSpellCast::OnSpellGo(CDataStore* msg) {
 
         if (castKit && unit && !this->m_isTrajectoryCast) {
             PlaySpellVisuaKitData kitData(&spell, castKit, 0);
+
+            // Not in the original: FlashWOW Retail animations
+            if (SkipTriggeredCastAnim(unit, &spell, castKit, (this->m_data.m_castFlags & 0x1) != 0)) {
+                kitData.m_playAnim = 0;
+            }
+
             unit->PlaySpellVisualKit(kitData);
         }
 
