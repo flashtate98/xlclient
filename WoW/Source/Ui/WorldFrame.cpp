@@ -34,6 +34,7 @@
 #include "WoW/Source/DB/DBClient/DBClient.h"
 #include "WoW/Source/DB/Rec/MapRec.h"
 #include "WoW/Source/DB/Rec/ScreenEffectRec.h"
+#include "Engine/Source/BlizzardCore/Source/System/Log/Log.h"
 #include "WoW/Source/DB/Rec/SpellRec.h"
 #include "WoW/Source/Game/GameClient/FFXEffects.h"
 #include "WoW/Source/Game/GameClient/PassFogSeed.h"
@@ -1294,6 +1295,18 @@ void CGWorldFrame::RegisterFrames() {
 // OFFSET: 0x004F7020
 void CGWorldFrame::SetScreenEffect(int32_t effect) {
     ScreenEffectRec* rec = g_screenEffectDB.GetRecord(effect);
+
+    // FlashWOW: log each screen effect change (white screen on Eye of Acherus and Gift of Tharon'ja).
+    static int32_t s_loggedEffect = -2;
+
+    if (effect != s_loggedEffect) {
+        s_loggedEffect = effect;
+        bool nether = CGWorldFrame::ffxEffectNetherWorld && CGWorldFrame::ffxEffectNetherWorld->Valid();
+        Blizzard::Log::Printf(1, "Logs/Animations.log", "%u screen effect %d: %s type %d params %d %d %d %d lightParams %d ffx %d netherValid %d\n",
+            OsGetAsyncTimeMs(), effect, rec && rec->m_name ? rec->m_name : "(no record)", rec ? rec->m_effect : -1,
+            rec ? rec->m_param[0] : 0, rec ? rec->m_param[1] : 0, rec ? rec->m_param[2] : 0, rec ? rec->m_param[3] : 0,
+            rec ? rec->m_lightParamsID : -1, FFX::s_cvarFFX->m_intValue, nether ? 1 : 0);
+    }
 
     if (!rec) {
         DayNight::ClearOverrideFog();

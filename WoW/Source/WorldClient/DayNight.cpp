@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 #include "Engine/Source/Base/CDataAllocator.h"
+#include "Engine/Source/BlizzardCore/Source/System/Log/Log.h"
 #include "Engine/Source/ConsoleBase/ConsoleCommand.h"
 #include "Engine/Source/ConsoleBase/ConsoleVar.h"
 #include "Engine/Source/ConsoleBase/IConsole.h"
@@ -2693,6 +2694,24 @@ void DayNight::SetColors() {
     }
 
     DayNight::SetLightColors();
+
+    // FlashWOW: while a screen effect overrides the light, log the fog it ends up with (at most every 2 seconds).
+    if (info.m_overrideLightParamsId != static_cast<uint32_t>(-1)) {
+        static uint32_t s_lastFogLog = 0;
+        uint32_t now = OsGetAsyncTimeMs();
+
+        if (now - s_lastFogLog > 2000) {
+            s_lastFogLog = now;
+            const LightParamsRec* used = DayNight::g_areaLights.m_count
+                ? DayNight::GetLightParams(DayNight::g_areaLights.m_data[0], info.m_overrideLightParamsId) : nullptr;
+            Blizzard::Log::Printf(1, "Logs/Animations.log",
+                "%u light override slot %d -> LightParams %d: fog color %02X%02X%02X start %.1f end %.1f, ambient %02X%02X%02X, diffuse %02X%02X%02X\n",
+                now, info.m_overrideLightParamsId, used ? used->m_id : -1,
+                info.m_fog.m_color.r, info.m_fog.m_color.g, info.m_fog.m_color.b, info.m_fog.m_start, info.m_fog.m_end,
+                info.m_light1.m_ambient.r, info.m_light1.m_ambient.g, info.m_light1.m_ambient.b,
+                info.m_light1.m_diffuse.r, info.m_light1.m_diffuse.g, info.m_light1.m_diffuse.b);
+        }
+    }
 
     if (liquidStatus && liquid && liquid->m_maxDarkenDepth > 0.0f) {
         float maxDepth = -liquid->m_maxDarkenDepth;
