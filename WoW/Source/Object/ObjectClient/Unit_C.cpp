@@ -5061,6 +5061,8 @@ static float AnimSpeedScale(uint32_t anim) {
             return 1.5f;
         case 1736:  // WABlowHorn (Horn of Winter): 3.7 s at its own speed
             return 2.0f;
+        case 654:   // Slam (Shockwave): the slam landed after the effect
+            return 1.5f;
         default:
             return 1.0f;
     }
