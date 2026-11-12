@@ -9,6 +9,7 @@
 #include "SXC/Grass/Grass.h"
 #include "SXC/Log.h"
 #include "SXC/Profiler/Profiler.h"
+#include "SXC/Ui/RayTool.h"
 #include "SXC/Water/Medium.h"  // the Underwater panel
 #include "SXC/Water/Water.h"  // the Water panel
 #include "SXC/Settings/Settings.h"
@@ -175,6 +176,7 @@ namespace {
         const int client = SXC::Ui::AddModule("Client", "The client itself.");
         SXC::Ui::AddPanel(client, "Info", DrawClientInfo);
         SXC::Ui::AddPanel(client, "Profiler", SXC::Profiler::DrawPanel);
+        SXC::Ui::AddPanel(client, "Ray", SXC::RayTool::DrawPanel);
         SXC::Ui::AddQuick(client, "Frame rate", DrawClientQuick);
         const int water = SXC::Ui::AddModule("Water", "Our water (kb: water-shader): the look's live values and debug views.");
         SXC::Ui::AddPanel(water, "Look", SXC::Water::DrawPanel);

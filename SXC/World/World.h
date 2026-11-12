@@ -23,4 +23,8 @@ namespace SXC::WorldApi {
     // Where a world point is on the window, 0..1 from the left / top (sxc_world_api::project); false
     // behind the camera. For debug markers drawn over the world.
     bool ToWindow(float x, float y, float z, float& outX, float& outY);
+
+    // ToWindow's way back: the ray from the camera through a point of the window (0..1 from the left /
+    // top), its direction normalized (sxc_world_api::unproject).
+    bool FromWindow(float x, float y, float origin[3], float direction[3]);
 }
