@@ -4672,52 +4672,75 @@ const SpellVisualKitRec* ChooseTrapCastKit(CGUnit_C* unit, const SpellRec* spell
     return toss;
 }
 
-// Not in the original: FlashWOW Retail animations. Killing Spree: each teleport strike plays a random one of a pool of
-// Retail rogue strikes, never the same one twice in a row, for a fast, agile flurry. The strike's kit names
-// CombatAbilityDualWield01 (1322), which no other rogue spell plays; the kit is swapped for a copy playing the pick.
-static const uint32_t s_rogueComboAnims[] = {
-    1000,   // CombatMutilate
-    1132,   // AttackFLoff
-    970,    // CombatAbility1H01Off
-    972,    // CombatAbility1H02Off
-    824,    // CombatAbility1HBig01
-    1320,   // CombatAbility1H03Off
-    1322,   // CombatAbilityDualWield01
-    818,    // CombatAbility1H01
-    822,    // CombatAbility1H02
+// Not in the original: FlashWOW Retail animations. Strike pools: each press of these plays a random one of a pool of
+// strikes, never the same one twice in a row and only ones the model has, then in the version for the weapon held.
+// The spell's cast kit names a tag animation no other spell of its class plays; the kit is swapped for a copy playing
+// the pick. Killing Spree's is ours; Scourge Strike's and Stormstrike's are Retail's (three equal versions each).
+struct StrikePool {
+    int32_t classSet;           // SpellClassOptions family
+    uint32_t tag;               // the animation the spell's kit names
+    const char* name;
+    uint32_t anims[10];         // 0 ends the list
+};
+
+static const StrikePool s_strikePools[] = {
+    { 8,  1322, "killing spree", { 1000, 1132, 970, 972, 824, 1320, 1322, 818, 822, 0 } },  // Killing Spree's strikes
+    { 15, 824,  "scourge strike", { 1064, 818, 824, 0 } },     // CombatExecute, CombatAbility1H01, CombatAbility1HBig01
+    { 11, 824,  "stormstrike",    { 1064, 972, 824, 0 } },     // CombatExecute, CombatAbility1H02Off, CombatAbility1HBig01
 };
 
 const SpellVisualKitRec* ChooseRogueComboKit(CGUnit_C* unit, const SpellRec* spell, const SpellVisualKitRec* kit) {
-    if (!unit || !kit || kit->m_animID != 1322 || spell->m_spellClassSet != 8) {
+    if (!unit || !kit) {
         return kit;
     }
 
-    CM2Model* model = unit->GetObjectModel();
+    const StrikePool* pool = nullptr;
+
+    for (const auto& p : s_strikePools) {
+        if (p.classSet == spell->m_spellClassSet && static_cast<int32_t>(p.tag) == kit->m_animID) {
+            pool = &p;
+        }
+    }
+
+    CM2Model* model = pool ? unit->GetObjectModel() : nullptr;
 
     if (!model || !model->IsLoaded(0, 0)) {
         return kit;
     }
 
-    static std::unordered_map<uint64_t, uint32_t> s_lastCombo;     // the last pick, by guid
-    uint32_t& last = s_lastCombo[unit->m_obj->m_guid.m_guid];
-    uint32_t choices[sizeof(s_rogueComboAnims) / sizeof(s_rogueComboAnims[0])];
+    // The last pick, by guid. One press can arrive twice (Stormstrike's main-hand strike shares the press's visual);
+    // a pick holds for 300 ms so both play the same strike.
+    struct Combo { uint32_t at; uint32_t anim; };
+    static std::unordered_map<uint64_t, Combo> s_lastCombo;
+    Combo& combo = s_lastCombo[unit->m_obj->m_guid.m_guid];
+    const uint32_t now = OsGetAsyncTimeMs();
+    uint32_t& last = combo.anim;
+    const bool fresh = now - combo.at > 300;
+    combo.at = now;
+    uint32_t choices[10];
     uint32_t count = 0;
 
-    for (uint32_t anim : s_rogueComboAnims) {
+    for (uint32_t anim : pool->anims) {
+        if (!anim) {
+            break;
+        }
+
         if (anim != last && model->HasSequence(anim)) {
             choices[count++] = anim;
         }
     }
 
-    if (!count) {
-        return kit;
-    }
+    if (fresh || !last) {
+        if (!count) {
+            return kit;
+        }
 
-    static uint32_t s_seed = OsGetAsyncTimeMs() | 1;
-    s_seed ^= s_seed << 13;
-    s_seed ^= s_seed >> 17;
-    s_seed ^= s_seed << 5;
-    last = choices[s_seed % count];
+        static uint32_t s_seed = OsGetAsyncTimeMs() | 1;
+        s_seed ^= s_seed << 13;
+        s_seed ^= s_seed >> 17;
+        s_seed ^= s_seed << 5;
+        last = choices[s_seed % count];
+    }
 
     static std::unordered_map<uint64_t, SpellVisualKitRec*> s_comboKits;   // one copy per kit and animation
     SpellVisualKitRec*& copy = s_comboKits[(static_cast<uint64_t>(kit->m_id) << 16) | last];
@@ -4728,13 +4751,73 @@ const SpellVisualKitRec* ChooseRogueComboKit(CGUnit_C* unit, const SpellRec* spe
     }
 
     if (unit->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
-        ChargeLog(unit, "killing spree strike: %u %s", last, AnimName(last));
+        ChargeLog(unit, "%s strike: %u %s", pool->name, last, AnimName(last));
     }
 
     return copy;
 }
 
+// Not in the original: FlashWOW Retail animations. The off-hand versions of Retail's one-hand abilities. A unit dual
+// wielding plays an ability's one-hand version or its off-hand one by chance (the pick holds for 300 ms, as one press
+// asks more than once); an off-hand version a spell or pool names stays off-hand while dual wielding and otherwise
+// plays as its main-hand ability, in the version for the weapon held.
+static const uint32_t s_offHandAnims[][2] = {
+    // main  off
+    { 818,  970  },   // CombatAbility1H01 / CombatAbility1H01Off
+    { 822,  972  },   // CombatAbility1H02 / CombatAbility1H02Off
+    { 824,  1320 },   // CombatAbility1HBig01 / CombatAbility1H03Off
+};
+
+static bool IsDualWielding(const CGUnit_C* unit) {
+    const CGUnitVirtualItem* offHand = unit->GetVirtualItem(1, false);
+    return offHand && offHand->m_classID == 2;
+}
+
+static uint32_t ChooseOffHandAnim(const CGUnit_C* unit, uint32_t mainAnim, bool namedOff) {
+    uint32_t off = 0;
+
+    for (const auto& pair : s_offHandAnims) {
+        if (pair[0] == mainAnim) {
+            off = pair[1];
+        }
+    }
+
+    if (!off) {
+        return mainAnim;
+    }
+
+    if (namedOff) {
+        return off;
+    }
+
+    struct Pick { uint32_t at; uint32_t main; bool off; };
+    static std::unordered_map<uint64_t, Pick> s_picks;
+    static uint32_t s_seed = OsGetAsyncTimeMs() | 1;
+    const uint32_t now = OsGetAsyncTimeMs();
+    Pick& pick = s_picks[unit->m_obj->m_guid.m_guid];
+
+    if (pick.main != mainAnim || now - pick.at > 300) {
+        s_seed ^= s_seed << 13;
+        s_seed ^= s_seed >> 17;
+        s_seed ^= s_seed << 5;
+        pick.main = mainAnim;
+        pick.off = (s_seed & 1) != 0;
+    }
+
+    pick.at = now;
+    return pick.off ? off : mainAnim;
+}
+
 uint32_t ChooseWeaponVariantAnim(const CGUnit_C* unit, uint32_t animId) {
+    bool namedOff = false;
+
+    for (const auto& pair : s_offHandAnims) {
+        if (pair[1] == animId) {
+            animId = pair[0];
+            namedOff = true;
+        }
+    }
+
     for (const auto& row : s_weaponVariantAnims) {
         for (uint32_t version : row) {
             if (version != animId) {
@@ -4756,7 +4839,7 @@ uint32_t ChooseWeaponVariantAnim(const CGUnit_C* unit, uint32_t animId) {
                     return (model && model->IsLoaded(0, 0) && !model->HasSequence(row[1])) ? row[0] : row[1];
                 }
                 case ANIM_READY_1H:
-                    return row[2];
+                    return IsDualWielding(unit) ? ChooseOffHandAnim(unit, row[2], namedOff) : row[2];
                 default:
                     return row[3];
             }
@@ -4974,6 +5057,8 @@ static float AnimSpeedScale(uint32_t anim) {
         case 401:   // FlyDruidCatRake
         case 402:   // FlyDruidCatRavage
             return 1.5f;
+        case 1736:  // WABlowHorn (Horn of Winter): 3.7 s at its own speed
+            return 2.0f;
         default:
             return 1.0f;
     }
