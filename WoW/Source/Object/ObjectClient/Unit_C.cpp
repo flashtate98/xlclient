@@ -4687,6 +4687,8 @@ static const StrikePool s_strikePools[] = {
     { 8,  1322, "killing spree", { 1000, 1132, 970, 972, 824, 1320, 1322, 818, 822, 0 } },  // Killing Spree's strikes
     { 15, 824,  "scourge strike", { 1064, 818, 824, 0 } },     // CombatExecute, CombatAbility1H01, CombatAbility1HBig01
     { 11, 824,  "stormstrike",    { 1064, 972, 824, 0 } },     // CombatExecute, CombatAbility1H02Off, CombatAbility1HBig01
+    // Crusader Strike (paladin): Retail lists CombatAbility2H01 twice, so it comes up most.
+    { 10, 824,  "crusader strike", { 812, 812, 818, 824, 1064, 0 } },
 };
 
 const SpellVisualKitRec* ChooseRogueComboKit(CGUnit_C* unit, const SpellRec* spell, const SpellVisualKitRec* kit) {
