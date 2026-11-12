@@ -699,6 +699,18 @@ namespace SXC::WorldApi {
         return Project(&p, &outX, &outY) != WXL_FALSE;
     }
 
+    bool FromWindow(float x, float y, float origin[3], float direction[3]) {
+        wxl_vec3 o, d;
+
+        if (!Unproject(x, y, &o, &d)) {
+            return false;
+        }
+
+        origin[0] = o.x, origin[1] = o.y, origin[2] = o.z;
+        direction[0] = d.x, direction[1] = d.y, direction[2] = d.z;
+        return true;
+    }
+
     int32_t LayerWeights(float x, float y, float* out, int32_t max) {
         Spot at;
 

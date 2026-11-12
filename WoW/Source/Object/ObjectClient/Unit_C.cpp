@@ -168,6 +168,7 @@
 #include "SXC/Cover/Trails.h"  // SXC: footsteps carve the covers
 #include "SXC/Water/Ride.h"    // SXC: swimmers ride the waves
 #include "SXC/Water/Ripples.h" // SXC: units ripple our water
+#include "SXC/Units/NpcLook.h" // SXC: NPCs without their baked textures
 
 static const float UNDERWATER_BUBBLE_THRESHOLD = 5.0f;
 static const float MOUSE_LOOK_SEND_FACING_DELTA = 0.1f;
@@ -15456,12 +15457,15 @@ int32_t CGUnit_C::InitializeExtendedDisplay(CGPlayer_C* player, int32_t hasDispl
 
             const char* bakeName = this->m_displayInfoExtra->m_bakeName;
 
-            if (!bakeName || !*bakeName) {
-                return 0;
-            }
+            // SXC: baked textures ignored, the NPC is composited like a player (SXC/Units/NpcLook.h).
+            if (!SXC::Units::IgnoreBakedNpcTextures()) {
+                if (!bakeName || !*bakeName) {
+                    return 0;
+                }
 
-            data.m_flags |= 0x1;
-            SStrPrintf(data.m_npcSkinTexture, sizeof(data.m_npcSkinTexture), "%s%s", "Textures\\BakedNpcTextures\\", bakeName);
+                data.m_flags |= 0x1;
+                SStrPrintf(data.m_npcSkinTexture, sizeof(data.m_npcSkinTexture), "%s%s", "Textures\\BakedNpcTextures\\", bakeName);
+            }
         }
     }
 
@@ -25438,8 +25442,9 @@ void CGUnit_C::OnReceiveMirrorImageDataFromServer(CDataStore* msg) {
     } else if (this->m_displayInfoExtra) {
         this->m_characterComponent = CCharacterComponent::AllocComponent();
         const char* bakeName = this->GetDisplayBakeName();
+        const bool baked = !SXC::Units::IgnoreBakedNpcTextures();  // SXC: else composited like a player
 
-        if (!bakeName || !*bakeName) {
+        if (baked && (!bakeName || !*bakeName)) {
             return;
         }
 
@@ -25451,9 +25456,13 @@ void CGUnit_C::OnReceiveMirrorImageDataFromServer(CDataStore* msg) {
         data.m_preferences.m_faceId = extra->m_faceID;
         data.m_preferences.m_hairStyleId = extra->m_hairStyleID;
         data.m_preferences.m_hairColorId = extra->m_hairColorID;
-        data.m_flags |= 0x1;
         data.m_preferences.m_facialHairId = extra->m_facialHairID;
-        SStrPrintf(data.m_npcSkinTexture, sizeof(data.m_npcSkinTexture), "%s%s", "Textures\\BakedNpcTextures\\", bakeName);
+
+        if (baked) {
+            data.m_flags |= 0x1;
+            SStrPrintf(data.m_npcSkinTexture, sizeof(data.m_npcSkinTexture), "%s%s", "Textures\\BakedNpcTextures\\", bakeName);
+        }
+
         data.m_model = this->m_worldModel;
         data.m_model->m_refCount++;
         this->m_characterComponent->Init(&data, nullptr);
