@@ -4672,6 +4672,68 @@ const SpellVisualKitRec* ChooseTrapCastKit(CGUnit_C* unit, const SpellRec* spell
     return toss;
 }
 
+// Not in the original: FlashWOW Retail animations. Killing Spree: each teleport strike plays a random one of a pool of
+// Retail rogue strikes, never the same one twice in a row, for a fast, agile flurry. The strike's kit names
+// CombatAbilityDualWield01 (1322), which no other rogue spell plays; the kit is swapped for a copy playing the pick.
+static const uint32_t s_rogueComboAnims[] = {
+    1000,   // CombatMutilate
+    1132,   // AttackFLoff
+    970,    // CombatAbility1H01Off
+    972,    // CombatAbility1H02Off
+    824,    // CombatAbility1HBig01
+    1320,   // CombatAbility1H03Off
+    1322,   // CombatAbilityDualWield01
+    818,    // CombatAbility1H01
+    822,    // CombatAbility1H02
+};
+
+const SpellVisualKitRec* ChooseRogueComboKit(CGUnit_C* unit, const SpellRec* spell, const SpellVisualKitRec* kit) {
+    if (!unit || !kit || kit->m_animID != 1322 || spell->m_spellClassSet != 8) {
+        return kit;
+    }
+
+    CM2Model* model = unit->GetObjectModel();
+
+    if (!model || !model->IsLoaded(0, 0)) {
+        return kit;
+    }
+
+    static std::unordered_map<uint64_t, uint32_t> s_lastCombo;     // the last pick, by guid
+    uint32_t& last = s_lastCombo[unit->m_obj->m_guid.m_guid];
+    uint32_t choices[sizeof(s_rogueComboAnims) / sizeof(s_rogueComboAnims[0])];
+    uint32_t count = 0;
+
+    for (uint32_t anim : s_rogueComboAnims) {
+        if (anim != last && model->HasSequence(anim)) {
+            choices[count++] = anim;
+        }
+    }
+
+    if (!count) {
+        return kit;
+    }
+
+    static uint32_t s_seed = OsGetAsyncTimeMs() | 1;
+    s_seed ^= s_seed << 13;
+    s_seed ^= s_seed >> 17;
+    s_seed ^= s_seed << 5;
+    last = choices[s_seed % count];
+
+    static std::unordered_map<uint64_t, SpellVisualKitRec*> s_comboKits;   // one copy per kit and animation
+    SpellVisualKitRec*& copy = s_comboKits[(static_cast<uint64_t>(kit->m_id) << 16) | last];
+
+    if (!copy) {
+        copy = new SpellVisualKitRec(*kit);
+        copy->m_animID = static_cast<int32_t>(last);
+    }
+
+    if (unit->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
+        ChargeLog(unit, "killing spree strike: %u %s", last, AnimName(last));
+    }
+
+    return copy;
+}
+
 uint32_t ChooseWeaponVariantAnim(const CGUnit_C* unit, uint32_t animId) {
     for (const auto& row : s_weaponVariantAnims) {
         for (uint32_t version : row) {

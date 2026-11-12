@@ -1179,4 +1179,8 @@ uint32_t ChooseRangedShotAnim(const CGUnit_C* unit, uint32_t animId);
 // (Unit_C.cpp).
 const SpellVisualKitRec* ChooseTrapCastKit(CGUnit_C* unit, const SpellRec* spell, const SpellVisualKitRec* kit);
 
+// Not in the original: FlashWOW Retail animations. Killing Spree's strike kit: a random strike from a pool of Retail
+// rogue animations each hit (Unit_C.cpp).
+const SpellVisualKitRec* ChooseRogueComboKit(CGUnit_C* unit, const SpellRec* spell, const SpellVisualKitRec* kit);
+
 #endif

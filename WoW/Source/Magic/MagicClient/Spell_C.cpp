@@ -2064,6 +2064,9 @@ void PendingSpellCast::OnSpellGo(CDataStore* msg) {
             // Not in the original: FlashWOW Retail animations. A hunter's trap tosses in combat, kneels out of it.
             kitData.m_impactVisualKit = ChooseTrapCastKit(unit, &spell, castKit);
 
+            // Not in the original: FlashWOW Retail animations. Killing Spree's strikes: a random Retail rogue strike each hit.
+            kitData.m_impactVisualKit = ChooseRogueComboKit(unit, &spell, kitData.m_impactVisualKit);
+
             unit->PlaySpellVisualKit(kitData);
         }
 
