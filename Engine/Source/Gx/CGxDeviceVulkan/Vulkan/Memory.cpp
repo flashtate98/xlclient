@@ -36,7 +36,7 @@ namespace gxvk::vk::memory
         // resolves again against its own memoryTypeBits, because a resource is allowed to exclude
         // the type that suits most others, and the answer for it may then differ.
         bool ok = true;
-        const Where wheres[] = { Where::DeviceLocal, Where::HostVisible, Where::Stream };
+        const Where wheres[] = { Where::DeviceLocal, Where::HostVisible, Where::Stream, Where::Readback };
         for (Where w : wheres)
         {
             const char*    why  = "";
@@ -360,6 +360,29 @@ namespace gxvk::vk::memory
 
         const VkResult r = s.dapi->FlushMappedMemoryRanges(s.device, 1, &range);
         if (r != VK_SUCCESS) return Fail("vkFlushMappedMemoryRanges", r);
+        return true;
+    }
+
+    bool InvalidateHost(const Block& block)
+    {
+        if (block.memory == VK_NULL_HANDLE || !s.ready || block.owner >= kMaxSlots) return true;
+
+        const Slot& slot = s.slots[block.owner];
+        if (slot.memory != block.memory || !slot.base) return true;
+        if (slot.flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) return true;
+
+        // The same range rules as FlushHost().
+        const VkDeviceSize start = RoundDown(block.offset, s.atom);
+        const VkDeviceSize end   = RoundUp(block.offset + block.size, s.atom);
+
+        VkMappedMemoryRange range = {};
+        range.sType  = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+        range.memory = slot.memory;
+        range.offset = start;
+        range.size   = end >= slot.capacity ? VK_WHOLE_SIZE : end - start;
+
+        const VkResult r = s.dapi->InvalidateMappedMemoryRanges(s.device, 1, &range);
+        if (r != VK_SUCCESS) return Fail("vkInvalidateMappedMemoryRanges", r);
         return true;
     }
 

@@ -1,0 +1,139 @@
+// SXC: the ripple field (Vulkan/Ripples.cpp; kb: water-contact). A height field around the camera, world
+// aligned and toroidal (cell (i, j) at texel (i mod N, j mod N), valid for i in [first, first + N)), three
+// layers in turn: the one before, the current one, the next. A step: the wave equation (the height pushed
+// by its neighbours' pull, damped), then the frame's stamps pressed in (a dip of a radius: a unit wading,
+// a raindrop), into the next layer. Mode 1 clears instead: every texel whose cell is new to the window
+// (the camera moved), in all three layers, before the step.
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+const int kStamps = 256;
+
+layout(std140, set = 0, binding = 0) uniform RippleStep
+{
+    ivec4 grid;      // x, y the window's first cell; z cells per side (N); w the mode (0 step, 1 clear)
+    ivec4 previous;  // x, y the window's first cell before this frame (clear); z the stamps; w 0
+    ivec4 layers;    // x the one before, y the current one, z the next (step); w 0
+    vec4  wave;      // x (c dt / dx)^2, y the damping per step, z the cell (yd), w 0
+    vec4  stamps[kStamps];   // world x, y, radius (yd), depth (yd: how far it presses the surface down)
+} rp;
+
+layout(set = 0, binding = 1, r32f) uniform image2DArray field;
+
+// The stamps that reach this workgroup's cells (gathered by its invocations together).
+shared int s_near[kStamps];
+shared uint s_nearCount;
+
+int Wrap(int i, int n)
+{
+    return ((i % n) + n) % n;
+}
+
+void main()
+{
+    ivec2 t = ivec2(gl_GlobalInvocationID.xy);
+    int n = rp.grid.z;
+    ivec2 first = rp.grid.xy;
+
+    // The stamps near this workgroup, before any invocation returns (the barrier needs them all). The
+    // group's texels hold world cells that may wrap apart; its box is taken from each texel's own cell
+    // below, so here the test is generous: within the stamp's reach of the group's first texel's cell,
+    // plus the group's size.
+    if (rp.grid.w == 0)
+    {
+        if (gl_LocalInvocationIndex == 0)
+        {
+            s_nearCount = 0u;
+        }
+
+        barrier();
+        ivec2 t0 = ivec2(gl_WorkGroupID.xy) * 8;
+        ivec2 c0 = first + ivec2(Wrap(t0.x - Wrap(first.x, n), n), Wrap(t0.y - Wrap(first.y, n), n));
+        vec2 lo = vec2(c0) * rp.wave.z, hi = vec2(c0 + ivec2(8)) * rp.wave.z;
+
+        for (int s = int(gl_LocalInvocationIndex); s < kStamps && s < rp.previous.z; s += 64)
+        {
+            vec4 st = rp.stamps[s];
+            float reach = 2.0 * max(st.z, 0.01);
+
+            if (all(greaterThan(st.xy + reach, lo)) && all(lessThan(st.xy - reach, hi)))
+            {
+                s_near[atomicAdd(s_nearCount, 1u)] = s;
+            }
+        }
+
+        barrier();
+    }
+
+    if (t.x >= n || t.y >= n)
+    {
+        return;
+    }
+
+    // The world cell this texel holds in the window.
+    ivec2 cell = first + ivec2(Wrap(t.x - Wrap(first.x, n), n), Wrap(t.y - Wrap(first.y, n), n));
+
+    if (rp.grid.w == 1)
+    {
+        ivec2 before = rp.previous.xy;
+
+        if (any(lessThan(cell, before)) || any(greaterThanEqual(cell, before + ivec2(n))))
+        {
+            for (int l = 0; l < 3; l++)
+            {
+                imageStore(field, ivec3(t, l), vec4(0.0));
+            }
+        }
+
+        return;
+    }
+
+    float h = imageLoad(field, ivec3(t, rp.layers.y)).r;
+    float before = imageLoad(field, ivec3(t, rp.layers.x)).r;
+
+    // The neighbours, none past the window's edge (that texel holds the far side).
+    float pull = 0.0;
+    const ivec2 kNear[4] = ivec2[4](ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1));
+
+    for (int k = 0; k < 4; k++)
+    {
+        ivec2 c = cell + kNear[k];
+
+        if (all(greaterThanEqual(c, first)) && all(lessThan(c, first + ivec2(n))))
+        {
+            pull += imageLoad(field, ivec3(Wrap(c.x, n), Wrap(c.y, n), rp.layers.y)).r - h;
+        }
+        else
+        {
+            pull -= h;
+        }
+    }
+
+    float next = (2.0 * h - before + rp.wave.x * pull) * rp.wave.y;
+
+    // The stamps: a smooth dip of each one's radius.
+    vec2 world = (vec2(cell) + 0.5) * rp.wave.z;
+
+    // A group whose cells wrap across the window's edge (one in 128 per side) takes every stamp.
+    ivec2 t0 = ivec2(gl_WorkGroupID.xy) * 8;
+    ivec2 c0 = first + ivec2(Wrap(t0.x - Wrap(first.x, n), n), Wrap(t0.y - Wrap(first.y, n), n));
+    bool wraps = any(greaterThanEqual(cell - c0, ivec2(8))) || any(lessThan(cell - c0, ivec2(0)));
+    int count = wraps ? min(rp.previous.z, kStamps) : int(s_nearCount);
+
+    for (int k = 0; k < count; k++)
+    {
+        int s = wraps ? k : s_near[k];
+        vec4 st = rp.stamps[s];
+        vec2 d = world - st.xy;
+        float r2 = max(st.z * st.z, 1e-4);
+        float q = dot(d, d) / r2;
+
+        if (q < 4.0)
+        {
+            next -= st.w * exp(-q);
+        }
+    }
+
+    imageStore(field, ivec3(t, rp.layers.z), vec4(clamp(next, -0.5, 0.5)));
+}

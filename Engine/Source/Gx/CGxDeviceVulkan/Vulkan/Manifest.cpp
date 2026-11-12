@@ -134,6 +134,7 @@ namespace
         Record out = {};
         out.firstName = kNoName;
         out.companion = kNoRecord;
+        out.instanced = kNoRecord;
         if (!NormaliseMd5(t[1]) || !CopyBounded(out.md5, t[1])) return false;
 
         if (std::strcmp(t[2], "vertex") == 0)     out.kind = Kind::Vertex;
@@ -227,6 +228,8 @@ namespace
             if (std::strcmp(t[1], "fixed_fog") == 0)         r.fixedFog = true;
             else if (std::strcmp(t[1], "point_size") == 0)   r.pointSize = true;
             else if (std::strcmp(t[1], "point_sprite") == 0) r.pointSprite = true;
+            else if (std::strcmp(t[1], "lights") == 0)       r.lights = true;  // SXC: step 6b
+            else if (std::strcmp(t[1], "grass") == 0)        r.grass = true;   // SXC: step 7
             else return false;
             return true;
         }
@@ -236,6 +239,13 @@ namespace
             // them; the index is resolved once the whole file has been read.
             if (n != 2 || r.kind != Kind::Vertex) return false;
             if (!NormaliseMd5(t[1]) || !CopyBounded(r.companionMd5, t[1])) return false;
+            return true;
+        }
+        // SXC: the instanced grass variant (step 7), resolved like the companions.
+        if (std::strcmp(t[0], "instanced") == 0)
+        {
+            if (n != 2 || r.kind != Kind::Vertex) return false;
+            if (!NormaliseMd5(t[1]) || !CopyBounded(r.instancedMd5, t[1])) return false;
             return true;
         }
         // Variant lines a fuller translator may emit: not used here.
@@ -260,6 +270,18 @@ namespace
                 ++s.stats.companionsUnresolved;
                 Write(Warn, "vulkan: manifest: %s names companion %s, which is not an ff pixel record of this file", FirstName(r), r.companionMd5);
             }
+        }
+
+        // SXC: the instanced grass variants (step 7).
+        for (uint32_t i = 0; i < s.recordCount; ++i)
+        {
+            Record& r = s.records[i];
+            if (r.kind != Kind::Vertex || !r.instancedMd5[0]) continue;
+            const Record* v = ByMd5(r.instancedMd5);
+            if (v && v->kind == Kind::Vertex && v->grass)
+                r.instanced = IndexOf(v);
+            else
+                Write(Warn, "vulkan: manifest: %s names instanced variant %s, which is not a grass vertex record of this file", FirstName(r), r.instancedMd5);
         }
     }
 
@@ -421,6 +443,11 @@ namespace gxvk::vk::manifest
     {
         if (!record || !s.records || record < s.records || record >= s.records + s.recordCount) return kNoRecord;
         return static_cast<uint16_t>(record - s.records);
+    }
+
+    const Record* Instanced(const Record& r)
+    {
+        return r.instanced == kNoRecord ? nullptr : At(r.instanced);
     }
 
     const Record* Companion(const Record& r)

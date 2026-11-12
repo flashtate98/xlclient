@@ -126,6 +126,7 @@ namespace gxvk::vk::loader
         PFN_vkEndCommandBuffer       EndCommandBuffer       = nullptr;
         PFN_vkCmdBeginRenderPass     CmdBeginRenderPass     = nullptr;
         PFN_vkCmdEndRenderPass       CmdEndRenderPass       = nullptr;
+        PFN_vkCmdExecuteCommands     CmdExecuteCommands     = nullptr;   ///< SXC: a second view's draws (Vulkan/View.cpp)
 
         // --- Frame/: synchronisation ------------------------------------------------------------
         //
@@ -161,6 +162,8 @@ namespace gxvk::vk::loader
         /// HOST_VISIBLE type that is not also HOST_COHERENT is normal on AMD and discovering that
         /// mid-upload is too late to go looking for an entry point.
         PFN_vkFlushMappedMemoryRanges   FlushMappedMemoryRanges   = nullptr;
+        /// SXC: the reading side (Memory::InvalidateHost, the covers' surface readback).
+        PFN_vkInvalidateMappedMemoryRanges InvalidateMappedMemoryRanges = nullptr;
 
         // --- Memory/: buffers --------------------------------------------------------------------
         PFN_vkCreateBuffer              CreateBuffer              = nullptr;

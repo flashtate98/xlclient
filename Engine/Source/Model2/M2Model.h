@@ -143,7 +143,7 @@ class CM2Model {
     /* 000C */ CM2Model* m_sceneNext;
     /* 0010 */ uint32_t m_fFlags;
     /* 0014 */ uint16_t m_animListHead;
-    /* 0016 */ uint16_t unused_0016;
+    /* 0016 */ uint16_t m_sxcLights;  // SXC: our lights' verdict (SXC/Lights): 0 none yet, else the table's generation tag | 0x8000 when its file carries no light or emitter
     /* 0018 */ CM2Model** m_callbackPrev;
     /* 001C */ CM2Model* m_callbackNext;
     /* 0020 */ void (*m_loadedCallback)(CM2Model*, void*);

@@ -9,6 +9,7 @@
 #include "Engine/Source/Tempest/C3Vector.h"
 #include "Engine/Source/Tempest/CImVector.h"
 #include "Engine/Source/Storm/H/storm.h"
+#include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler
 #include "WarcraftXL/Seams.h"
 
 // STATIC: 0x00A2D57C
@@ -113,10 +114,15 @@ static void (*s_drawListPreprocess[GxuSorts_Last])(GxDrawListEntry*, const C3Vec
 // STATIC: 0x00AD88B0
 static int (*s_drawListSorters[GxuSorts_Last])(const void*, const void*) = { DrawListSorterB2F, DrawListSorterVtxStream };
 
+// The last indexed draw a D3D9 device issued (Gx.h).
+GxD3dIndexedDraw g_gxLastIndexedDraw = {};
+
 // VERIFY: 0b88acbc auto
 // OFFSET: 0x008C8DE0
 EGxApi GxDefaultApi() {
-    return GxApi_D3d9;
+    // SXC: Vulkan, the renderer our features are built on (stock: D3D9; ConsoleDeviceInitialize falls
+    // back to it where Vulkan can't start). A gxApi in Config.wtf or -d3d9 / -opengl still wins.
+    return GxApi_Vulkan;
 }
 
 // VERIFY: cef2b995 auto
@@ -1105,7 +1111,10 @@ void GxScenePresent() {
     wxl::seam::Gx::ScenePresent::Before();
     C3Vector viewPos(0.0f, 0.0f, 0.0f);
     GxuFlushDrawList(GxuCat_2, viewPos);
+    SXC::Profiler::Enter(SXC::Profiler::kPresent);  // SXC: the frame profiler
     g_theGxDevicePtr->ScenePresent();
+    SXC::Profiler::Leave(SXC::Profiler::kPresent);
+    SXC::Profiler::FrameEnd();
 }
 
 // VERIFY: 6d471ae7 auto

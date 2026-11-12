@@ -1261,7 +1261,7 @@ static bool SyncBodyModel(CCharacterComponent* character, const Look& look) {
     if (bound != s_boundGuids.end() && ClntObjMgrGetActivePlayer()) {
         WOWGUID guid;
         guid.m_guid = bound->second;
-        auto* found = static_cast<CGUnit_C*>(ClntObjMgrObjectPtr(guid, TYPEMASK_UNIT, __FILE__, __LINE__));
+        auto* found = static_cast<CGUnit_C*>(ClntObjMgrObjectPtr(guid, TYPE_UNIT, __FILE__, __LINE__));
         if (found && found->m_characterComponent == character) unit = found;
     }
     // A unit and its component share one body: never move just one of them.

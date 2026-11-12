@@ -37,7 +37,7 @@ std::unordered_map<uint64_t, RetailChoiceList> s_formChoices;    // a form chang
 // FlashWOW Two Forms: whether a player in the world still shows the other form than `form` (the server's form
 // change sends the new form's choices before the field update that changes the form).
 bool AwaitsForm(uint64_t guid, uint32_t form) {
-    CGPlayer_C* player = static_cast<CGPlayer_C*>(ClntObjMgrObjectPtr(WOWGUID{ guid }, TYPEMASK_PLAYER, __FILE__, __LINE__));
+    CGPlayer_C* player = static_cast<CGPlayer_C*>(ClntObjMgrObjectPtr(WOWGUID{ guid }, TYPE_PLAYER, __FILE__, __LINE__));
     if (!player || !AlteredFormRace(player->m_unit->m_unitFieldBytes0[0])) return false;
     return ((player->m_unit->m_unitFieldFlags2 & kAlteredFormFlag2) != 0) != (form != 0);
 }

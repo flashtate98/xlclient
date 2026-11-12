@@ -16,8 +16,9 @@
 //   input <semantic> <vN>          vertex only, repeatable
 //   output <semantic>              vertex only, repeatable
 //   reads <semantic>               pixel only, repeatable
-//   flag <fixed_fog|point_size|point_sprite>  optional
+//   flag <fixed_fog|point_size|point_sprite|lights|grass>  optional (SXC: lights, step 6b; grass, step 7)
 //   companion <md5>                vertex only: the `ff` pixel record to bind when the draw has no pixel shader
+//   instanced <md5>                SXC, vertex only: the record's instanced grass variant (`flag grass`, step 7)
 //
 // Profile `ff` is a pixel record the translator GENERATED rather than translated: the fixed-function
 // pixel cascade in the translated varying interface, for the vs_2_0 weather records the engine draws
@@ -80,9 +81,13 @@ namespace gxvk::vk::manifest
         bool     fixedFog;         ///< `flag fixed_fog`
         bool     pointSize;        ///< `flag point_size`: the vertex module writes gl_PointSize; the draw is a point list
         bool     pointSprite;      ///< `flag point_sprite`: the ff module samples stage 0 at gl_PointCoord
+        bool     lights;           ///< SXC: `flag lights`: the pixel module adds our point lights (set 3, Vulkan/Lights)
+        bool     grass;            ///< SXC: `flag grass`: the instanced grass variant (plant rows at 13..15; step 7)
         uint16_t firstName;        ///< index of its first name entry, or 0xFFFF
         uint16_t companion;        ///< vertex: index of its `ff` companion record, or kNoRecord
         char     companionMd5[33]; ///< vertex: the `companion` line's md5 as written, "" when none
+        uint16_t instanced;        ///< SXC: vertex: index of its instanced grass variant, or kNoRecord
+        char     instancedMd5[33]; ///< SXC: the `instanced` line's md5 as written, "" when none
     };
 
     /**
@@ -123,6 +128,9 @@ namespace gxvk::vk::manifest
 
     /// The `ff` companion a vertex record names, or null.
     const Record* Companion(const Record& r);
+
+    /// SXC: the instanced grass variant a vertex record names, or null (step 7).
+    const Record* Instanced(const Record& r);
 
     /// A record's first name, for a log line, or its md5 when it has none.
     const char* FirstName(const Record& r);

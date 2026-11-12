@@ -1,4 +1,5 @@
 #include "World.h"
+#include "WoW/Source/WorldClient/WorldConstants.h"
 #include <cstdlib>
 #include <new>
 #include <algorithm>
@@ -100,6 +101,15 @@
 #include "WoW/Source/Object/ObjectClient/Object_C.h"
 #include "WoW/Source/Game/GameClient/ProjectTex.h"
 #include "WarcraftXL/Seams.h"
+#include "SXC/Grass/Grass.h"  // SXC: the instanced grass
+#include "SXC/Water/Medium.h"  // SXC: the underwater medium
+#include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler
+#include "SXC/View/View.h"  // SXC: the mirror's frustum, culled for too
+
+static const float dirLightScaleAmount = 0.5f;
+
+static const int32_t MAX_SOUND_EXT_LEVEL = 9999;
+static const int32_t MIN_SOUND_EXT_LEVEL = 2;
 
 // STATIC: 0x00ADEE48
 static const char* s_zonePaths[11] = {
@@ -578,7 +588,7 @@ void DayNight::FindAndAddZoneLight(const C3Vector* position) {
         return;
     }
 
-    C2Vector point(-(position->y - 17066.666f), -(position->x - 17066.666f));
+    C2Vector point(-(position->y - HALF_WORLD_SIZE), -(position->x - HALF_WORLD_SIZE));
 
     for (uint32_t i = 0; i < sizeof(s_zones) / sizeof(s_zones[0]); i++) {
         const Zone& zone = s_zones[i];
@@ -658,10 +668,10 @@ int32_t World::QueryLiquidStatus(C3Vector* pos, int32_t* liquidType, float* heig
 // OFFSET: 0x0077F390
 int32_t World::QueryLiquidSounds(CMapEntity* entity, float radius, TSGrowableArray<World::LiquidQueryResult>& results) {
     if (entity->m_staticFlags & 0x1) {
-        uint32_t distance = 9999;
+        uint32_t distance = MAX_SOUND_EXT_LEVEL;
         entity->QueryLiquidSounds(results, &distance);
 
-        if (distance < 2) {
+        if (distance < MIN_SOUND_EXT_LEVEL) {
             CMap::QueryLiquidSounds(&entity->m_position, radius, results);
         }
 
@@ -736,7 +746,7 @@ void CWorld::UpdateTextureCacheBudget() {
 // VERIFY: 27c4601b manual
 // OFFSET: 0x0077FB90
 int32_t World::QueryCameraFog(SMOFog* fog, CMapObjDef** mapObjDef, uint8_t* found, TSGrowableArray<uint32_t>** groups, float* distance) {
-    CGPlayer_C* player = static_cast<CGPlayer_C*>(ClntObjMgrObjectPtr(ClntObjMgrGetActivePlayer(), TYPEMASK_PLAYER, __FILE__, __LINE__));
+    CGPlayer_C* player = static_cast<CGPlayer_C*>(ClntObjMgrObjectPtr(ClntObjMgrGetActivePlayer(), TYPE_PLAYER, __FILE__, __LINE__));
 
     if (player && (player->m_player->m_playerFlags & 0x10)) {
         return 0;
@@ -782,7 +792,7 @@ void CBarrier::SetViewerPos(const C3Vector& position) {
 // VERIFY: b95e4db0 auto
 // OFFSET: 0x0077F9D0
 void CWorldScene::RenderParticulate() {
-    if ((CWorld::enables & 0x2000000) && s_liquidTypeId) {
+    if ((CWorld::enables & Enable_Particulates) && s_liquidTypeId) {
         CWorld::particulate->Render();
     }
 }
@@ -790,11 +800,11 @@ void CWorldScene::RenderParticulate() {
 // VERIFY: 623133e8 auto
 // OFFSET: 0x0077FCD0
 int32_t World::ObjectIsDrawable(CMapBaseObj* object) {
-    if (object->m_type & 0x8) {
+    if (object->m_type & CMapBaseObj::Type_MapObjDef) {
         return static_cast<CMapObjDef*>(object)->IsAllDrawable();
     }
 
-    if (!(object->m_type & 0x40)) {
+    if (!(object->m_type & CMapBaseObj::Type_DoodadDef)) {
         return 0;
     }
 
@@ -810,7 +820,7 @@ int32_t World::ObjectIsDrawable(CMapBaseObj* object) {
 // VERIFY: 86d43bac auto
 // OFFSET: 0x0077FD10
 int32_t World::ObjectIsLoaded(CMapBaseObj* object) {
-    if (object->m_type & 0x8) {
+    if (object->m_type & CMapBaseObj::Type_MapObjDef) {
         CMapObjDef* mapObjDef = static_cast<CMapObjDef*>(object);
 
         if (!mapObjDef->IsAllLoaded()) {
@@ -820,7 +830,7 @@ int32_t World::ObjectIsLoaded(CMapBaseObj* object) {
         return mapObjDef->m_owner->IsAllLoaded();
     }
 
-    if (!(object->m_type & 0x40)) {
+    if (!(object->m_type & CMapBaseObj::Type_DoodadDef)) {
         return 0;
     }
 
@@ -866,7 +876,7 @@ void World::ObjectSetAlwaysExterior(CMapBaseObj* object, int32_t enable) {
 // VERIFY: 4870d850 manual
 // OFFSET: 0x0077FE40
 int32_t World::ObjectMoveDoodads(CMapBaseObj* source, uint16_t doodadSet, CMapBaseObj* target, uint16_t targetDoodadSet) {
-    if (!(source->m_type & 0x8) || !(source->m_flags & MAPOBJ_FLAG_PREPARED) || !(target->m_type & 0x8) || !(target->m_flags & MAPOBJ_FLAG_PREPARED)) {
+    if (!(source->m_type & CMapBaseObj::Type_MapObjDef) || !(source->m_flags & MAPOBJ_FLAG_PREPARED) || !(target->m_type & CMapBaseObj::Type_MapObjDef) || !(target->m_flags & MAPOBJ_FLAG_PREPARED)) {
         return 0;
     }
 
@@ -876,7 +886,7 @@ int32_t World::ObjectMoveDoodads(CMapBaseObj* source, uint16_t doodadSet, CMapBa
 // VERIFY: dcda60dd auto
 // OFFSET: 0x0077FE80
 void World::ObjectSetDoodadEmittersIgnoresDistance(CMapBaseObj* object, int32_t ignore, uint16_t doodadSet) {
-    if (object->m_type & 0x8) {
+    if (object->m_type & CMapBaseObj::Type_MapObjDef) {
         CMapObjDef::SetDoodadEmittersIgnoresDistance(static_cast<CMapObjDef*>(object), ignore, doodadSet);
     }
 }
@@ -884,7 +894,7 @@ void World::ObjectSetDoodadEmittersIgnoresDistance(CMapBaseObj* object, int32_t 
 // VERIFY: 35100e77 auto
 // OFFSET: 0x0077FEA0
 void World::ObjectSetDoodadsEnabled(CMapBaseObj* object, int32_t enable, uint16_t doodadSet) {
-    if (object->m_type & 0x8) {
+    if (object->m_type & CMapBaseObj::Type_MapObjDef) {
         CMapObjDef::SetDoodadsEnabled(static_cast<CMapObjDef*>(object), enable, doodadSet);
     }
 }
@@ -892,9 +902,9 @@ void World::ObjectSetDoodadsEnabled(CMapBaseObj* object, int32_t enable, uint16_
 // VERIFY: 2c7a8fa7 auto
 // OFFSET: 0x0077FEC0
 void World::ObjectSetSequence(CMapEntity* entity, uint32_t sequence, int32_t a3, int32_t doodadSet) {
-    if (entity->m_type & 0x8) {
+    if (entity->m_type & CMapBaseObj::Type_MapObjDef) {
         reinterpret_cast<CMapObjDef*>(entity)->SetSequence(sequence, a3, static_cast<uint16_t>(doodadSet));
-    } else if (entity->m_type & 0x40) {
+    } else if (entity->m_type & CMapBaseObj::Type_DoodadDef) {
         if (entity->m_model) {
             entity->m_model->SetBoneSequence(0xFFFFFFFF, sequence, 0xFFFFFFFF, 0, 1.0f, 1, 1);
         }
@@ -904,9 +914,9 @@ void World::ObjectSetSequence(CMapEntity* entity, uint32_t sequence, int32_t a3,
 // VERIFY: e33527b6 auto
 // OFFSET: 0x0077FF60
 void World::ObjectSetEventCallback(CMapBaseObj* object, void (*callback)(CM2Model* model, uint32_t boneId, uint32_t eventId, uint32_t data, const C3Vector* position, uint32_t time, uint64_t param), uint64_t param, uint16_t doodadSet) {
-    if (object->m_type & 0x8) {
+    if (object->m_type & CMapBaseObj::Type_MapObjDef) {
         static_cast<CMapObjDef*>(object)->SetEventCallback(callback, param, doodadSet);
-    } else if (object->m_type & 0x40) {
+    } else if (object->m_type & CMapBaseObj::Type_DoodadDef) {
         CM2Model* model = static_cast<CMapDoodadDef*>(object)->m_model;
 
         if (model) {
@@ -918,9 +928,9 @@ void World::ObjectSetEventCallback(CMapBaseObj* object, void (*callback)(CM2Mode
 // VERIFY: 341fb3f3 auto
 // OFFSET: 0x00780130
 void World::ObjectGetExtents(CMapBaseObj* object, CAaBox* extents) {
-    if (object->m_type & 0x8) {
+    if (object->m_type & CMapBaseObj::Type_MapObjDef) {
         static_cast<CMapObjDef*>(object)->m_owner->GetBounds(extents);
-    } else if (object->m_type & 0x40) {
+    } else if (object->m_type & CMapBaseObj::Type_DoodadDef) {
         *extents = static_cast<CMapDoodadDef*>(object)->m_model->GetBoundingBox();
     }
 }
@@ -928,7 +938,7 @@ void World::ObjectGetExtents(CMapBaseObj* object, CAaBox* extents) {
 // VERIFY: aa9498a7 auto
 // OFFSET: 0x00780190
 int32_t World::ObjectIsWMO(CMapBaseObj* object) {
-    return object->m_type & 0x8;
+    return object->m_type & CMapBaseObj::Type_MapObjDef;
 }
 
 // VERIFY: 740254e1 auto
@@ -1057,7 +1067,7 @@ uint64_t World::QueryObjectParentParam64(CMapBaseObj* object) {
 
     CMapBaseObj* parent = link->m_ref;
 
-    if (!parent || !(parent->m_type & 0x10)) {
+    if (!parent || !(parent->m_type & CMapBaseObj::Type_MapObjDefGroup)) {
         return 0;
     }
 
@@ -1075,7 +1085,7 @@ CMapEntity* CMap::ObjectCreate(CM2Model* model, MAP_OBJECT_FUNC func, void* func
     entity->m_diffuseLightScale = 1.0f;
     entity->m_vec2 = C3Vector(10000000.0f, 10000000.0f, 10000000.0f);
     entity->m_targetDiffuseLightScale = 1.0f;
-    entity->m_type |= 0x200;
+    entity->m_type |= CMapBaseObj::Type_UserCreated;
     entity->m_staticFlags = (entity->m_staticFlags & ~0xEC02) | ((flags & 0x1) << 1) | ((flags & 0x4) << 8) | (~(flags << 10) & 0x800) | (((flags >> 3) & 0x1) << 13) | ((flags & 0x10) << 11);
     entity->m_flags = static_cast<MapObjFlag>(0);
     entity->m_func = nullptr;
@@ -1148,9 +1158,9 @@ void CWorld::ObjectDestroy(CMapBaseObj* object) {
     uint16_t type = object->m_type;
     object->m_refCount--;
 
-    if (type & 0x8) {
+    if (type & CMapBaseObj::Type_MapObjDef) {
         CMap::PurgeMapObjDef(static_cast<CMapObjDef*>(object));
-    } else if (type & 0x40) {
+    } else if (type & CMapBaseObj::Type_DoodadDef) {
         CMapDoodadDef::Purge(static_cast<CMapDoodadDef*>(object));
     }
 }
@@ -1209,9 +1219,9 @@ void World::PrepareAreaOfInterest(const C3Vector& position) {
     CWorld::s_objectAreaOfInterest.b = C3Vector(position.x - farClip, position.y - farClip, position.z - farClip);
     CWorld::s_objectAreaOfInterest.t = C3Vector(position.x + farClip, position.y + farClip, position.z + farClip);
 
-    int32_t radius = 1 - static_cast<int32_t>(streamDistance * -0.03f);
-    int32_t chunkX = static_cast<int32_t>(-(position.x - 17066.666f) * 0.03f);
-    int32_t chunkY = static_cast<int32_t>(-(position.y - 17066.666f) * 0.03f);
+    int32_t radius = 1 - static_cast<int32_t>(streamDistance * -OO_COORD_TO_CHUNK);
+    int32_t chunkX = static_cast<int32_t>(-(position.x - HALF_WORLD_SIZE) * OO_COORD_TO_CHUNK);
+    int32_t chunkY = static_cast<int32_t>(-(position.y - HALF_WORLD_SIZE) * OO_COORD_TO_CHUNK);
 
     if (SFile::IsTrial()) {
         StreamingSetAreaOfInterest(chunkY, chunkX);
@@ -1374,9 +1384,9 @@ void CWorld::LoadMap(const char* mapName, C3Vector* position, int32_t zoneID, in
     CWorld::gbChunkRectOld = CWorld::gbChunkRect;
     CMap::Load(mapName, zoneID);
 
-    int32_t shaders = Enable_Doodads;
+    int32_t shaders = 1;
 
-    if (!(CWorld::enables2 & Enable_Doodads) || !(CWorld::enables & Enable_PixelShaders)) {
+    if (!(CWorld::enables2 & Enable_VertexShader) || !(CWorld::enables & Enable_PixelShaders)) {
         shaders = 0;
     }
 
@@ -1435,6 +1445,7 @@ void DayNight::Update(int32_t reset, const C3Vector* cameraPos) {
     DayNight::g_clouds.Update();
     DayNight::UpdateStars();
     DayNight::UpdateFog();
+    SXC::Water::MediumLighting();  // SXC: the underwater medium takes the fog's reach and the light under our water
     CWorld::SetShadowColor(info->m_shadowColor);
 
     uint8_t scale = CMath::fint_((1.0f - glare) * 255.0f);
@@ -1569,13 +1580,13 @@ void CWorld::Update(C3Vector* camPos, C3Vector* camTarget, C3Vector* position) {
 
     CWorld::status.m_prepareAll = 0;
 
-    if ((CWorld::enables & 0x2000000) && s_liquidTypeId) {
+    if ((CWorld::enables & Enable_Particulates) && s_liquidTypeId) {
         CWorld::particulate->Update();
     }
 
     World::s_weather->Update();
 
-    CGPlayer_C* player = static_cast<CGPlayer_C*>(ClntObjMgrObjectPtr(ClntObjMgrGetActivePlayer(), TYPEMASK_PLAYER, __FILE__, __LINE__));
+    CGPlayer_C* player = static_cast<CGPlayer_C*>(ClntObjMgrObjectPtr(ClntObjMgrGetActivePlayer(), TYPE_PLAYER, __FILE__, __LINE__));
 
     if (player && !s_disableAreaAmbient) {
         uint32_t areaId;
@@ -1673,11 +1684,11 @@ void CWorld::Initialize() {
     CWorld::s_elapsedTicks = 0;
 
     if (g_theGxDevicePtr->Caps().m_shaderTargets[4] > 0) {
-        CWorld::enables |= 0x10000000;
+        CWorld::enables |= Enable_PixelShaders;
     }
 
     if (g_theGxDevicePtr->Caps().m_shaderTargets[0] > 0) {
-        CWorld::enables2 |= 0x1;
+        CWorld::enables2 |= Enable_VertexShader;
     }
 
     CWorld::m_M2PassMask |= 0x7;
@@ -1706,7 +1717,7 @@ void CWorld::Initialize() {
     World::groundEffectDistValueSqr = CWorld::detailDoodadDist * CWorld::detailDoodadDist;
     CWorld::shadowMipLevel = CWorldParam::cvar_shadowLevel->m_intValue;
 
-    CShaderEffect::InitShaderSystem(M2GetCacheFlags() & 0x8, CWorld::enables2 & 0x2);
+    CShaderEffect::InitShaderSystem(M2GetCacheFlags() & 0x8, CWorld::enables2 & Enable_HwPcf);
     CShaderEffectManager::AddEffectFile("MapObj.wfx");
     CShaderEffectManager::AddEffectFile("MapObjU.wfx");
     CShaderEffectManager::AddEffectFile("Model2.wfx");
@@ -1767,8 +1778,8 @@ bool World::IsValidPosition(const C3Vector& position, float margin) {
 // OFFSET: 0x00406DE0
 bool World::IsValidPosition(float x, float y, float z, float margin) {
     if (_finite(x) && _finite(y) && _finite(z)) {
-        float v4 = -(y - 17066.666f);
-        float v5 = -(x - 17066.666f);
+        float v4 = -(y - HALF_WORLD_SIZE);
+        float v5 = -(x - HALF_WORLD_SIZE);
 
         if (margin > v4) {
             return 0;
@@ -1831,7 +1842,7 @@ void CWorldScene::FrustumXform(C44Matrix& mat) {
 // VERIFY: ad5c1827 auto
 // OFFSET: 0x0078FB20
 int32_t CWorldScene::FrustumCull(CAaBox* box) {
-    return CWorldScene::frustumStack[CWorldScene::frustumIndex].Cull(*box) == 0;
+    return CWorldScene::frustumStack[CWorldScene::frustumIndex].Cull(*box) == WorldCull_outside;
 }
 
 // VERIFY: 7ebc59b0 auto
@@ -1903,10 +1914,16 @@ void CWorldScene::UpdateViewerLiquid() {
         }
     }
 
+    // SXC: the camera at the waterline: the client's view stays the air's, the medium draws the water's part.
+    if (liquidType && !CWorldScene::s_viewerMapObjDef && SXC::Water::WaterlineHoldsAir(CWorldScene::s_activeWorldView.z)) {
+        liquidType = 0;
+        s_viewerLiquidDepth = 0.0f;
+    }
+
     int32_t leftLiquid = 0;
 
     if (liquidType) {
-        if (liquidType != static_cast<int32_t>(s_liquidTypeId) && (CWorld::enables & 0x2000000)) {
+        if (liquidType != static_cast<int32_t>(s_liquidTypeId) && (CWorld::enables & Enable_Particulates)) {
             const LiquidTypeRec* rec = g_liquidTypeDB.GetRecord(liquidType);
             bool particles = (rec->m_flags & 8) != 0;
             CWorld::particulate->m_enabled = particles;
@@ -2034,7 +2051,7 @@ int32_t CWorldScene::FrustumCull(const C3Vector& center, float radius) {
     sphere.c = center;
     sphere.r = radius;
 
-    return CWorldScene::frustumStack[CWorldScene::frustumIndex].Cull(sphere) == 0;
+    return CWorldScene::frustumStack[CWorldScene::frustumIndex].Cull(sphere) == WorldCull_outside;
 }
 
 // VERIFY: e94a022f auto
@@ -2133,6 +2150,21 @@ void CWorldScene::CullHorizon(CRect* rect) {
     CWorldScene::frustumIndex++;
     CWorldScene::frustumStack[CWorldScene::frustumIndex] = CWorldScene::frustumStack[CWorldScene::frustumIndex - 1];
     CWorldScene::FrustumSet(corners, *rect);
+
+    // SXC: the water's mirror sees the distant terrain's frustum reflected at the water too (as far as the view).
+    float mirrorZ = 0.0f;
+    bool mirrorFull = false;
+
+    if (SXC::View::Planned(mirrorZ, mirrorFull) && mirrorFull) {
+        C3Vector mirrored[8];
+
+        for (uint32_t i = 0; i < 8; i++) {
+            mirrored[i] = C3Vector(corners[i].x, corners[i].y, 2.0f * mirrorZ - corners[i].z);
+        }
+
+        CWorldScene::frustumStack[CWorldScene::frustumIndex].SetOr(mirrored);
+    }
+
     CMap::s_lowDetail.CullHorizonAreas(&CWorldScene::s_activeWorldView);
     CWorldScene::frustumIndex--;
 
@@ -2215,7 +2247,7 @@ void CWorldScene::AddMapObjDefGroup(CMapObjDef* mapObjDef, CMapObjDefGroup* mapO
     int32_t bucket = 0;
 
     if (dist > 0.0f) {
-        bucket = CMath::fint_(dist * 0.03f - 0.5f);
+        bucket = CMath::fint_(dist * CBDIVISOR - 0.5f);
 
         if (bucket >= 64) {
             return;
@@ -2243,7 +2275,7 @@ void CWorldScene::ComputeExteriorSortDistances() {
         float dist = x * CWorldScene::camPlaneXY.n.x + y * CWorldScene::camPlaneXY.n.y + z * CWorldScene::camPlaneXY.n.z + CWorldScene::camPlaneXY.d;
 
         if (dist > 0.0f) {
-            bucket = CMath::fint_(dist * 0.03f - 0.5f);
+            bucket = CMath::fint_(dist * CBDIVISOR - 0.5f);
 
             if (bucket >= 64) {
                 return;
@@ -2261,7 +2293,7 @@ void CWorldScene::AddMapChunkToRenderList(CMapChunk* mapChunk, C3Vector* pos) {
     int32_t bucket = 0;
     float distance = pos->y * CWorldScene::camPlaneXY.n.y + pos->z * CWorldScene::camPlaneXY.n.z + pos->x * CWorldScene::camPlaneXY.n.x + CWorldScene::camPlaneXY.d;
 
-    if (distance <= 0.0f || (bucket = CMath::fint_(distance * 0.029999999f - 0.5f)) < 64) {
+    if (distance <= 0.0f || (bucket = CMath::fint_(distance * CBDIVISOR - 0.5f)) < 64) {
         CWorldScene::sortTable.m_table[bucket].m_mapChunkList.LinkToTail(mapChunk);
     }
 }
@@ -2273,7 +2305,7 @@ void CWorldScene::AddToDistanceBucket(CChunkLiquid* liquid, const C3Vector& pos)
     float distance = pos.y * CWorldScene::camPlaneXY.n.y + pos.z * CWorldScene::camPlaneXY.n.z + pos.x * CWorldScene::camPlaneXY.n.x + CWorldScene::camPlaneXY.d;
 
     if (distance > 0.0f) {
-        float scaled = distance * 0.03f;
+        float scaled = distance * CBDIVISOR;
         bucket = CMath::fint_(scaled - 0.5f);
 
         if (bucket >= 64) {
@@ -2683,7 +2715,7 @@ void CWorldScene::PrepareLiquidInstances() {
                 const LiquidTypeRec* typeRec = g_liquidTypeDB.GetRecord(liquidType);
 
                 if (!typeRec) {
-                    SysMsgPrintf(STATUS_ERROR, 2, "WMO: Liquid type [%d] not found, defaulting to water!", liquidType);
+                    SysMsgPrintf(SYSMSG_ERROR, 2, "WMO: Liquid type [%d] not found, defaulting to water!", liquidType);
                     liquidType = 1;
                     typeRec = g_liquidTypeDB.GetRecord(liquidType);
                 }
@@ -2848,13 +2880,56 @@ void CWorldScene::Update(C3Vector* camPos, C3Vector* camTarget) {
     CWorldScene::s_viewProjW.w = CWorldScene::s_viewProjMatrix.d3;
 
     CWorldScene::boundingBox = CAaBox::Bounding(CWorldScene::s_frustumCorners, 8);
-    CWorldScene::s_frustumChunkRect.minX = CMath::fint_(-(CWorldScene::boundingBox.t.y - 17066.666f) * 0.029999999f - 0.5f);
-    CWorldScene::s_frustumChunkRect.minY = CMath::fint_(-(CWorldScene::boundingBox.t.x - 17066.666f) * 0.029999999f - 0.5f);
-    CWorldScene::s_frustumChunkRect.maxX = CMath::fint_(-(CWorldScene::boundingBox.b.y - 17066.666f) * 0.029999999f - 0.5f);
-    CWorldScene::s_frustumChunkRect.maxY = CMath::fint_(-(CWorldScene::boundingBox.b.x - 17066.666f) * 0.029999999f - 0.5f);
+    CWorldScene::s_frustumChunkRect.minX = CMath::fint_(-(CWorldScene::boundingBox.t.y - HALF_WORLD_SIZE) * OO_COORD_TO_CHUNK - 0.5f);
+    CWorldScene::s_frustumChunkRect.minY = CMath::fint_(-(CWorldScene::boundingBox.t.x - HALF_WORLD_SIZE) * OO_COORD_TO_CHUNK - 0.5f);
+    CWorldScene::s_frustumChunkRect.maxX = CMath::fint_(-(CWorldScene::boundingBox.b.y - HALF_WORLD_SIZE) * OO_COORD_TO_CHUNK - 0.5f);
+    CWorldScene::s_frustumChunkRect.maxY = CMath::fint_(-(CWorldScene::boundingBox.b.x - HALF_WORLD_SIZE) * OO_COORD_TO_CHUNK - 0.5f);
 
     CWorldScene::frustumIndex = 0;
     CWorldScene::frustumStack[0].CalcPlanesFromCorners(CWorldScene::s_frustumCorners);
+
+    // SXC: the water's mirror (SXC/View) sees this frustum reflected at the water: what lies in that is
+    // culled in too (the culling takes either volume), out to the mirror's reach, and the candidates are
+    // gathered over both boxes. Looking down at a lake, the mirror shows what is above and behind the
+    // camera, which the camera's culling left out (Seyri, 2026-11-05).
+    CWorldScene::frustumStack[0].ClearOr();
+    float mirrorZ = 0.0f;
+
+    if (SXC::View::PlanMirror(*camPos, mirrorZ)) {
+        const float reach = SXC::View::MirrorReach();
+        C3Vector mirrored[8];
+
+        for (uint32_t i = 0; i < 8; i++) {
+            C3Vector c = CWorldScene::s_frustumCorners[i];
+
+            if (i >= 4) {
+                const C3Vector& n = CWorldScene::s_frustumCorners[i - 4];
+                const float dx = c.x - n.x, dy = c.y - n.y, dz = c.z - n.z;
+                const float length = sqrt(dx * dx + dy * dy + dz * dz);
+
+                if (length > reach) {
+                    const float k = reach / length;
+                    c = C3Vector(n.x + dx * k, n.y + dy * k, n.z + dz * k);
+                }
+            }
+
+            mirrored[i] = C3Vector(c.x, c.y, 2.0f * mirrorZ - c.z);
+        }
+
+        CWorldScene::frustumStack[0].SetOr(mirrored);
+        const CAaBox reflected = CAaBox::Bounding(mirrored, 8);
+        CAaBox& box = CWorldScene::boundingBox;
+        box.b.x = reflected.b.x < box.b.x ? reflected.b.x : box.b.x;
+        box.b.y = reflected.b.y < box.b.y ? reflected.b.y : box.b.y;
+        box.b.z = reflected.b.z < box.b.z ? reflected.b.z : box.b.z;
+        box.t.x = reflected.t.x > box.t.x ? reflected.t.x : box.t.x;
+        box.t.y = reflected.t.y > box.t.y ? reflected.t.y : box.t.y;
+        box.t.z = reflected.t.z > box.t.z ? reflected.t.z : box.t.z;
+        CWorldScene::s_frustumChunkRect.minX = CMath::fint_(-(box.t.y - HALF_WORLD_SIZE) * OO_COORD_TO_CHUNK - 0.5f);
+        CWorldScene::s_frustumChunkRect.minY = CMath::fint_(-(box.t.x - HALF_WORLD_SIZE) * OO_COORD_TO_CHUNK - 0.5f);
+        CWorldScene::s_frustumChunkRect.maxX = CMath::fint_(-(box.b.y - HALF_WORLD_SIZE) * OO_COORD_TO_CHUNK - 0.5f);
+        CWorldScene::s_frustumChunkRect.maxY = CMath::fint_(-(box.b.x - HALF_WORLD_SIZE) * OO_COORD_TO_CHUNK - 0.5f);
+    }
 
     CMapChunk::farCornerIndex = 0;
 
@@ -3541,6 +3616,7 @@ void CWorldScene::RenderDetailDoodads() {
 
     int32_t shaders = CDetailDoodad::InitializeRenderState();
     C44Matrix world;
+    SXC::Grass::Begin();  // SXC: the instanced grass takes the chunks it can, and draws them at the end
 
     CDetailDoodadInst* next;
 
@@ -3548,6 +3624,17 @@ void CWorldScene::RenderDetailDoodads() {
         next = CWorldScene::sortTable.m_detailDoodadInstList.Next(inst);
         CMapChunk* chunk = inst->m_chunk;
         inst->m_age = 0;
+
+        // SXC: instanced: no lights to select, no bake, no draw of its own here.
+        SXC::Profiler::Enter(SXC::Profiler::kGrassPrepare);
+        const bool taken = SXC::Grass::Take(inst);
+        SXC::Profiler::Leave(SXC::Profiler::kGrassPrepare);
+
+        if (taken) {
+            inst->m_link.Unlink();
+            CMap::s_detailDoodadUpdateList.LinkToTail(inst);
+            continue;
+        }
 
         CM2Lighting lighting(chunk->m_sphere);
         World::s_m2Scene->SelectLights(&lighting);
@@ -3572,6 +3659,10 @@ void CWorldScene::RenderDetailDoodads() {
         inst->m_link.Unlink();
         CMap::s_detailDoodadUpdateList.LinkToTail(inst);
     }
+
+    SXC::Profiler::Enter(SXC::Profiler::kGrassPrepare);  // SXC: its draws' GPU time stays the grass's
+    SXC::Grass::End();
+    SXC::Profiler::Leave(SXC::Profiler::kGrassPrepare);
 
     GxXformPop(GxXform_Tex1);
     GxXformPop(GxXform_World);
@@ -3678,7 +3769,7 @@ void CWorldScene::RenderChunksSinglePass() {
 
                 renderChunk->m_renderChunkLink.Unlink();
 
-                if (CWorld::enables & 0x40000000) {
+                if (CWorld::enables & Enable_ShowNormals) {
                     singlePassList.LinkToTail(renderChunk);
                 } else {
                     CMap::s_mapRenderChunkUpdateList.LinkToTail(renderChunk);
@@ -3729,12 +3820,12 @@ void CWorldScene::RenderChunks() {
 
         if (CMap::enableSpecularTerrain) {
             GxRsSet(GxRs_MatSpecular, static_cast<int32_t>(0xFFFFFFFF));
-            GxRsSet(GxRs_MatSpecularExp, 20.0f);
+            GxRsSet(GxRs_MatSpecularExp, TERRAIN_SPEC_EXP);
         }
 
         for (int32_t i = 0; i < 5; i++) {
             GxRsSet(static_cast<EGxRenderState>(GxRs_TextureCoord0 + i), i);
-            GxRsSet(static_cast<EGxRenderState>(GxRs_TexGen0 + i), GxTexGen_EyeLinear);
+            GxRsSet(static_cast<EGxRenderState>(GxRs_TexGen0 + i), GxTexGen_World);
             GxRsSet(static_cast<EGxRenderState>(GxRs_TextureShader0 + i), 1);
         }
     }
@@ -3841,7 +3932,7 @@ void CWorldScene::AddDoodadDefs(TSList<CMapBaseObjLink, TSGetExplicitLink<CMapBa
         float dist = doodadDef->m_sphere.c.y * CWorldScene::camPlaneXY.n.y + doodadDef->m_sphere.c.z * CWorldScene::camPlaneXY.n.z + doodadDef->m_sphere.c.x * CWorldScene::camPlaneXY.n.x + CWorldScene::camPlaneXY.d;
 
         if (dist > 0.0f) {
-            bucket = CMath::fint_(dist * 0.03f - 0.5f);
+            bucket = CMath::fint_(dist * CBDIVISOR - 0.5f);
 
             if (bucket >= 64) {
                 continue;
@@ -4004,7 +4095,7 @@ void CWorldScene::CullChunks(CSortEntry* entry, uint32_t index) {
                         int32_t bucket = 0;
                         float distance = CWorldScene::DistanceToCamPlaneXY(&corner);
 
-                        if (distance <= 0.0f || (bucket = CMath::fint_(distance * 0.029999999f - 0.5f)) < 64) {
+                        if (distance <= 0.0f || (bucket = CMath::fint_(distance * CBDIVISOR - 0.5f)) < 64) {
                             CWorldScene::sortTable.m_table[bucket].m_holedChunkList.LinkToTail(chunk);
                         }
                     }
@@ -4273,7 +4364,7 @@ void CWorldScene::AddEntityToSortTable(CMapEntity* entity) {
     float distance = corner.y * CWorldScene::camPlaneXY.n.y + corner.z * CWorldScene::camPlaneXY.n.z + corner.x * CWorldScene::camPlaneXY.n.x + CWorldScene::camPlaneXY.d;
 
     if (distance > 0.0f) {
-        bucket = static_cast<int32_t>(distance * 0.029999999f);
+        bucket = static_cast<int32_t>(distance * CBDIVISOR);
 
         if (bucket >= 64) {
             return;
@@ -4370,7 +4461,7 @@ void CMap::UpdateEntity(CMapEntity* entity) {
         entity->m_targetDiffuseLightScale = 2.5f;
     } else {
         entity->m_staticFlags |= 0x8;
-        entity->m_targetDiffuseLightScale = 0.5f;
+        entity->m_targetDiffuseLightScale = dirLightScaleAmount;
     }
 }
 
@@ -4381,7 +4472,7 @@ void CWorldScene::CullModelSplitBody(CM2Model* model, uint32_t boneId, int32_t s
         model->m_fFlags &= ~0x2000;
     } else {
         CAaBox box = model->GetSplitBodyBoundingBox(boneId);
-        uint32_t culled = CWorldScene::frustumStack[CWorldScene::frustumIndex].Cull(box) == 0;
+        uint32_t culled = CWorldScene::frustumStack[CWorldScene::frustumIndex].Cull(box) == WorldCull_outside;
         model->m_fFlags ^= (model->m_fFlags ^ (culled << 13)) & 0x2000;
     }
 
@@ -4411,7 +4502,7 @@ void CWorldScene::RenderEntitys() {
         CM2Model* model = entity->m_model;
 
         if (model && model->IsLoaded(0, 0) && !(entity->m_staticFlags & 0x4)) {
-            CGUnit_C* unit = static_cast<CGUnit_C*>(ClntObjMgrObjectPtr(WOWGUID{ entity->m_funcParam64 }, TYPEMASK_UNIT, __FILE__, __LINE__));
+            CGUnit_C* unit = static_cast<CGUnit_C*>(ClntObjMgrObjectPtr(WOWGUID{ entity->m_funcParam64 }, TYPE_UNIT, __FILE__, __LINE__));
 
             if (!unit) {
                 if (entity->m_staticFlags & 0x800) {
@@ -4421,7 +4512,7 @@ void CWorldScene::RenderEntitys() {
                     CWorldScene::RequestModelStreaming(model, &info.m_bounds);
                 }
             } else {
-                if ((entity->m_staticFlags & 0x800) && unit->m_unit->m_unitFieldBytes1[0] != 9) {
+                if ((entity->m_staticFlags & 0x800) && unit->m_unit->m_unitFieldBytes1[0] != UNIT_SUBMERGED) {
                     CAaBox standBox = unit->GetStandBox();
                     CWorldScene::RequestModelStreaming(model, &standBox);
                 }
@@ -4470,7 +4561,7 @@ uint32_t World::TriDataToFacetData(void* unused, FacetData* facets, WOWGUID guid
             float lengthSq = facet->plane.n.z * facet->plane.n.z + facet->plane.n.y * facet->plane.n.y + facet->plane.n.x * facet->plane.n.x;
 
             if (lengthSq == 0.0f) {
-                SysMsgPrintf(STATUS_ERROR, 2, "Found degenerate triangle -- data needs to be fixed\n");
+                SysMsgPrintf(SYSMSG_ERROR, 2, "Found degenerate triangle -- data needs to be fixed\n");
                 facet->plane.n.x = 0.0f;
                 facet->plane.n.y = 0.0f;
                 facet->plane.n.z = 1.0f;
@@ -4697,7 +4788,7 @@ int32_t World::QueryAreaIdAtPosition(const C3Vector* position, int32_t* areaId) 
     CMapObjDef* mapObjDef = nullptr;
     CMapObjDefGroup* mapObjDefGroup = nullptr;
 
-    if ((CWorld::enables & 0x100) && CMap::VectorIntersect(&start, &end, 0x10, 1280, &objectDistance, nullptr, nullptr, &mapObjDef, &mapObjDefGroup)) {
+    if ((CWorld::enables & Enable_MapObjs) && CMap::VectorIntersect(&start, &end, 0x10, 1280, &objectDistance, nullptr, nullptr, &mapObjDef, &mapObjDefGroup)) {
         hitObject = true;
     }
 
@@ -4749,7 +4840,7 @@ void World::ObjectSetUpdateCallback(CMapEntity* entity, int32_t (*func)(void*, u
 // OFFSET: 0x00782000
 CMapEntity* CMap::ObjectCreateStatic(CM2Model* model, const C44Matrix& matrix, MAP_OBJECT_FUNC func, void* funcParam, uintptr_t param32) {
     CMapEntity* entity = CMap::AllocEntity(0);
-    entity->m_type |= 0x200;
+    entity->m_type |= CMapBaseObj::Type_UserCreated;
     entity->m_staticFlags = (entity->m_staticFlags & 0xFFFFA390) | 0x400;
     entity->m_flags = MAPOBJ_FLAG_UNPLACED;
     entity->m_func = nullptr;
@@ -4804,7 +4895,7 @@ CMapEntity* CMap::ObjectCreateStatic(CM2Model* model, const C44Matrix& matrix, M
 // OFFSET: 0x00781C90
 CMapEntity* CMap::ObjectCreateStaticEx(CM2Model* model, const C44Matrix& matrix, MAP_OBJECT_FUNC func, void* funcParam, uint64_t param64, uintptr_t param32, const char* file, int32_t line) {
     CMapEntity* entity = CMap::AllocEntity(0);
-    entity->m_type |= 0x300;
+    entity->m_type |= CMapBaseObj::Type_StaticEntityEx;
     entity->m_staticFlags = (entity->m_staticFlags & 0xFFFFA7D0) | 0x400;
     entity->m_func = nullptr;
     entity->unused_00B4 = 0;
@@ -4902,7 +4993,7 @@ void CWorldScene::RenderBarriers(float elapsedSec) {
 // OFFSET: 0x007911D0
 void CWorldScene::CullModelRecursive(CM2Model* model) {
     CAaBox box = model->GetCurrentBoundingBox();
-    model->m_fFlags = (model->m_fFlags & ~0x2000u) | ((CWorldScene::frustumStack[CWorldScene::frustumIndex].Cull(box) == 0) << 13);
+    model->m_fFlags = (model->m_fFlags & ~0x2000u) | ((CWorldScene::frustumStack[CWorldScene::frustumIndex].Cull(box) == WorldCull_outside) << 13);
 
     for (CM2Model* attached = model->m_attachList; attached; attached = attached->m_attachNext) {
         CWorldScene::CullModelRecursive(attached);
@@ -4989,7 +5080,7 @@ void World::ObjectSetRenderEnabled(CMapBaseObj* object, int32_t enable) {
         object->m_flags = static_cast<MapObjFlag>(object->m_flags | MAPOBJ_FLAG_DISABLED);
     }
 
-    if (!(object->m_type & 0x8)) {
+    if (!(object->m_type & CMapBaseObj::Type_MapObjDef)) {
         return;
     }
 
@@ -5047,7 +5138,7 @@ void World::UpdateObjectFadeouts() {
 
         if (elapsed <= 2000 && model->CanUpdateNonReadyTextures()) {
             if (fadeout->m_transportGuid) {
-                CGObject_C* transport = ClntObjMgrObjectPtr(fadeout->m_transportGuid, TYPEMASK_GAMEOBJECT, __FILE__, __LINE__);
+                CGObject_C* transport = ClntObjMgrObjectPtr(fadeout->m_transportGuid, TYPE_GAMEOBJECT, __FILE__, __LINE__);
 
                 if (transport) {
                     model->SetWorldTransform(fadeout->m_localTransform * transport->GetMatrix());
@@ -5161,7 +5252,7 @@ void CGObject_C::PrepareToFadeInt(CMapEntity* entity, float alpha, uint64_t tran
     fadeout->m_alpha = alpha;
 
     if (transportGuid) {
-        CGObject_C* transport = ClntObjMgrObjectPtr(WOWGUID{ transportGuid }, TYPEMASK_GAMEOBJECT, __FILE__, __LINE__);
+        CGObject_C* transport = ClntObjMgrObjectPtr(WOWGUID{ transportGuid }, TYPE_GAMEOBJECT, __FILE__, __LINE__);
 
         if (transport) {
             fadeout->m_transportGuid.m_guid = transportGuid;
@@ -5263,9 +5354,9 @@ CMapBaseObj* CWorld::ObjectCreate(const char* name, const C3Vector& position, fl
 void World::ObjectSetSequenceFinishedCallback(CMapEntity* entity, void (*callback)(CM2Model* model, uint32_t boneId, uint32_t sequenceId, int32_t interrupted, uint32_t time, uint64_t param), uint64_t param, uint16_t doodad) {
     CMapBaseObj* object = entity;
 
-    if (object->m_type & 0x8) {
+    if (object->m_type & CMapBaseObj::Type_MapObjDef) {
         static_cast<CMapObjDef*>(object)->SetSequenceFinishedCallback(callback, param, doodad);
-    } else if ((object->m_type & 0x40) && entity->m_model) {
+    } else if ((object->m_type & CMapBaseObj::Type_DoodadDef) && entity->m_model) {
         entity->m_model->SetSequenceCallback(reinterpret_cast<void*>(callback), param);
     }
 }
@@ -5277,9 +5368,9 @@ void World::ObjectUpdate(CMapBaseObj* object, const C3Vector* position, float fa
         CMap::SnapBaseObjToSubChunk(object, position, facing);
     }
 
-    if (object->m_type & 0x8) {
+    if (object->m_type & CMapBaseObj::Type_MapObjDef) {
         CMapObjDef::UpdatePos(static_cast<CMapObjDef*>(object), position, facing, a4, a5);
-    } else if (object->m_type & 0x40) {
+    } else if (object->m_type & CMapBaseObj::Type_DoodadDef) {
         CMap::UpdateDoodadDef(static_cast<CMapDoodadDef*>(object), position, facing);
     }
 }
@@ -5289,9 +5380,9 @@ void World::ObjectUpdate(CMapBaseObj* object, const C3Vector* position, float fa
 void World::ObjectUpdate(CMapEntity* entity, const C44Matrix& matrix) {
     CMapBaseObj* object = entity;
 
-    if (object->m_type & 0x8) {
+    if (object->m_type & CMapBaseObj::Type_MapObjDef) {
         CMapObjDef::UpdateMatrix(reinterpret_cast<CMapObjDef*>(object), matrix);
-    } else if (object->m_type & 0x40) {
+    } else if (object->m_type & CMapBaseObj::Type_DoodadDef) {
         CMap::UpdateDoodadDefTransform(reinterpret_cast<CMapDoodadDef*>(object), matrix);
     }
 }
@@ -5307,11 +5398,11 @@ void World::SetFrameCntCallback(void (*callback)()) {
 bool World::ObjectTestConvexVolume(CMapEntity* entity, const C3Vector& point) {
     uint16_t type = entity->m_type;
 
-    if (type & 0x8) {
+    if (type & CMapBaseObj::Type_MapObjDef) {
         return static_cast<CMapObjDef*>(static_cast<CMapBaseObj*>(entity))->m_owner->TestConvexVolume(point);
     }
 
-    if (!(type & 0x40)) {
+    if (!(type & CMapBaseObj::Type_DoodadDef)) {
         return true;
     }
 

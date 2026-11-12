@@ -7,6 +7,7 @@
 #include "WoW/Source/WorldClient/DayNight.h"
 #include "WoW/Source/WorldClient/DayNight__DNInfo.h"
 #include "WoW/Source/WowSvcs/WowSvcsClient/ClientServices.h"
+#include "SXC/Sky/Sky.h"  // SXC:
 
 // STATIC: 0x00D37F80
 static void (*s_timeCallbacks[4])(int32_t hour, int32_t minute);
@@ -18,6 +19,7 @@ static void UpdateTime() {
     info->m_timeOfDay = g_clientGameTime.GetHourAndMinutes();
     info->m_dayProgression = g_clientGameTime.GameTimeGetDayProgression();
     info->m_day = static_cast<float>(g_clientGameTime.GetDaysSinceEpoch());
+    SXC::Sky::Time(info);  // SXC: the sky's time
     DayNight::Update(1, nullptr);
 
     for (uint32_t i = 0; i < sizeof(s_timeCallbacks) / sizeof(s_timeCallbacks[0]); i++) {

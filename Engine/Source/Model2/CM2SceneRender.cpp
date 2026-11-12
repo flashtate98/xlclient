@@ -19,9 +19,22 @@
 #include "Engine/Source/Tempest/C4Vector.h"
 #include "Engine/Source/Tempest/CMath.h"
 #include "Engine/Source/Tempest/CImVector.h"
+#include "SXC/Lights/Lights.h"  // SXC: which of our lights a model takes
+#include "SXC/Settings/Settings.h"  // SXC: [Models] AlphaKeyRetail
+#include "WarcraftXL/Seams.h"
+
+namespace {
+    // SXC: the alpha key's reference. 3.3.5 keeps alpha >= 224/255; later clients keep >= 128/255, and
+    // their textures (Cataclysm corals, bushes, grasses) put the cut there, so at 224 they vanish.
+    float AlphaKeyRef() {
+        static SXC::Settings::Bool s_retail("Models", "AlphaKeyRetail", true, "Alpha key at 128 (retail)",
+                                            "Cut alpha-keyed model textures at 128/255 like later clients, so retail and retroported models show. Off: 3.3.5's 224/255.");
+        return s_retail.Get() ? 0.50196081f : 0.87843138f;
+    }
+}
 
 // STATIC: 0x00A45390
-const uint32_t s_fogModes[7] = { 1, 1, 1, 2, 2, 3, 4 };
+const uint32_t s_fogModes[M2BLEND_COUNT] = { 1, 1, 1, 2, 2, 3, 4, 2 };
 
 // STATIC: 0x00AF58A8
 static C44Matrix s_identity;
@@ -53,7 +66,7 @@ CM2SceneRender::CM2SceneRender(CM2Scene* scene) {
     this->m_prevMaterial = nullptr;
     this->m_curMaterial = nullptr;
     this->m_defaultMaterial.m_flags = 0;
-    this->m_defaultMaterial.m_blendMode = 0;
+    this->m_defaultMaterial.m_blendMode = M2BLEND_OPAQUE;
     this->m_particleEffect = CShaderEffectManager::GetEffect("Particle");
     this->m_particleUnlitEffect = CShaderEffectManager::GetEffect("Particle_Unlit");
     this->m_projectedModModEffect = CShaderEffectManager::GetEffect("Projected_ModMod");
@@ -65,6 +78,8 @@ CM2SceneRender::CM2SceneRender(CM2Scene* scene) {
 // VERIFY: 43a75437 manual
 // OFFSET: 0x0081F450
 void CM2SceneRender::SetupTextures() {
+    SXC::Lights::ClearDrawGlow();  // SXC: glows (SetDrawGlow below)
+
     if (this->m_curType > 2) {
         for (uint32_t i = 0; i < 2; i++) {
             g_theGxDevicePtr->RsSet(static_cast<EGxRenderState>(GxRs_Texture0 + i), nullptr);
@@ -89,6 +104,7 @@ void CM2SceneRender::SetupTextures() {
     }
 
     uint32_t i = 0;
+    CTexture* glowStages[2] = { nullptr, nullptr };  // SXC: the stages' textures, for the model's glows
 
     if (count) {
         uint32_t shift = 4;
@@ -109,6 +125,10 @@ void CM2SceneRender::SetupTextures() {
 
             g_theGxDevicePtr->RsSet(static_cast<EGxRenderState>(GxRs_Texture0 + i), gxTex);
 
+            if (i < 2 && gxTex) {
+                glowStages[i] = this->m_curModel->m_textures[combo];
+            }
+
             uint32_t transform = this->m_data->m_textureTransformCombos[i + this->m_curBatch->m_textureTransformComboIndex];
             uint32_t stage = envSecond ? 1 : i;
             uint16_t shader = this->m_curBatch->m_shader;
@@ -126,6 +146,8 @@ void CM2SceneRender::SetupTextures() {
             if (shift >= 4) shift -= 4;
             i++;
         } while (i < count);
+
+        SXC::Lights::SetDrawGlow(this->m_curModel, glowStages);  // SXC:
 
         if (i >= 2) {
             return;
@@ -284,7 +306,7 @@ void CM2SceneRender::SetupMaterial() {
         int32_t blend;
 
         if (this->m_curElement->m_flags & 1) {
-            blend = this->m_curMaterial->m_blendMode == 1;
+            blend = this->m_curMaterial->m_blendMode == M2BLEND_ALPHA_KEY;
         } else {
             blend = s_blendModes[this->m_pass][this->m_curMaterial->m_blendMode];
         }
@@ -294,10 +316,11 @@ void CM2SceneRender::SetupMaterial() {
 
         float alphaRef;
 
-        if (!this->m_curMaterial->m_blendMode) {
+        // WarcraftXL: blend add (7) adds colour where alpha is 0 too, so nothing may be alpha-tested away
+        if (this->m_curMaterial->m_blendMode == M2BLEND_OPAQUE || this->m_curMaterial->m_blendMode == M2BLEND_BLEND_ADD) {
             alphaRef = 0.0f;
-        } else if (this->m_curMaterial->m_blendMode == 1) {
-            alphaRef = this->m_curElement->m_alpha * 0.87843138f;
+        } else if (this->m_curMaterial->m_blendMode == M2BLEND_ALPHA_KEY) {
+            alphaRef = this->m_curElement->m_alpha * AlphaKeyRef();
         } else {
             alphaRef = 0.0039215689f;
         }
@@ -364,10 +387,10 @@ void CM2SceneRender::SetupMaterial() {
 
     C3Vector diffuse = this->m_curModel->m_diffuseColor;
     C3Vector emissive = this->m_curModel->m_emissiveColor;
-    uint16_t blend = this->m_curMaterial->m_blendMode;
+    M2BLEND blend = this->m_curMaterial->m_blendMode;
 
-    if (blend == 5 || blend == 6) {
-        if (blend == 6) {
+    if (blend == M2BLEND_MOD || blend == M2BLEND_MOD2X) {
+        if (blend == M2BLEND_MOD2X) {
             scale = 0.5f;
         }
 
@@ -463,7 +486,7 @@ void CM2SceneRender::DrawBatch() {
 
     CGxBatch batch;
     batch.m_primType = GxPrim_Triangles;
-    batch.m_start = M2ProcessedIndexStart(this->m_curSkinSection);
+    batch.m_start = M2SkinSectionDrawStart(*this->m_curSkinSection);
     batch.m_count = this->m_curSkinSection->m_indexCount;
 
     if (CShaderEffect::s_enableShaders) {
@@ -488,6 +511,10 @@ void CM2SceneRender::DrawBatch() {
         batch.m_minIndex = 0;
         batch.m_maxIndex = this->m_curSkinSection->m_vertexCount - 1;
         g_theGxDevicePtr->Draw(&batch, 1);
+    }
+
+    if (wxl::seam::Listening(WXL_EV_ModelBatchDrawn)) {
+        wxl::seam::M2::DrawBatch::After(this);
     }
 }
 
@@ -572,8 +599,8 @@ void CM2SceneRender::DrawBatchProj() {
 
     effect->SetCurrent();
     this->SetupBillboardView(*reinterpret_cast<const C3Vector*>(&this->m_scene->m_viewInv.d0));
-    CShaderEffect::SetTexMtx_TexGen(GxTexGen_EyeLinear, texMatrix, 0);
-    CShaderEffect::SetTexMtx_TexGen(GxTexGen_EyeLinear, depthMatrix, 1);
+    CShaderEffect::SetTexMtx_TexGen(GxTexGen_World, texMatrix, 0);
+    CShaderEffect::SetTexMtx_TexGen(GxTexGen_World, depthMatrix, 1);
     this->m_scene->m_projectTextureCallback(box, imColor, this->m_curLocalLighting, this->m_scene->m_projectTextureParam, (this->m_curModel->m_fFlags >> 2) & 1);
     g_theGxDevicePtr->XformSetView(s_identity);
 
@@ -609,17 +636,30 @@ void CM2SceneRender::DrawBatchDoodad(M2Element* elements, uint32_t* indices) {
 
     CGxBatch batch;
     batch.m_primType = GxPrim_Triangles;
-    batch.m_start = M2ProcessedIndexStart(this->m_curSkinSection);
+    batch.m_start = M2SkinSectionDrawStart(*this->m_curSkinSection);
     batch.m_count = 0;
     batch.m_minIndex = 0;
     batch.m_maxIndex = 0;
 
     if (CShaderEffect::s_enableShaders) {
         this->m_curShared->SetVertices(0);
+        const uint32_t most = instances;
 
         for (uint32_t done = 0; done < total; done += instances) {
-            if (done + instances > total) {
-                instances = total - done;
+            instances = done + most > total ? total - done : most;
+
+            // SXC: a run of instances on the same side (inside / outside a WMO), so each draw takes the
+            // right lights (step 6c).
+            {
+                const SXC::Lights::Surface side = SXC::Lights::ModelSurface(elements[indices[done]].m_model);
+                uint32_t same = 1;
+
+                while (same < instances && SXC::Lights::ModelSurface(elements[indices[done + same]].m_model) == side) {
+                    same++;
+                }
+
+                instances = same;
+                SXC::Lights::SetDrawModel(elements[indices[done]].m_model);
             }
 
             float* constants = g_theGxDevicePtr->ShaderConstantsLock(GxSh_Vertex) + 31 * 4;
@@ -862,7 +902,7 @@ uint32_t CM2SceneRender::DrawParticle(uint32_t index, M2Element* elements, uint3
         material.m_flags |= 0x10;
     }
 
-    material.m_blendMode = static_cast<uint16_t>(ParticleBlendToM2Blend(emitter->m_params.m_materialBlend));
+    material.m_blendMode = static_cast<M2BLEND>(ParticleBlendToM2Blend(emitter->m_params.m_materialBlend));
 
     this->m_curMaterial = &material;
     this->m_prevMaterial = nullptr;
@@ -943,7 +983,7 @@ void CM2SceneRender::Draw(M2PASS pass, M2Element* elements, uint32_t* indices, u
     world.m_flags[world.m_level] &= ~CGxMatrixStack::F_Identity;
     world.m_mtx[world.m_level] = s_identity;
 
-    GxRsSet(GxRs_DepthFunc, 0);
+    GxRsSet(GxRs_DepthFunc, GxCmp_LEqual);
     GxRsSet(GxRs_PolygonOffset, 0);
     GxRsSet(GxRs_Lighting, 0);
     GxRsSet(GxRs_Fog, 0);
@@ -986,6 +1026,8 @@ void CM2SceneRender::Draw(M2PASS pass, M2Element* elements, uint32_t* indices, u
         this->m_curMaterial = &this->m_defaultMaterial;
         this->m_data = this->m_curShared->m_data;
         this->m_cache->LinkToSharedUpdateList(this->m_curShared);
+        SXC::Lights::SetDrawModel(this->m_curModel);  // SXC: which of our lights it takes (inside / outside)
+        SXC::Lights::ClearDrawGlow();                 // SXC: a batch's SetupTextures sets its own
 
         switch (this->m_curElement->m_type) {
             case 0:
@@ -1022,6 +1064,8 @@ void CM2SceneRender::Draw(M2PASS pass, M2Element* elements, uint32_t* indices, u
         this->m_prevSkinSection = this->m_curSkinSection;
         this->m_prevMaterial = this->m_curMaterial;
     }
+
+    SXC::Lights::SetDrawModel(nullptr);  // SXC:
 
     for (uint32_t xf = GxXform_Tex0; xf <= GxXform_World; xf++) {
         CGxMatrixStack& stack = g_theGxDevicePtr->m_xforms[xf];

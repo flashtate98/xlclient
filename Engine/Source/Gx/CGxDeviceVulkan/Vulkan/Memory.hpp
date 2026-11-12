@@ -30,6 +30,10 @@ namespace gxvk::vk::memory
         /// this module holds less than half of that heap, else exactly HostVisible. Mapped, never
         /// read back by the CPU (write-combined either way).
         Stream,
+        /// SXC: what the GPU writes for the CPU to read: HOST_VISIBLE | HOST_CACHED (+ HOST_COHERENT
+        /// when offered), so reads run at memory speed rather than across the bus uncached; else
+        /// HostVisible. InvalidateHost() before reading.
+        Readback,
     };
 
     /// One sub-allocation out of a block. The holder never frees `memory` itself.
@@ -172,6 +176,11 @@ namespace gxvk::vk::memory
      * @return bool ok : false only when the flush itself failed, which is logged
      */
     bool FlushHost(const Block& block);
+
+    /// SXC: the reading side of FlushHost(): before the CPU reads what the GPU wrote into a mapped
+    /// block (its frame waited), the block's range made visible to the host where the memory type isn't
+    /// coherent. Nothing to do on a coherent type. False only when the call itself failed (logged).
+    bool InvalidateHost(const Block& block);
 
     /**
      * What the allocator has done, for the log.

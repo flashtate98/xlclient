@@ -27,6 +27,8 @@ companion pixel module -- the fixed-function stage D3D runs after them -- is gen
 """
 import collections
 import math
+import os
+import re
 
 from . import dx9ir as ir
 
@@ -50,6 +52,38 @@ for _i in range(8):
 FOG_ROW = 15
 
 SWZ = ir.SWZ
+
+# SXC: our point lights on models and WMOs, per pixel (port plan step 6b). Every vertex module writes
+# two more varyings, the view position and normal as the record had them (w 1 where found, 0 else),
+# at locations past the semantics'. In the model and WMO vertex families they're captured where the
+# record has them: the projection's input (dp4 oPos, c2..c5, rP) and the normal the sun lights
+# (dp3 ..., -c12, rN), the same constants in every model (Diffuse_*, Color_*, CDiffuse_*) and WMO
+# (MapObj*) record. The pixel modules of those families add the lights (Lights.glsl, inlined, set 3)
+# to their lit colour input (color0) and carry `flag lights`; the device binds the lights' set then.
+SXC_VIEW_LOCATION, SXC_NORMAL_LOCATION = 11, 12
+SXC_LIT_VERTEX = ('Diffuse_', 'Color_', 'CDiffuse_', 'MapObj')
+SXC_LIT_PIXEL = ('Combiners_', 'MapObj', 'DetailDoodad')   # DetailDoodad: the instanced grass (step 7c) writes the view position and normal
+# SXC: glows (kb: emitters). The model and WMO pixel modules keep what they sampled from texture stages 0
+# and 1 (sampler slots 0 and 1) and add a glow of one of them to their output: pixel rows 13 and 14,
+# which no stock pixel shader reads, carry it per draw (SXC::Lights::DrawGlow; row 13 w 0: none).
+#   p[13] rgb the glow's colour x strength, w the mode (1 the whole texture, 2 by its alpha, 3 its
+#         pixels brighter than a threshold); p[14] x the stage, y the threshold, z the knee's width.
+# It is added after the module's own fog, faded by the fog factor (fog0) where the module reads one.
+SXC_GLOW_STAGES = (0, 1)
+SXC_GLOW_ROW, SXC_GLOW_ROW2 = 13, 14
+SXC_PROJECTION = (2, 3, 4, 5)
+SXC_SUN = 12
+SXC_LIGHTS_GLSL = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..',
+                                                'Engine', 'Source', 'Gx', 'CGxDeviceVulkan', 'Shaders', 'Lights.glsl'))
+
+
+def sxc_lights_source():
+    """Lights.glsl's text, or None when the translator runs outside the client's tree."""
+    try:
+        with open(SXC_LIGHTS_GLSL, 'r', encoding='utf-8') as f:
+            return f.read()
+    except OSError:
+        return None
 
 
 class Refused(Exception):
@@ -106,6 +140,14 @@ class Emitter(object):
         self.depth = 1
         self.loopn = 0
         self.ops_used = collections.Counter()
+        # SXC: step 6b (the lights on models and WMOs)
+        name = getattr(rec, 'name', '') or ''
+        self.sxc_lit_vertex = self.vs and name.startswith(SXC_LIT_VERTEX)
+        self.sxc_lit_pixel = not self.vs and name.startswith(SXC_LIT_PIXEL)
+        self.sxc_view_done = False
+        self.sxc_normal_done = False
+        self.sxc_lights = None
+        self.sxc_glow_tex = set()   # stages whose sample the glow may take
 
     # -- operands ---------------------------------------------------------------------------------
 
@@ -362,11 +404,35 @@ class Emitter(object):
         d = i.dst
         self.assign(d, vec='%s * %s + %s' % tuple(self.srcm(s, d) for s in i.srcs[:3]))
 
+    # SXC: step 6b. A temp register a two-source op pairs with one of `consts` (negated or not), else None.
+    def sxc_paired_temp(self, i, consts, negated):
+        a, b = i.srcs[0], i.srcs[1]
+        for c, t in ((a, b), (b, a)):
+            if (c.rtype == ir.RT_CONST and not c.rel and c.index in consts and c.index not in self.defs and (c.mod == 1) == negated
+                    and t.rtype == ir.RT_TEMP and not t.rel and t.mod == 0):
+                self.temps.add(t.index)
+                return 'r%d' % t.index
+        return None
+
     def r_dp3(self, i):
+        # SXC: the normal the sun lights (dp3 ..., -c12, rN), captured before the op can overwrite it.
+        if self.sxc_lit_vertex and not self.sxc_normal_done:
+            n = self.sxc_paired_temp(i, (SXC_SUN,), True)
+            if n:
+                self.line('sxcNormal = vec4(%s.xyz, 1.0);   // SXC: the normal the sun lights (our lights, step 6b)' % n)
+                self.sxc_normal_done = True
         a, b = self.src_sw(i.srcs[0], [0, 1, 2]), self.src_sw(i.srcs[1], [0, 1, 2])
         self.assign(i.dst, scalar='dot(%s, %s)' % (a, b))
 
     def r_dp4(self, i):
+        # SXC: the view position the projection takes (dp4 oPos, c2..c5, rP).
+        if self.sxc_lit_vertex and not self.sxc_view_done and i.dst.rtype in (ir.RT_RASTOUT, ir.RT_OUTPUT):
+            nm = self.regname(i.dst)
+            if nm == 'oPos' or 'position0' in self.out_sems.get(nm, []):
+                p = self.sxc_paired_temp(i, SXC_PROJECTION, False)
+                if p:
+                    self.line('sxcView = vec4(%s.xyz, 1.0);   // SXC: the view position (our lights, step 6b)' % p)
+                    self.sxc_view_done = True
         self.assign(i.dst, scalar='dot(%s, %s)' % (self.src(i.srcs[0]), self.src(i.srcs[1])))
 
     def r_dp2add(self, i):
@@ -478,6 +544,12 @@ class Emitter(object):
         if t is None:
             raise Refused('s%d sampled without a dcl' % samp.index)
         uv = self.src_sw(coord, [0, 1] if t == '2d' else [0, 1, 2])
+        if self.sxc_lit_pixel and t == '2d' and samp.index in SXC_GLOW_STAGES:
+            # SXC: kept for the glow (the last sample of the stage).
+            self.sxc_glow_tex.add(samp.index)
+            self.line('sxcTex%d = texture(s%d, %s);' % (samp.index, samp.index, uv))
+            self.assign(i.dst, full='sxcTex%d' % samp.index)
+            return
         self.assign(i.dst, full='texture(s%d, %s)' % (samp.index, uv))
 
     def r_texldl(self, i):
@@ -581,6 +653,11 @@ class Emitter(object):
                 if s not in self.reads:
                     self.reads.append(s)
             self.vconst = VCONST_SMALL
+            # SXC: step 6b. A model or WMO pixel module with a lit colour input adds our lights to it.
+            if self.sxc_lit_pixel and 'color0' in self.reads:
+                self.sxc_lights = sxc_lights_source()
+                if self.sxc_lights:
+                    self.flags.add('lights')
         return self.text()
 
     def text(self):
@@ -606,11 +683,18 @@ class Emitter(object):
                     continue
                 t = VARYING_TYPE.get(sem, 'vec4')
                 P('layout(location = %d) out %s %s;' % (VARYING_LOCATION[sem], t, sem))
+            P('// SXC: the view position and normal for our lights (step 6b; w 1 where the record has them).')
+            P('layout(location = %d) out vec4 sxcView;' % SXC_VIEW_LOCATION)
+            P('layout(location = %d) out vec4 sxcNormal;' % SXC_NORMAL_LOCATION)
         else:
             P('// Varyings read, by semantic, at the same locations the vertex module writes them.')
             for sem in self.reads:
                 t = VARYING_TYPE.get(sem, 'vec4')
                 P('layout(location = %d) in %s %s;' % (VARYING_LOCATION[sem], t, sem))
+            if self.sxc_lights:
+                P('// SXC: the view position and normal the vertex module captured, for our lights (step 6b).')
+                P('layout(location = %d) in vec4 sxcView;' % SXC_VIEW_LOCATION)
+                P('layout(location = %d) in vec4 sxcNormal;' % SXC_NORMAL_LOCATION)
             P('')
             P('layout(location = 0) out vec4 oC0;')
             if self.samplers:
@@ -629,6 +713,10 @@ class Emitter(object):
         P('    vec4 misc;       // misc.x = alphaRef / 255 (fixed-function alpha test, 0 = off)')
         P('    vec4 v[%d];     // vertex c0..c%d' % (self.vconst, self.vconst - 1))
         P('} regs;')
+        if self.sxc_lights:
+            P('')
+            P('// SXC: our point lights (Shaders/Lights.glsl, as the client tree had it at translation).')
+            L.extend(self.sxc_lights.rstrip('\n').split('\n'))
         if self.defs or self.defi:
             P('')
             P('// Constants the bytecode def\'s: literals, never uploaded by the engine.')
@@ -671,8 +759,12 @@ class Emitter(object):
         if self.vs:
             for nm in self.outregs:
                 P('    vec4 %s = vec4(0.0);' % nm)
+            P('    sxcView = vec4(0.0);')
+            P('    sxcNormal = vec4(0.0);')
         else:
             P('    oC0 = vec4(0.0);')
+            for s in sorted(self.sxc_glow_tex):
+                P('    vec4 sxcTex%d = vec4(0.0);   // SXC: stage %d as sampled, for the glow' % (s, s))
             for nm, sem in self.inputs.items():
                 if sem == 'fog0':
                     rhs = 'vec4(fog0, 0.0, 0.0, 0.0)'
@@ -680,6 +772,8 @@ class Emitter(object):
                     rhs = 'clamp(%s, 0.0, 1.0)' % sem       # ps_2_0 colour inputs are clamped by SM2
                 else:
                     rhs = sem
+                if sem == 'color0' and self.sxc_lights:
+                    rhs = 'LightsModelColor(%s, sxcView, sxcNormal)' % rhs   # SXC: our lights join the lit colour
                 P('    vec4 %s = %s;' % (nm, rhs))
         P('')
         L.extend(self.body)
@@ -698,6 +792,22 @@ class Emitter(object):
                     else:
                         P('    %s = %s;' % (sem, nm))
         else:
+            if self.sxc_glow_tex:
+                stages = sorted(self.sxc_glow_tex)
+                pick = 'sxcTex%d' % stages[-1]
+                for s in reversed(stages[:-1]):
+                    pick = '(int(regs.p[%d].x + 0.5) == %d ? sxcTex%d : %s)' % (SXC_GLOW_ROW2, s, s, pick)
+                fog = 'fog0' if 'fog0' in self.reads else '1.0'
+                P('    // SXC: the draw\'s glow (pixel rows %d, %d: SXC::Lights::DrawGlow), after the fog, faded by it.' % (SXC_GLOW_ROW, SXC_GLOW_ROW2))
+                P('    if (regs.p[%d].w > 0.5)' % SXC_GLOW_ROW)
+                P('    {')
+                P('        vec4 g = %s;' % pick)
+                P('        float mode = regs.p[%d].w;' % SXC_GLOW_ROW)
+                P('        float lit = max(g.r, max(g.g, g.b));')
+                P('        float mask = mode < 1.5 ? 1.0 : mode < 2.5 ? g.a : smoothstep(regs.p[%d].y, regs.p[%d].y + max(regs.p[%d].z, 0.001), lit);'
+                  % (SXC_GLOW_ROW2, SXC_GLOW_ROW2, SXC_GLOW_ROW2))
+                P('        oC0.rgb += g.rgb * regs.p[%d].rgb * mask * clamp(%s, 0.0, 1.0);' % (SXC_GLOW_ROW, fog))
+                P('    }')
             P('    // The alpha test (GxRs_AlphaRef) is not in the bytecode: GREATEREQUAL against')
             P('    // misc.x = alphaRef / 255, off when 0.')
             P('    if (regs.misc.x > 0.0 && oC0.a < regs.misc.x) discard;')
@@ -852,7 +962,7 @@ def companion_block(md5, meta, names, spv_rel):
     return '\n'.join(L)
 
 
-def manifest_block(em, rec, spv_rel, companion=None):
+def manifest_block(em, rec, spv_rel, companion=None, instanced=None):
     L = ['record %s %s %s %s vconst=%d pconst=%d'
          % (rec.md5, rec.kind, em.sh.profile, spv_rel, em.vconst, PCONST)]
     for n in rec.names:
@@ -871,4 +981,108 @@ def manifest_block(em, rec, spv_rel, companion=None):
         L.append('flag %s' % f)
     if companion:
         L.append('companion %s' % companion)
+    if instanced:
+        L.append('instanced %s' % instanced)   # SXC: the instanced grass variant (step 7)
     return '\n'.join(L)
+
+
+# SXC: the instanced grass (port plan step 7). The client bakes every plant of a ground-effect batch
+# into chunk space on the CPU (CDetailDoodadInstBatch::FillVertices) and re-bakes whenever the stream
+# buffer loses its contents. The device draws the plants instanced instead: each plant model's vertices
+# once, each plant's placement as a 3x4 (world rows, relative to the world origin) in a per-instance
+# stream with its normal and colour. The variant below is the stock DetailDoodad vertex module with only
+# its position input replaced: the model-space position at location 0 through the plant's rows
+# (locations 13..15); the normal and colour keep their locations (the device feeds them per instance),
+# so every output of every shadow variant stays the client's own. Never matched at a create: the stock
+# record's `instanced` line names it; manifest `flag grass`.
+GRASS_ROW_LOCATIONS = (13, 14, 15)
+
+
+def is_grass_vertex(rec):
+    return rec.kind == 'vertex' and any(n.split(':')[0] == 'DetailDoodad' for n in rec.names)
+
+
+SXC_GRASS_MOTION_GLSL = os.path.join(os.path.dirname(SXC_LIGHTS_GLSL), 'GrassMotion.glsl')
+SXC_GRASS_DENSITY_GLSL = os.path.join(os.path.dirname(SXC_LIGHTS_GLSL), 'GrassDensity.glsl')
+SXC_GRASS_MARKS_GLSL = os.path.join(os.path.dirname(SXC_LIGHTS_GLSL), 'GrassMarks.glsl')
+GRASS_VCONST = 256   # the motion's rows from c64 on (GrassMotion.glsl), the density's at c148 (GrassDensity.glsl), the marks' at c150 (GrassMarks.glsl)
+
+
+def grass_instanced_module(em, glsl):
+    """The variant; step 7b adds the wind and parting (GrassMotion.glsl, inlined) on the placed position,
+    step 7d the density's copies (GrassDensity.glsl): a copy is turned in model space, shifted in world
+    space before the bend, and scaled about its root after it (0: not drawn)."""
+    pos = [nm for nm, sem in em.inputs.items() if sem == 'position0']
+    tex = [nm for nm, sem in em.inputs.items() if sem == 'texcoord0']
+    nrm = [nm for nm, sem in em.inputs.items() if sem == 'normal0']
+    if len(pos) != 1 or len(tex) != 1 or len(nrm) != 1:
+        raise Refused('grass: no single position, normal0 or texcoord0 input')
+    decl = 'layout(location = 0) in vec4 %s;' % pos[0]
+    regs = 'vec4 v[%d];' % em.vconst
+    varyings = '    sxcView = vec4(0.0);\n    sxcNormal = vec4(0.0);\n'
+    if glsl.count(decl) != 1 or glsl.count('void main()\n{\n') != 1 or glsl.count(regs) != 1 or glsl.count(varyings) != 1:
+        raise Refused('grass: unexpected module text')
+    # Step 7c: our lights on grass. The view position (of the bent blade) and normal as the stock shader
+    # computes them (c0..c3 the world view: the position through all four, the normal through c0..c2).
+    glsl = glsl.replace(varyings,
+                        '    // SXC: the view position and normal for our lights (step 7c), as the stock record lights the blade.\n'
+                        '    sxcView = vec4((%(p)s.x * regs.v[0] + %(p)s.y * regs.v[1] + %(p)s.z * regs.v[2] + regs.v[3]).xyz, 1.0);\n'
+                        '    sxcNormal = vec4(%(n)s.x * regs.v[0].xyz + %(n)s.y * regs.v[1].xyz + %(n)s.z * regs.v[2].xyz, 1.0);\n'
+                        % {'p': pos[0], 'n': nrm[0]})
+    try:
+        with open(SXC_GRASS_MOTION_GLSL, 'r', encoding='utf-8') as f:
+            motion = f.read()
+        with open(SXC_GRASS_DENSITY_GLSL, 'r', encoding='utf-8') as f:
+            density = f.read()
+        with open(SXC_GRASS_MARKS_GLSL, 'r', encoding='utf-8') as f:
+            marks = f.read()
+    except OSError:
+        raise Refused('grass: GrassMotion.glsl, GrassDensity.glsl or GrassMarks.glsl not found')
+    # The ground marks tint the plant: its colour input becomes a variable set from the instance's.
+    col = [nm for nm, sem in em.inputs.items() if sem == 'color0']
+    tint = ''
+    if len(col) == 1:
+        m = re.search(r'layout\(location = (\d+)\) in vec4 %s;' % re.escape(col[0]), glsl)
+        if m:
+            glsl = glsl.replace(m.group(0), 'layout(location = %s) in vec4 sxcColour;   // SXC: the plant\'s colour, tinted by the marks\nvec4 %s;'
+                                % (m.group(1), col[0]), 1)
+            tint = ('    %(c)s = sxcColour;\n'
+                    '    %(c)s.rgb = mix(%(c)s.rgb, sxcTint.rgb, sxcTint.a);\n' % {'c': col[0]})
+    rows = '\n'.join('layout(location = %d) in vec4 sxcPlant%d;   // SXC: the plant\'s placement, row %d' % (loc, i, i)
+                     for i, loc in enumerate(GRASS_ROW_LOCATIONS))
+    glsl = glsl.replace(regs, 'vec4 v[%d];   // SXC: the grass motion\'s rows from c64 on' % GRASS_VCONST)
+    glsl = glsl.replace(decl, 'layout(location = 0) in vec4 sxcModelPosition;   // SXC: the plant model\'s vertex (instanced grass)\n'
+                        + rows + '\nvec4 %s;   // SXC: the position as the stock bake would have written it' % pos[0])
+    head = ('// SXC: the grass motion (Shaders/GrassMotion.glsl, as the client tree had it at translation).\n'
+            + motion.rstrip('\n') + '\n\n'
+            '// SXC: the grass density (Shaders/GrassDensity.glsl, as the client tree had it at translation).\n'
+            + density.rstrip('\n') + '\n\n'
+            '// SXC: the ground marks (Shaders/GrassMarks.glsl, as the client tree had it at translation).\n'
+            + marks.rstrip('\n') + '\n\nvoid main()\n{\n    vec4 sxcM = vec4(sxcModelPosition.xyz, 1.0);\n'
+            + ('    vec3 sxcShift;\n'
+               '    float sxcGrow = SxcGrassCopy(sxcM.xyz, %(n)s.xyz, sxcShift);\n'
+               '    vec3 sxcRoot = vec3(sxcPlant0.w, sxcPlant1.w, sxcPlant2.w) + sxcShift;\n'
+               '    vec4 sxcTint;\n'
+               '    float sxcSize;\n'
+               '    SxcGrassMarks(sxcRoot.xy, sxcTint, sxcSize, sxcMarkWind);\n'
+               '    sxcGrow *= sxcSize;\n' % {'n': nrm[0]})
+            + tint
+            + ('    %(p)s = vec4(dot(sxcPlant0, sxcM), dot(sxcPlant1, sxcM), dot(sxcPlant2, sxcM), 1.0);\n'
+               '    %(p)s.xyz += sxcShift;\n'
+               '    %(p)s.xyz = SxcGrassBend(%(p)s.xyz, %(t)s.y);\n'
+               '    %(p)s.xyz = sxcRoot + (%(p)s.xyz - sxcRoot) * sxcGrow;\n' % {'p': pos[0], 't': tex[0]}))
+    glsl = glsl.replace('void main()\n{\n', head)
+    return glsl.replace('// Generated by Tools/VulkanShaders', '// SXC: the instanced grass variant (step 7).\n// Generated by Tools/VulkanShaders', 1)
+
+
+def grass_block(em, rec, md5, spv_rel, companion=None):
+    block = manifest_block(em, rec, spv_rel, companion).split('\n')
+    head = block[0].split(' ', 2)[2].replace('vconst=%d' % em.vconst, 'vconst=%d' % GRASS_VCONST)
+    out = ['record %s %s' % (md5, head)]
+    for line in block[1:]:
+        if line.startswith('name '):
+            out.append(line + '@grass')
+        else:
+            out.append(line)
+    out.append('flag grass')
+    return '\n'.join(out)

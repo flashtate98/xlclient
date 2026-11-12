@@ -3,6 +3,7 @@
 #include <cstring>
 #include <malloc.h>
 #include "Engine/Source/FrameScript/FrameScript.h"
+#include "WarcraftXL/Profile.h"
 #include "WarcraftXL/Seams.h"
 #include "Engine/Source/FrameScript/FrameScript_Object.h"
 #include "Engine/Source/Base/Status.h"
@@ -14,6 +15,7 @@
 #include "Engine/Source/lua-5.1/src/lmemPool.h"
 #include "Engine/Source/lua-5.1/src/lua.h"
 #include "Engine/Source/lua-5.1/src/lualib.h"
+#include "WarcraftXL/Points.h"
 
 // STATIC: 0x00D3F780
 double s_scriptTimeDivisor;
@@ -1451,6 +1453,7 @@ void FrameScript_Destroy() {
 // VERIFY: 8009da99 manual
 // OFFSET: 0x0081AA00
 void FrameScript_SignalEvent(uint32_t index, lua_State* L, int32_t argCount) {
+    WXL_CORE_ZONE("FrameScript.SignalEvent");
     if (!s_scriptEvents.Count()) {
         return;
     }
@@ -1516,6 +1519,7 @@ void FrameScript_Flush() {
 // VERIFY: 34c0cd89 manual
 // OFFSET: 0x0081AC90
 void vFrameScript_SignalEvent(uint32_t index, const char* format, va_list args) {
+    WXL_POINT_3(index, format, args); // wxl.point
     wxl::seam::FrameScript::vSignalEvent::Before(index, format, args);
 
     if (!s_scriptEvents.Count()) {

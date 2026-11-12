@@ -9,9 +9,13 @@
 #include "Engine/Source/Gx/CGxDeviceVulkan/CGxDeviceVulkan.h"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Frame.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Pipelines.hpp"
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/View.hpp"  // SXC: a second view's copies
 #include "Engine/Source/Gx/CGxBuf.h"
 #include "Engine/Source/Gx/CGxPool.h"
 #include "Engine/Source/Gx/CGxTex.h"
+#include "SXC/Cover/Cover.h"  // SXC: projected textures on the raised covers
+#include "SXC/Lights/Lights.h"  // SXC: the draw's glow
+#include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler's draw count
 
 namespace frame     = gxvk::vk::frame;
 namespace pipelines = gxvk::vk::pipelines;
@@ -175,6 +179,69 @@ void CGxDeviceVulkan::Draw(CGxBatch* batch, int32_t count) {
 
     d.count = batch->m_count;
     d.topology = batch->m_primType;
+    if (!this->IDrawState(d)) {
+        return;
+    }
+
+    // SXC: a projected texture's box, shaded onto the raised covers (step 5e).
+    const SXC::Cover::Decal* decal = SXC::Cover::CurrentDecal();
+
+    if (decal && !this->IDecalOnCover(d, *decal)) {
+        return;
+    }
+
+    // The texture update may have ended the pass for an inline upload: open (resume) it for the draw.
+    VkCommandBuffer cmd = frame::Pass();
+
+    if (!cmd) {
+        return;
+    }
+
+    // SXC: the terrain's depth the decal reads, as this frame's terrain wrote it.
+    if (decal) {
+        frame::PixelWritesToReads(cmd);
+    }
+
+    // SXC: a raised terrain chunk: its flat self first, a little lower, under the raised surface.
+    if (d.terrainUnderlay) {
+        pipelines::Draw underlay = d;
+        underlay.terrainVertex = (d.terrainVertex & ~(pipelines::terrain::kVertexTess | pipelines::terrain::kVertexBigAlpha)) | pipelines::terrain::kVertexSunk;
+        underlay.terrainUnderlay = false;
+        pipelines::Record(cmd, frame::RenderPass(), frame::PassGeneration(), frame::Serial(), frame::Slot(), underlay);
+
+        if (gxvk::vk::view::Recording() && !colourTarget && !this->m_textureTarget[GxBuffers_Depth].m_texture) {
+            gxvk::vk::view::Copy(underlay, reinterpret_cast<const float*>(&this->m_projNative));
+        }
+    }
+
+    if (!pipelines::Record(cmd, frame::RenderPass(), frame::PassGeneration(), frame::Serial(), frame::Slot(), d)) {
+        return;
+    }
+
+    // SXC: a second view (the water's mirror) copies the scene's draws while it records.
+    if (gxvk::vk::view::Recording() && !colourTarget && !this->m_textureTarget[GxBuffers_Depth].m_texture) {
+        gxvk::vk::view::Copy(d, reinterpret_cast<const float*>(&this->m_projNative));
+    }
+
+    // SXC: the frame profiler's draw count.
+    if (SXC::Profiler::On()) {
+        const uint32_t n = d.count;
+        SXC::Profiler::CountDraw(d.topology == GxPrim_Triangles ? n / 3 : d.topology == GxPrim_TriangleStrip || d.topology == GxPrim_TriangleFan ? (n > 2 ? n - 2 : 0) : 0);
+    }
+
+    for (uint32_t stream = 0; stream < d.streamCount; stream++) {
+        this->INoteBufDrawn(streamBufs[stream]);
+    }
+
+    if (indexBuf) {
+        this->INoteBufDrawn(indexBuf);
+    }
+}
+
+// The engine's state of a draw, as Draw() reads it after the vertex streams: blend, render states, the
+// constants and programs, the texture stages, the alpha test and stage ops, the texture transforms,
+// the register files, the fog, the D3D placement. SXC: shared with the instanced grass (SxcGrassDraw).
+bool CGxDeviceVulkan::IDrawState(pipelines::Draw& d) {
     d.blend = this->m_appRenderStates[GxRs_BlendingMode].m_value.m_data.i[0];
     this->IRenderStates(d);
 
@@ -210,14 +277,24 @@ void CGxDeviceVulkan::Draw(CGxBatch* batch, int32_t count) {
     // The register files of a translated draw. Pixel row 15, which no shipped pixel shader reads,
     // carries the fixed-function fog colour and enable for the generated companion stages: the
     // engine's GxRs_FogColor is a D3DCOLOR (0xAARRGGBB), GxRs_Fog under the fog master enable.
-    float pixelRows[pipelines::kPixelRows * 4];
-    memcpy(pixelRows, this->m_pixelRegs, sizeof(pixelRows));
+    float* pixelRows = this->m_sxcPixelRows;
+    memcpy(pixelRows, this->m_pixelRegs, sizeof(this->m_sxcPixelRows));
     const uint32_t fogColour = this->m_appRenderStates[GxRs_FogColor].m_value.m_data.u[0];
     const bool fogOn = this->m_appRenderStates[GxRs_Fog].m_value.m_data.i[0] != 0 && (this->m_appMasterEnables & (1 << GxMasterEnable_Fog)) != 0;
     pixelRows[15 * 4 + 0] = ((fogColour >> 16) & 0xFF) / 255.0f;
     pixelRows[15 * 4 + 1] = ((fogColour >> 8) & 0xFF) / 255.0f;
     pixelRows[15 * 4 + 2] = (fogColour & 0xFF) / 255.0f;
     pixelRows[15 * 4 + 3] = fogOn ? 1.0f : 0.0f;
+    // SXC: rows 13 and 14, which no stock pixel shader reads either: while a model draws, its glow
+    // (SXC::Lights::DrawGlow; the translated model shaders add it). Every other translated draw gets no
+    // glow: the WMO modules add one too, and read whatever our water or terrain last set in these rows
+    // (Seyri, 2026-11-02: WMO interiors turned orange where no terrain or water drew). Our own water and
+    // terrain pipelines carry their own values here: left as they are.
+    if (SXC::Lights::DrawingModel()) {
+        memcpy(pixelRows + 13 * 4, SXC::Lights::DrawGlow(), 8 * sizeof(float));
+    } else if (d.fragment == pipelines::FragmentProgram::Translated) {
+        memset(pixelRows + 13 * 4, 0, 8 * sizeof(float));
+    }
     // SXC: the same fog for the fixed-function programs (Shaders/Push.glsl's fog), which D3D9 applies
     // as linear vertex fog (D3DRS_FOGVERTEXMODE LINEAR): the horizon's terrain and map objects rely on
     // it to turn into the fog colour.
@@ -229,78 +306,173 @@ void CGxDeviceVulkan::Draw(CGxBatch* batch, int32_t count) {
     d.vertexRegs = this->m_vertexRegs;
 
     if (!this->IPlaceD3d(d.viewport, d.scissor)) {
-        return;
+        return false;
     }
 
     d.viewport.x += kD3d9CentreShift;
     d.viewport.y += kD3d9CentreShift;
-
-    // The texture update may have ended the pass for an inline upload: open (resume) it for the draw.
-    VkCommandBuffer cmd = frame::Pass();
-
-    if (!cmd) {
-        return;
-    }
-
-    if (!pipelines::Record(cmd, frame::RenderPass(), frame::PassGeneration(), frame::Serial(), frame::Slot(), d)) {
-        return;
-    }
-
-    for (uint32_t stream = 0; stream < d.streamCount; stream++) {
-        this->INoteBufDrawn(streamBufs[stream]);
-    }
-
-    if (indexBuf) {
-        this->INoteBufDrawn(indexBuf);
-    }
+    return true;
 }
 
 // The texture transforms of stages 0 and 1 as CGxDeviceD3d::IXformSetTex (0x006A5AA0) sets them for
-// a stage with GxRs_TextureShader at 1 and no texgen: the texgen stack's top times the stage's
-// matrix stack's top, applied to (u, v, 1) -- the 2x2 part and the translation row (D3D's COUNT2
-// with the translation moved into the row the 1 multiplies). A stage without the flag, or with
-// texgen (which the fixed-function programs do not do), keeps the identity. Nothing is pushed for a
-// stage whose matrix is flagged identity.
+// a stage with GxRs_TextureShader at 1: per stage the columns giving u and v from (x, y, z, 1)
+// (Shaders/Push.glsl). Without texgen: the texgen stack's top times the stage's matrix stack's top,
+// applied to (u, v, 0, 1) -- the 2x2 part and the translation row (D3D's COUNT2 with the translation
+// moved into the row the 1 multiplies). SXC: with texgen from the camera-space position (D3D's
+// TCI_CAMERASPACEPOSITION for object linear, eye linear and mode 3; CGxDeviceD3d::ISetTexGen's texgen
+// matrix: the view's inverse, times the world's inverse for object linear, identity for mode 3) the
+// whole of World x View x texgen x Tex, applied to the vertex position: Tex for object linear, World x
+// Tex for eye linear (the projected textures: selection and spell target circles, blob shadows), World
+// x View x Tex for mode 3. The reflection, normal and sphere kinds stay unsupported (identity). A
+// stage without the flag keeps the identity; nothing is pushed for an identity transform.
 void CGxDeviceVulkan::ITexTransforms(pipelines::Draw& d) {
     for (uint32_t stage = 0; stage < 2; stage++) {
-        if (this->m_appRenderStates[GxRs_TextureShader0 + stage].m_value.m_data.i[0] != 1 || this->m_appRenderStates[GxRs_TexGen0 + stage].m_value.m_data.i[0] != GxTexGen_Disabled) {
+        if (this->m_appRenderStates[GxRs_TextureShader0 + stage].m_value.m_data.i[0] != 1) {
             continue;
         }
 
-        const CGxMatrixStack& texGen = this->m_texGen[stage];
+        const int32_t gen = this->m_appRenderStates[GxRs_TexGen0 + stage].m_value.m_data.i[0];
         const CGxMatrixStack& xform = this->m_xforms[GxXform_Tex0 + stage];
-        const bool genIdentity = (texGen.m_flags[texGen.m_level] & CGxMatrixStack::F_Identity) != 0;
-        const bool xformIdentity = (xform.m_flags[xform.m_level] & CGxMatrixStack::F_Identity) != 0;
-
-        if (genIdentity && xformIdentity) {
-            continue;
-        }
-
+        const C44Matrix& tex = xform.m_mtx[xform.m_level];
         C44Matrix m;
 
-        if (genIdentity) {
-            m = xform.m_mtx[xform.m_level];
-        } else if (xformIdentity) {
-            m = texGen.m_mtx[texGen.m_level];
+        if (gen == GxTexGen_ObjectLinear || gen == GxTexGen_World || gen == GxTexGen_View) {
+            const CGxMatrixStack& world = this->m_xforms[GxXform_World];
+            const CGxMatrixStack& view = this->m_xforms[GxXform_View];
+            m = gen == GxTexGen_ObjectLinear ? tex
+                : gen == GxTexGen_World  ? world.m_mtx[world.m_level] * tex
+                                             : world.m_mtx[world.m_level] * view.m_mtx[view.m_level] * tex;
+            d.params[1] = static_cast<float>(static_cast<uint32_t>(d.params[1]) | (4u << stage));
+        } else if (gen != GxTexGen_Disabled) {
+            continue;
         } else {
-            m = texGen.m_mtx[texGen.m_level] * xform.m_mtx[xform.m_level];
+            const CGxMatrixStack& texGen = this->m_texGen[stage];
+            const bool genIdentity = (texGen.m_flags[texGen.m_level] & CGxMatrixStack::F_Identity) != 0;
+            const bool xformIdentity = (xform.m_flags[xform.m_level] & CGxMatrixStack::F_Identity) != 0;
+
+            if (genIdentity && xformIdentity) {
+                continue;
+            }
+
+            m = genIdentity ? tex : xformIdentity ? texGen.m_mtx[texGen.m_level] : texGen.m_mtx[texGen.m_level] * tex;
+            m.c0 = 0.0f;  // (u, v, 0, 1): the third row isn't the plain transform's
+            m.c1 = 0.0f;
         }
 
-        float* part = &d.tex[stage * 4];
-        part[0] = m.a0;
-        part[1] = m.b0;
-        part[2] = m.a1;
-        part[3] = m.b1;
-        d.tex[8 + stage * 2] = m.d0;
-        d.tex[9 + stage * 2] = m.d1;
+        float* u = &d.tex[stage * 8];
+        float* v = u + 4;
+        u[0] = m.a0;
+        u[1] = m.b0;
+        u[2] = m.c0;
+        u[3] = m.d0;
+        v[0] = m.a1;
+        v[1] = m.b1;
+        v[2] = m.c1;
+        v[3] = m.d1;
     }
+}
+
+// SXC: a projected texture's box (SXC::Cover::DecalBegin, step 5e) as Shaders/Decal.* draw it: the
+// draw as the device read it off the engine (blend, alpha test, stage textures and ops, fog) with the
+// decal programs, which take the box's World x View and the native projection in vertex rows 0..7 and in
+// pixel rows 0..3 the stages' coordinates from the view-space position: for the fixed-function kind
+// D3D9's texgen matrix (CGxDeviceD3d::ISetTexGen: the view's inverse for eye linear, times the world's
+// inverse for object linear, identity for mode 3) times the stage's texture matrix; for a models'
+// projected batch its vertex constants c6..c9 and the stages modulating. Pixel row 4 the colour, row 5
+// the projection's z column, row 6 the viewport's depth range and the debug view. The depth tested, not
+// written (the pixel takes the terrain point's); only
+// the faces turned away from the camera: the box's outward faces are wound counter-clockwise in the
+// right-handed world; which winding the window shows them in turns over when the transform mirrors once
+// (the view's handedness flip, or the projection's), and the cull mode with it.
+bool CGxDeviceVulkan::IDecalOnCover(pipelines::Draw& d, const SXC::Cover::Decal& decal) {
+    if (!gxvk::vk::cover::Ready()) {
+        return false;
+    }
+
+    const CGxMatrixStack& worldStack = this->m_xforms[GxXform_World];
+    const CGxMatrixStack& viewStack = this->m_xforms[GxXform_View];
+    const C44Matrix world = (worldStack.m_flags[worldStack.m_level] & CGxMatrixStack::F_Identity) ? C44Matrix() : worldStack.m_mtx[worldStack.m_level];
+    const C44Matrix& view = viewStack.m_mtx[viewStack.m_level];
+    const C44Matrix& proj = this->m_projNative;
+    const C44Matrix worldView = world * view;
+
+    static float s_vertex[pipelines::kVertexRowsSmall * 4];
+    static float s_pixel[pipelines::kPixelRows * 4];
+    memset(s_vertex, 0, sizeof(s_vertex));
+    memset(s_pixel, 0, sizeof(s_pixel));
+    memcpy(&s_vertex[0], &worldView, 16 * sizeof(float));
+    memcpy(&s_vertex[16], &proj, 16 * sizeof(float));
+
+    if (decal.kind == 0) {
+        for (uint32_t stage = 0; stage < 2; stage++) {
+            const int32_t gen = this->m_appRenderStates[GxRs_TexGen0 + stage].m_value.m_data.i[0];
+            const CGxMatrixStack& xform = this->m_xforms[GxXform_Tex0 + stage];
+            const C44Matrix& tex = xform.m_mtx[xform.m_level];
+            C44Matrix m;
+
+            if (gen == GxTexGen_World) {
+                m = view.AffineInverse() * tex;
+            } else if (gen == GxTexGen_ObjectLinear) {
+                m = view.AffineInverse() * world.Inverse() * tex;
+            } else if (gen == GxTexGen_View) {
+                m = tex;
+            } else {
+                continue;   // no coordinates from the position: the stage's reads stay at (0, 0)
+            }
+
+            float* u = &s_pixel[stage * 8];
+            float* v = u + 4;
+            u[0] = m.a0;
+            u[1] = m.b0;
+            u[2] = m.c0;
+            u[3] = m.d0;
+            v[0] = m.a1;
+            v[1] = m.b1;
+            v[2] = m.c1;
+            v[3] = m.d1;
+        }
+    } else {
+        memcpy(&s_pixel[0], &this->m_vertexRegs[6 * 4], 4 * 4 * sizeof(float));   // c6, c7 (decal), c8, c9 (fade)
+        d.params[2] = 0.0f;   // modulate, modulate
+        d.params[3] = 0.0f;
+    }
+
+    d.params[1] = static_cast<float>(d.textureMask & 3u);
+    memcpy(&s_pixel[16], decal.colour, 4 * sizeof(float));
+    s_pixel[20] = proj.a2;   // row 5: the projection's z column
+    s_pixel[21] = proj.b2;
+    s_pixel[22] = proj.c2;
+    s_pixel[23] = proj.d2;
+    s_pixel[24] = d.viewport.minDepth;   // row 6: the viewport's depth range, the debug view
+    s_pixel[25] = d.viewport.maxDepth;
+    s_pixel[26] = decal.debug ? 1.0f : 0.0f;
+
+    d.vertex = pipelines::VertexProgram::Decal;
+    d.fragment = pipelines::FragmentProgram::Decal;
+    d.vertexRecord = nullptr;
+    d.fragmentRecord = nullptr;
+    d.vertexRows = pipelines::kVertexRowsSmall;
+    d.vertexRegs = s_vertex;
+    d.pixelRegs = s_pixel;
+    d.terrainUnderlay = false;
+    d.depthTest = true;
+    d.depthWrite = false;
+    d.depthFunc = 0;   // LESS_OR_EQUAL
+
+    const float det = worldView.a0 * (worldView.b1 * worldView.c2 - worldView.b2 * worldView.c1) - worldView.a1 * (worldView.b0 * worldView.c2 - worldView.b2 * worldView.c0)
+                      + worldView.a2 * (worldView.b0 * worldView.c1 - worldView.b1 * worldView.c0);
+    // Seen in game: the outward faces come out on the other winding than this derivation expected (the
+    // decal vanished with the camera inside a big box, as Consecration's), so the sense is the reverse.
+    const bool mirrored = (det < 0.0f) != (proj.a0 * proj.b1 < 0.0f);
+    d.cull = mirrored ? 2u : 1u;
+    return true;
 }
 
 // The render states as CGxDeviceD3d::IRsSendToHw (0x006A4C30) sends them, each under its master
 // enable: the depth function (ALWAYS when the test is off), the depth write, the colour write mask,
 // the culling (clamped to the table's three entries), the fill mode, D3D's DEPTHBIAS (the negated
 // GxRs_PolygonOffset, a depth-range value, scaled to the depth buffer's step) and D3D's BLENDFACTOR
-// (the Unk84 value replicated to every channel).
+// (the GxRs_BlendFactor value replicated to every channel).
 void CGxDeviceVulkan::IRenderStates(pipelines::Draw& d) {
     const uint32_t master = this->m_appMasterEnables;
 
@@ -331,7 +503,7 @@ void CGxDeviceVulkan::IRenderStates(pipelines::Draw& d) {
         d.depthBias = -this->m_appRenderStates[GxRs_PolygonOffset].m_value.m_data.f[0] * step;
     }
 
-    const float factor = this->m_appRenderStates[Unk84].m_value.m_data.f[0];
+    const float factor = this->m_appRenderStates[GxRs_BlendFactor].m_value.m_data.f[0];
     const float quantised = static_cast<float>(static_cast<uint32_t>(factor * 255.0f) & 0xFF) / 255.0f;
     d.blendConstant[0] = quantised;
     d.blendConstant[1] = quantised;

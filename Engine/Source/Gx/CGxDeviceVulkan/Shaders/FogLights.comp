@@ -1,0 +1,140 @@
+// SXC: our lights in the fog. One thread per froxel of the light volume (160 x 90 columns across the
+// world viewport, 64 slices by the distance out to fp.lights.z): the light of the lamps that reach the
+// froxel's centre (Lights.glsl's grid and lights, the surfaces' falloff without a facing term), through
+// their shadow maps (one tap: the fog is soft anyway), scattered toward the camera by a Henyey-Greenstein
+// phase (fp.lights.y: forward, so fog glows brighter looking toward a lamp; 1 at g = 0). Fog.frag and
+// Fog.comp add it to the fog's colour wherever there is fog to scatter it.
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+#define LIGHTS_COMPUTE
+#include "Fog.glsl"
+#include "Lights.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 10, rgba16f) uniform writeonly image3D lightVolumeOut;
+
+// A lamp's shadow map at a point in the air (no surface: no normal push; a small push toward the lamp
+// instead), one hardware-filtered tap. 1 lit, 0 shadowed.
+float FogShadow(Light l, vec3 p, vec3 toLamp, float d)
+{
+    int slot = int(l.extra.z + 0.5) - 1;
+
+    if (slot < 0)
+    {
+        return 1.0;
+    }
+
+    float near = lightShadowInfo.z;
+    float far = 1.0 / l.posInvRadius.w;
+    vec3 v = p + toLamp * (2.0 * d * lightShadowInfo.y) - l.posInvRadius.xyz;
+    vec3 a = abs(v);
+    int axis = a.x >= a.y && a.x >= a.z ? 0 : (a.y >= a.z ? 1 : 2);
+    float m = a[axis];
+
+    if (m <= near)
+    {
+        return 1.0;
+    }
+
+    vec2 uv = axis == 0 ? v.yz : (axis == 1 ? v.zx : v.xy);
+    uv = uv / m * 0.5 + 0.5;
+    float layer = float(slot * 6 + axis * 2 + (v[axis] < 0.0 ? 1 : 0));
+    float depth = far / (far - near) - far * near / ((far - near) * m);
+    vec2 g = vec2(0.0);
+    return textureGrad(lightShadows, vec4(uv, layer, depth), g, g);
+}
+
+// The lamps' light at a world point seen along `view` (camera to point, unit).
+vec3 LampsInFog(vec3 p, vec3 view)
+{
+    vec3 sum = vec3(0.0);
+
+    if (!LightsOn())
+    {
+        return sum;
+    }
+
+    int first = LightCellFirst(p.xy);
+    int perCell = int(lightInfo.x + 0.5);
+    float g = clamp(fp.lights.y, -0.9, 0.9);
+
+    for (int k = 0; k < kMaxLightsPerCell; k++)
+    {
+        if (k >= perCell)
+        {
+            break;
+        }
+
+        uint index = cellLights[first + k];
+
+        if (index == 0xFFFFFFFFu)
+        {
+            break;
+        }
+
+        Light l = lights[index];
+
+        // The fog is outside: a lamp indoors lights it only through its shadow map (its walls are in it).
+        bool shadowed = l.extra.z > 0.5;
+
+        if (!shadowed && l.extra.y > 0.5)
+        {
+            continue;
+        }
+
+        vec3 toLight = l.posInvRadius.xyz - p;
+        float d2 = dot(toLight, toLight);
+        float d = sqrt(d2);
+        float t = clamp(d * l.posInvRadius.w, 0.0, 1.0);
+        float window = (1.0 - t * t) * (1.0 - t * t);
+
+        if (window <= 0.0)
+        {
+            continue;
+        }
+
+        window = pow(window, max(l.colorFalloff.w, 0.01));
+        vec3 dir = toLight * inversesqrt(max(d2, 1e-8));
+        float spot = clamp((dot(-dir, l.spotDirCos.xyz) - l.spotDirCos.w) * l.extra.x, 0.0, 1.0);
+        float s = sqrt(d2 + 1.0);
+        float strength = window * spot / ((0.7 + 0.03 * s) * s);
+
+        if (strength <= 0.0)
+        {
+            continue;
+        }
+
+        // Light going lamp -> point, then point -> camera: cos of the turn is dot(dir, view).
+        float c = dot(dir, view);
+        float phase = (1.0 - g * g) / pow(max(1.0 + g * g - 2.0 * g * c, 1e-4), 1.5);
+
+        if (shadowed)
+        {
+            strength *= FogShadow(l, p, dir, d);
+        }
+
+        sum += l.colorFalloff.rgb * (strength * phase);
+    }
+
+    return sum;
+}
+
+void main()
+{
+    ivec3 size = imageSize(lightVolumeOut);
+    ivec3 cell = ivec3(gl_GlobalInvocationID);
+
+    if (cell.x >= size.x || cell.y >= size.y || cell.z >= size.z)
+    {
+        return;
+    }
+
+    vec2 uv = (vec2(cell.xy) + 0.5) / vec2(size.xy);
+    vec2 ndc = vec2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    vec3 view = normalize(Unproject(ndc, 1.0) - Unproject(ndc, 0.0));
+    float d = LightSliceEdge(float(cell.z) + 0.5);
+    vec3 p = fp.origin.xyz + view * d;
+    imageStore(lightVolumeOut, cell, vec4(LampsInFog(p, view) * fp.lights.x, 0.0));
+}

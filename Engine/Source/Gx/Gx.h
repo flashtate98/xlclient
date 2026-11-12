@@ -9,6 +9,8 @@
 #include "Engine/Source/Storm/H/stpl.h"
 #include "Engine/Source/Tempest/C2iVector.h"
 
+static const float oo255 = (1.0f / 255.0f);
+
 class C2Vector;
 class C3Vector;
 class C44Matrix;
@@ -114,6 +116,7 @@ void GxRsSet(EGxRenderState which, void* value);
 void GxRsSet(EGxRenderState which, int32_t value);
 void GxRsSet(EGxRenderState which, float value);
 void GxUpdateAlphaRef(EGxRenderState which);
+// mask is a combination of GxBufferBit_* values.
 void GxSceneClear(uint32_t mask, CImVector color);
 void GxScenePresent();
 void GxuClearDrawList(EGxuDrawListCategory category);
@@ -145,5 +148,21 @@ EGxApi GxDefaultApi();
 uint32_t GxCalcTexelStrideInBytes(EGxTexFormat format, uint32_t width);
 uint32_t GxVertexAttribOffset(EGxVertexBufferFormat format, EGxVertexAttrib attrib);
 uint32_t GxVertexSize(EGxVertexBufferFormat format);
+
+// The numbers of the last indexed draw a D3D9 device issued, which the runtime hands a mod as
+// ModelBatchDrawn so that it can issue the same draw again. serial counts the draws.
+struct GxD3dIndexedDraw {
+    uint32_t primType;
+    int32_t baseVertex;
+    uint32_t minIndex;
+    uint32_t vertexCount;
+    uint32_t startIndex;
+    uint32_t primCount;
+    uint32_t serial;
+    uint32_t viewport[4]; // the last D3DVIEWPORT9 set: X, Y, Width, Height
+    float viewportZ[2];   // MinZ, MaxZ
+};
+
+extern GxD3dIndexedDraw g_gxLastIndexedDraw;
 
 #endif

@@ -16,7 +16,7 @@ namespace
      *   2 Alpha         SRCALPHA / INVSRCALPHA  9 SrcAlphaOpaque    SRCALPHA / ZERO
      *   3 Add           SRCALPHA / ONE         10 NoAlphaAdd        ONE / ONE
      *   4 Mod           DSTCOLOR / ZERO        11 ConstantAlpha     CONSTANT_COLOR / ONE_MINUS_CONSTANT_COLOR
-     *   5 Mod2x         DSTCOLOR / SRCCOLOR
+     *   5 Mod2x         DSTCOLOR / SRCCOLOR    12 BlendAdd          ONE / INVSRCALPHA (WarcraftXL's, modern M2 blend 7)
      *   6 ModAdd        DSTCOLOR / ONE
      *
      * The same factors for alpha as for colour, op ADD on both: D3D9 with SEPARATEALPHABLENDENABLE
@@ -45,6 +45,7 @@ namespace
             case 9:  src = VK_BLEND_FACTOR_SRC_ALPHA;           dst = VK_BLEND_FACTOR_ZERO;                break;
             case 10: src = VK_BLEND_FACTOR_ONE;                 dst = VK_BLEND_FACTOR_ONE;                 break;
             case 11: src = VK_BLEND_FACTOR_CONSTANT_COLOR;      dst = VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR; break;
+            case 12: src = VK_BLEND_FACTOR_ONE;                 dst = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA; break;
             default: return false;
         }
 
@@ -158,7 +159,7 @@ namespace
 
     struct VertexInput
     {
-        VkVertexInputAttributeDescription attrs[kAttribCount + 2];
+        VkVertexInputAttributeDescription attrs[kAttribCount + 8];   // SXC: the grass variant's seven extra
         uint32_t                          count     = 0;
         bool                              needConst = false;   ///< the constant stream is read
     };
@@ -220,6 +221,31 @@ namespace
                 AddAttribute(k, in, 5, kAttribTexCoord1, VK_FORMAT_R32G32_SFLOAT, kConstantTexcoordOffset);
                 return true;
 
+            // SXC: our terrain shader reads position0, normal0 and color0 (white when the vertex has none).
+            case VertexProgram::Terrain:
+                if (!(k.attribMask & (1u << kAttribNormal)))
+                {
+                    why = "the terrain vertex has no normal";
+                    return false;
+                }
+                AddAttribute(k, in, 0, kAttribPosition, VK_FORMAT_R32G32B32_SFLOAT, 0);
+                AddAttribute(k, in, 1, kAttribNormal, VK_FORMAT_R32G32B32_SFLOAT, 0);
+                AddAttribute(k, in, 2, kAttribColor0, VK_FORMAT_B8G8R8A8_UNORM, kConstantColourOffset);
+                return true;
+
+            // SXC: a projected texture's box (step 5e) reads its position alone.
+            case VertexProgram::Decal:
+                AddAttribute(k, in, 0, kAttribPosition, VK_FORMAT_R32G32B32_SFLOAT, 0);
+                return true;
+
+            // SXC: our water reads position0, color0 (white when the vertex has none: the terrain's PT2)
+            // and texcoord1 (the depth coordinate).
+            case VertexProgram::Water:
+                AddAttribute(k, in, 0, kAttribPosition, VK_FORMAT_R32G32B32_SFLOAT, 0);
+                AddAttribute(k, in, 1, kAttribColor0, VK_FORMAT_B8G8R8A8_UNORM, kConstantColourOffset);
+                AddAttribute(k, in, 2, kAttribTexCoord1, VK_FORMAT_R32G32_SFLOAT, kConstantTexcoordOffset);
+                return true;
+
             case VertexProgram::Translated:
             {
                 const manifest::Record* r = manifest::At(k.vertexRecord);
@@ -248,6 +274,51 @@ namespace
                     a.format   = k.attribs[attrib].format;
                     a.offset   = k.attribs[attrib].offset;
                 }
+                // SXC: the instanced grass variant reads a plant's rows (step 7).
+                if (r->grass)
+                {
+                    if (!k.plantStream)
+                    {
+                        why = "the grass variant needs the plant rows' stream";
+                        return false;
+                    }
+                    for (uint32_t row = 0; row < 3; ++row)
+                    {
+                        VkVertexInputAttributeDescription& a = in.attrs[in.count++];
+                        a.location = 13 + row;
+                        a.binding  = k.plantStream - 1;
+                        a.format   = VK_FORMAT_R32G32B32A32_SFLOAT;
+                        a.offset   = 16 * row;
+                    }
+                    // Step 7b: the plant's motion values (GrassMotion.glsl's sxcPlantMotion).
+                    VkVertexInputAttributeDescription& m = in.attrs[in.count++];
+                    m.location = 5;
+                    m.binding  = k.plantStream - 1;
+                    m.format   = VK_FORMAT_R32G32B32A32_SFLOAT;
+                    m.offset   = 64;
+                    // Step 7d: the plant's density (copies, radius, spread as halves), its spot in its
+                    // terrain cell, and the copy number (GrassDensity.glsl).
+                    if (!k.copyStream)
+                    {
+                        why = "the grass variant needs the copy stream";
+                        return false;
+                    }
+                    VkVertexInputAttributeDescription& density = in.attrs[in.count++];
+                    density.location = 6;
+                    density.binding  = k.plantStream - 1;
+                    density.format   = VK_FORMAT_R16G16B16A16_SFLOAT;
+                    density.offset   = 80;
+                    VkVertexInputAttributeDescription& cell = in.attrs[in.count++];
+                    cell.location = 7;
+                    cell.binding  = k.plantStream - 1;
+                    cell.format   = VK_FORMAT_R32G32_SFLOAT;
+                    cell.offset   = 88;
+                    VkVertexInputAttributeDescription& copy = in.attrs[in.count++];
+                    copy.location = 8;
+                    copy.binding  = k.copyStream - 1;
+                    copy.format   = VK_FORMAT_R32G32B32A32_SFLOAT;
+                    copy.offset   = 0;
+                }
                 return true;
             }
 
@@ -272,6 +343,28 @@ namespace
             return false;
         }
         if (!TranslatedFamily(v)) return true;
+
+        // SXC: our terrain shaders pair only with each other (the vertex one writes every varying).
+        if ((v == VertexProgram::Terrain) != (f == FragmentProgram::Terrain))
+        {
+            why = "our terrain shader is paired with another program";
+            return false;
+        }
+        if (v == VertexProgram::Terrain) return true;
+        // SXC: and the decal ones (step 5e).
+        if ((v == VertexProgram::Decal) != (f == FragmentProgram::Decal))
+        {
+            why = "the decal shader is paired with another program";
+            return false;
+        }
+        if (v == VertexProgram::Decal) return true;
+        // SXC: and the water ones.
+        if ((v == VertexProgram::Water) != (f == FragmentProgram::Water))
+        {
+            why = "the water shader is paired with another program";
+            return false;
+        }
+        if (v == VertexProgram::Water) return true;
 
         uint32_t outputs = 0xFFFFFFFFu;
         if (v == VertexProgram::Translated)
@@ -309,8 +402,8 @@ namespace
     const char* ProgramName(uint32_t program, uint16_t record, bool vertex)
     {
         if (const manifest::Record* r = manifest::At(record)) return manifest::FirstName(*r);
-        static const char* kVertex[]   = { "FixedFunction", "Ui", "FixedFunctionSemantic", "Translated" };
-        static const char* kFragment[] = { "FixedFunction", "Ui", "Desaturate", "FixedFunctionTranslated", "Translated" };
+        static const char* kVertex[]   = { "FixedFunction", "Ui", "FixedFunctionSemantic", "Translated", "Terrain", "Decal", "Water" };
+        static const char* kFragment[] = { "FixedFunction", "Ui", "Desaturate", "FixedFunctionTranslated", "Translated", "Terrain", "Decal", "Water" };
         if (vertex) return program < kVertexPrograms ? kVertex[program] : "?";
         return program < kFragmentPrograms ? kFragment[program] : "?";
     }
@@ -366,15 +459,44 @@ namespace
             return false;
         }
 
-        VkPipelineShaderStageCreateInfo stages[2] = {};
+        // SXC: a raised terrain chunk (step 5c) runs through the tessellation: triangles as patches of 3.
+        const bool tessellated = TerrainTessellated(k);
+        const VkShaderModule tesc = TessControlModule(k), tese = TessEvalModule(k);
+        if (tessellated && (tesc == VK_NULL_HANDLE || tese == VK_NULL_HANDLE || topology != VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST))
+        {
+            Refuse(k, "a raised terrain chunk without the tessellation modules, or not a triangle list");
+            return false;
+        }
+        if (tessellated) topology = VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
+
+        TerrainSpecialization vertexConstants, fragmentConstants;  // SXC: our terrain shader's options
+        VkPipelineShaderStageCreateInfo stages[4] = {};
         stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
         stages[0].module = vert;
         stages[0].pName  = "main";
+        stages[0].pSpecializationInfo = VertexSpecialization(k, vertexConstants);
         stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
         stages[1].module = frag;
         stages[1].pName  = "main";
+        stages[1].pSpecializationInfo = FragmentSpecialization(k, fragmentConstants);
+        if (tessellated)
+        {
+            stages[2].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[2].stage  = VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT;
+            stages[2].module = tesc;
+            stages[2].pName  = "main";
+            stages[2].pSpecializationInfo = stages[0].pSpecializationInfo;  // big alpha (it reads the alpha map)
+            stages[3].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[3].stage  = VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
+            stages[3].module = tese;
+            stages[3].pName  = "main";
+            stages[3].pSpecializationInfo = stages[0].pSpecializationInfo;  // the vertex math runs there
+        }
+        VkPipelineTessellationStateCreateInfo tessellation = {};
+        tessellation.sType              = VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO;
+        tessellation.patchControlPoints = 3;
 
         VkVertexInputBindingDescription bindings[kMaxStreams + 1] = {};
         uint32_t bindingCount = 0;
@@ -382,7 +504,7 @@ namespace
         {
             bindings[bindingCount].binding   = i;
             bindings[bindingCount].stride    = k.stride[i];
-            bindings[bindingCount].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+            bindings[bindingCount].inputRate = (k.instanceStreams & (1u << i)) ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX;  // SXC: grass
             ++bindingCount;
         }
         if (in.needConst)
@@ -445,10 +567,11 @@ namespace
 
         VkGraphicsPipelineCreateInfo info = {};
         info.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-        info.stageCount          = 2;
+        info.stageCount          = tessellated ? 4 : 2;
         info.pStages             = stages;
         info.pVertexInputState   = &vertexInput;
         info.pInputAssemblyState = &assembly;
+        info.pTessellationState  = tessellated ? &tessellation : nullptr;
         info.pViewportState      = &viewport;
         info.pRasterizationState = &raster;
         info.pMultisampleState   = &multisample;

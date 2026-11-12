@@ -134,6 +134,7 @@ void SFile::Destroy() {
 // VERIFY: bd1bd823 auto
 // OFFSET: 0x00421720
 int32_t STORMAPI SFile::CloseArchive(SArchive* archive) {
+    wxl::seam::Storage::CloseArchive::Before(archive);
     int32_t result = Blizzard::Mopaq::SFileCloseArchive(archive->m_archive);
     delete archive;
     return result;
@@ -213,12 +214,13 @@ int32_t STORMAPI SFile::OpenArchive(const char* path, int32_t priority, uint32_t
     System_SFile::ARCHIVEREC* handle;
 
     if (Blizzard::String::EqualI(Blizzard::String::FindExtension(path), "mpq")) {
-        (*archive)->m_type = 0;
+        (*archive)->m_type = SARCHIVE_MPQ;
         result = Blizzard::Mopaq::SFileOpenArchive(path, priority, flags, &handle);
         (*archive)->m_archive = handle;
 
         if (result) {
             fprintf(stderr, "archive %s opened\n", path);
+            wxl::seam::Storage::OpenArchive::After(result, path, priority, flags, reinterpret_cast<void**>(archive));
             return result;
         }
     }
@@ -227,6 +229,7 @@ int32_t STORMAPI SFile::OpenArchive(const char* path, int32_t priority, uint32_t
     *archive = nullptr;
     SErrSetLastError(Blizzard::Mopaq::SFileGetLastError());
 
+    wxl::seam::Storage::OpenArchive::After(result, path, priority, flags, reinterpret_cast<void**>(archive));
     return result;
 }
 
@@ -447,7 +450,7 @@ int32_t STORMAPI SFile::SetFilePointer(SFileImpl* file, int32_t distance, int32_
     Blizzard::Lock::MutexEnter(file->m_lock->m_mutex);
 
     switch (file->m_type) {
-        case 0: {
+        case SFILE_PLAIN: {
             int32_t whence = method;
 
             if (method >= 2) {
@@ -465,15 +468,15 @@ int32_t STORMAPI SFile::SetFilePointer(SFileImpl* file, int32_t distance, int32_
             break;
         }
 
-        case 2:
-        case 3: {
+        case SFILE_PAQ:
+        case SFILE_OLD_SFILE: {
             result = Blizzard::Mopaq::SFileSetFilePointer(file->m_file, distance, distanceHigh, method);
             break;
         }
 
 #if defined(WOWDECOMP_RETAIL_MODELS)
         // Not in the original: a Retail model file, prepared in memory when it was opened.
-        case 6: {
+        case SFILE_RETAIL: {
             int64_t move = distanceHigh ? (int64_t(*distanceHigh) * 0x100000000LL + uint32_t(distance)) : int64_t(distance);
             int64_t origin = method == 0 ? 0 : method == 1 ? file->m_position : file->m_size;
 
@@ -494,7 +497,7 @@ int32_t STORMAPI SFile::SetFilePointer(SFileImpl* file, int32_t distance, int32_
         }
 #endif
 
-        case 5: {
+        case SFILE_MEMORY: {
             if (method == 0) {
                 file->m_position = distance;
             } else if (method == 1) {
@@ -526,14 +529,14 @@ int32_t STORMAPI SFile::Unload(void* data) {
 
 // VERIFY: d0fc3ff9 auto
 // OFFSET: 0x00421CC0
-bool System_SFile2::OldFindFile(const char* name, char* path, uint32_t size, uint32_t flags, uint32_t* type) {
+bool System_SFile2::OldFindFile(const char* name, char* path, uint32_t size, uint32_t flags, SFILE_TYPE* type) {
     Blizzard::File::FileInfo info;
 
     Blizzard::String::Copy(path, SFile::m_basePath, size);
     Blizzard::String::Append(path, name, size);
 
     if (Blizzard::File::GetFileInfo(path, &info) && info.m_regularFile) {
-        *type = 0;
+        *type = SFILE_PLAIN;
         return true;
     }
 
@@ -544,7 +547,7 @@ bool System_SFile2::OldFindFile(const char* name, char* path, uint32_t size, uin
         Blizzard::String::Append(path, filename + 1, size);
 
         if (Blizzard::File::GetFileInfo(path, &info) && info.m_regularFile) {
-            *type = 0;
+            *type = SFILE_PLAIN;
             return true;
         }
     }
@@ -555,7 +558,7 @@ bool System_SFile2::OldFindFile(const char* name, char* path, uint32_t size, uin
 
     if (Blizzard::File::GetFileInfo(path, &info)) {
         if (info.m_regularFile) {
-            *type = 0;
+            *type = SFILE_PLAIN;
             return true;
         }
 
@@ -566,7 +569,7 @@ bool System_SFile2::OldFindFile(const char* name, char* path, uint32_t size, uin
 
     if (Blizzard::File::GetFileInfo(path, &info)) {
         if (info.m_regularFile) {
-            *type = 1;
+            *type = SFILE_COMPRESSED;
             return true;
         }
 
@@ -578,14 +581,14 @@ bool System_SFile2::OldFindFile(const char* name, char* path, uint32_t size, uin
         Blizzard::String::Append(path, name, size);
 
         if (Blizzard::File::GetFileInfo(path, &info) && info.m_regularFile) {
-            *type = 0;
+            *type = SFILE_PLAIN;
             return true;
         }
 
         Blizzard::String::Append(path, ".bz", size);
 
         if (Blizzard::File::GetFileInfo(path, &info) && info.m_regularFile) {
-            *type = 1;
+            *type = SFILE_COMPRESSED;
             return true;
         }
     }
@@ -597,7 +600,7 @@ bool System_SFile2::OldFindFile(const char* name, char* path, uint32_t size, uin
 
     if (Blizzard::File::GetFileInfo(path, &info)) {
         if (info.m_regularFile) {
-            *type = 2;
+            *type = SFILE_PAQ;
             return true;
         }
 
@@ -611,7 +614,7 @@ bool System_SFile2::OldFindFile(const char* name, char* path, uint32_t size, uin
 
         if (Blizzard::File::GetFileInfo(path, &info)) {
             if (info.m_regularFile) {
-                *type = 0;
+                *type = SFILE_PLAIN;
                 return true;
             }
 
@@ -625,7 +628,7 @@ bool System_SFile2::OldFindFile(const char* name, char* path, uint32_t size, uin
 
     if (Blizzard::Mopaq::SFileFileExists(nullptr, name, flags, nullptr)) {
         Blizzard::String::Copy(path, name, size);
-        *type = 3;
+        *type = SFILE_OLD_SFILE;
         return true;
     }
 
@@ -712,7 +715,7 @@ int32_t STORMAPI SFileUnloadFile(void* data) {
 
 // VERIFY: 43a7d076 manual
 // OFFSET: 0x00422330
-SFileImpl::SFileImpl(uint32_t type) {
+SFileImpl::SFileImpl(SFILE_TYPE type) {
     this->m_lock = new (0u, __FILE__, __LINE__) SFileLock();
     this->m_lock->unused_0018 = 0;
     this->m_stream = nullptr;
@@ -766,7 +769,7 @@ int32_t STORMAPI SFileReadFile(SFileImpl* file, void* buffer, uint32_t count, ui
     }
 
     switch (file->m_type) {
-        case 0: {
+        case SFILE_PLAIN: {
             Blizzard::Lock::MutexEnter(file->m_lock->m_mutex);
 
             int32_t read = count;
@@ -788,9 +791,9 @@ int32_t STORMAPI SFileReadFile(SFileImpl* file, void* buffer, uint32_t count, ui
             return 0;
         }
 
-        case 1:
-        case 2:
-        case 3: {
+        case SFILE_COMPRESSED:
+        case SFILE_PAQ:
+        case SFILE_OLD_SFILE: {
             int32_t result = 0;
             uint32_t read = 0;
 
@@ -832,9 +835,9 @@ int32_t STORMAPI SFileReadFile(SFileImpl* file, void* buffer, uint32_t count, ui
             return result;
         }
 
-        case 4:
-        case 5:
-        case 6: {
+        case SFILE_ZIP_FILE:
+        case SFILE_MEMORY:
+        case SFILE_RETAIL: {
             uint32_t available = file->m_position >= file->m_size ? 0 : file->m_size - file->m_position;
             uint32_t read = std::min(available, count);
 
@@ -890,7 +893,7 @@ int32_t STORMAPI SFileCloseFile(SFileImpl* file) {
 // OFFSET: 0x004218C0
 uint32_t STORMAPI SFileGetFileSize(SFileImpl* file, uint32_t* sizeHigh) {
     switch (file->m_type) {
-        case 0: {
+        case SFILE_PLAIN: {
             Blizzard::File::FileInfo info;
 
             if (!file->m_stream || !Blizzard::File::GetFileInfo(file->m_stream, &info)) {
@@ -904,18 +907,18 @@ uint32_t STORMAPI SFileGetFileSize(SFileImpl* file, uint32_t* sizeHigh) {
             return static_cast<uint32_t>(info.m_size);
         }
 
-        case 1:
-        case 5:
-        case 6: {
-            if (file->m_type == 6 && sizeHigh) {
+        case SFILE_COMPRESSED:
+        case SFILE_MEMORY:
+        case SFILE_RETAIL: {
+            if (file->m_type == SFILE_RETAIL && sizeHigh) {
                 *sizeHigh = 0;
             }
 
             return file->m_size;
         }
 
-        case 2:
-        case 3: {
+        case SFILE_PAQ:
+        case SFILE_OLD_SFILE: {
             return Blizzard::Mopaq::SFileGetFileSize(file->m_file, sizeHigh);
         }
 
@@ -998,9 +1001,9 @@ void System_SFile2::BuildFileSystemHash() {
 
 // VERIFY: f3281a6b manual
 // OFFSET: 0x00424780
-bool System_SFile2::FindFile(const char* name, char* path, uint32_t size, uint32_t flags, uint32_t* type, System_SFile::ARCHIVEREC** archive) {
+bool System_SFile2::FindFile(const char* name, char* path, uint32_t size, uint32_t flags, SFILE_TYPE* type, System_SFile::ARCHIVEREC** archive) {
 #if defined(WOWDECOMP_RETAIL_MODELS)
-    // Not in the original: Retail model files are served from memory (type 6) by OpenEx.
+    // Not in the original: Retail model files are served from memory (SFILE_RETAIL) by OpenEx.
     if (Retail::Source().Handles(name)) {
         if (archive) {
             *archive = nullptr;
@@ -1013,10 +1016,18 @@ bool System_SFile2::FindFile(const char* name, char* path, uint32_t size, uint32
         }
 
         Blizzard::String::Copy(path, name, size);
-        *type = 6;
+        *type = SFILE_RETAIL;
         return true;
     }
 #endif
+
+    int32_t gated = 0;
+    uint32_t* wxlType = reinterpret_cast<uint32_t*>(type);
+    void** wxlArchive = reinterpret_cast<void**>(archive);
+    if (wxl::seam::Storage::FindFile::Gate(&gated, &name, &path, &size, &flags, &wxlType, &wxlArchive)) {
+        return gated != 0;
+    }
+
     flags |= s_directAccess;
 
     if (archive) {
@@ -1081,7 +1092,7 @@ bool System_SFile2::FindFile(const char* name, char* path, uint32_t size, uint32
         }
 
         Blizzard::String::Copy(path, name, size);
-        *type = 3;
+        *type = SFILE_OLD_SFILE;
 
         return true;
     }
@@ -1093,7 +1104,7 @@ bool System_SFile2::FindFile(const char* name, char* path, uint32_t size, uint32
 // OFFSET: 0x00424B10
 int32_t STORMAPI SFile::FileExistsEx(const char* name, uint32_t flags) {
     char path[260];
-    uint32_t type;
+    SFILE_TYPE type;
 
     return System_SFile2::FindFile(name, path, sizeof(path), flags, &type, nullptr);
 }
@@ -1123,7 +1134,7 @@ int32_t STORMAPI SFile::OpenEx(SArchive* archive, const char* name, uint32_t fla
             return 0;
         }
 
-        SFileImpl* file = new (0u, __FILE__, __LINE__) SFileImpl(6);
+        SFileImpl* file = new (0u, __FILE__, __LINE__) SFileImpl(SFILE_RETAIL);
         file->m_size = static_cast<uint32_t>(bytes.size());
         file->m_position = 0;
         file->m_name = Blizzard::String::Duplicate(name);
@@ -1145,13 +1156,16 @@ int32_t STORMAPI SFile::OpenEx(SArchive* archive, const char* name, uint32_t fla
 #endif
 
     if (CheckIfStreamingAndTrial() && System_SFile2::s_soundCacheArchive && Blizzard::String::FindI(name, ".wav", 0x7FFFFFFF)) {
-        *result = new (0u, __FILE__, __LINE__) SFileImpl(3);
+        *result = new (0u, __FILE__, __LINE__) SFileImpl(SFILE_OLD_SFILE);
 
         Blizzard::Lock::MutexEnter(System_SFile2::s_soundCacheLock);
         int32_t opened = Blizzard::Mopaq::SFileOpenFileEx(System_SFile2::s_soundCacheArchive, name, 0, &(*result)->m_file);
         Blizzard::Lock::MutexLeave(System_SFile2::s_soundCacheLock);
 
         if (opened) {
+            if (wxl::seam::Listening(WXL_EV_FileOpened)) {
+                wxl::seam::Storage::OpenEx::After(1, archive, name, flags, wxlResult);
+            }
             return 1;
         }
 
@@ -1166,21 +1180,27 @@ int32_t STORMAPI SFile::OpenEx(SArchive* archive, const char* name, uint32_t fla
     *result = nullptr;
 
     System_SFile::ARCHIVEREC* handle = nullptr;
-    uint32_t type;
+    SFILE_TYPE type;
     char path[260];
 
     if (!archive) {
         if (!System_SFile2::FindFile(name, path, sizeof(path), flags, &type, &handle)) {
             SErrSetLastError(2);
+            if (wxl::seam::Listening(WXL_EV_FileOpened)) {
+                wxl::seam::Storage::OpenEx::After(0, archive, name, flags, wxlResult);
+            }
             return 0;
         }
-    } else if (archive->m_type == 0) {
+    } else if (archive->m_type == SARCHIVE_MPQ) {
         handle = archive->m_archive;
-        type = 3;
-    } else if (archive->m_type == 1) {
+        type = SFILE_OLD_SFILE;
+    } else if (archive->m_type == SARCHIVE_ZIP) {
         handle = archive->m_archive;
-        type = 4;
+        type = SFILE_ZIP_FILE;
     } else {
+        if (wxl::seam::Listening(WXL_EV_FileOpened)) {
+            wxl::seam::Storage::OpenEx::After(0, archive, name, flags, wxlResult);
+        }
         return 0;
     }
 
@@ -1188,7 +1208,7 @@ int32_t STORMAPI SFile::OpenEx(SArchive* archive, const char* name, uint32_t fla
     *result = new (0u, __FILE__, __LINE__) SFileImpl(type);
 
     switch (type) {
-        case 0: {
+        case SFILE_PLAIN: {
             if (!Blizzard::File::Open(path, 0x1005, (*result)->m_stream)) {
                 goto fail;
             }
@@ -1198,13 +1218,13 @@ int32_t STORMAPI SFile::OpenEx(SArchive* archive, const char* name, uint32_t fla
             break;
         }
 
-        case 1:
-        case 2:
-        case 4: {
+        case SFILE_COMPRESSED:
+        case SFILE_PAQ:
+        case SFILE_ZIP_FILE: {
             break;
         }
 
-        case 3: {
+        case SFILE_OLD_SFILE: {
             if (!Blizzard::Mopaq::SFileOpenFileEx(handle, name, handle ? 0 : flags, &(*result)->m_file)) {
                 goto fail;
             }
@@ -1215,11 +1235,17 @@ int32_t STORMAPI SFile::OpenEx(SArchive* archive, const char* name, uint32_t fla
         }
 
         default: {
+            if (wxl::seam::Listening(WXL_EV_FileOpened)) {
+                wxl::seam::Storage::OpenEx::After(0, archive, name, flags, wxlResult);
+            }
             return 0;
         }
     }
 
     if (!(flags & 0x20000)) {
+        if (wxl::seam::Listening(WXL_EV_FileOpened)) {
+            wxl::seam::Storage::OpenEx::After(opened, archive, name, flags, wxlResult);
+        }
         return opened;
     }
 
@@ -1230,9 +1256,12 @@ int32_t STORMAPI SFile::OpenEx(SArchive* archive, const char* name, uint32_t fla
         goto fail;
     }
 
-    (*result)->m_type = 5;
+    (*result)->m_type = SFILE_MEMORY;
     (*result)->m_position = 0;
 
+    if (wxl::seam::Listening(WXL_EV_FileOpened)) {
+        wxl::seam::Storage::OpenEx::After(opened, archive, name, flags, wxlResult);
+    }
     return opened;
 
 fail:
@@ -1242,6 +1271,9 @@ fail:
 
     *result = nullptr;
 
+    if (wxl::seam::Listening(WXL_EV_FileOpened)) {
+        wxl::seam::Storage::OpenEx::After(0, archive, name, flags, wxlResult);
+    }
     return 0;
 }
 
@@ -1249,7 +1281,7 @@ fail:
 // OFFSET: 0x00424E50
 int32_t STORMAPI SFile::FileExists(const char* name) {
     char path[260];
-    uint32_t type;
+    SFILE_TYPE type;
 
     return System_SFile2::FindFile(name, path, sizeof(path), 0, &type, nullptr);
 }
@@ -1297,7 +1329,7 @@ int32_t STORMAPI SFile::ReadFile(SArchive* archive, const char* name, void** dat
 // VERIFY: a77cc075 manual
 // OFFSET: 0x00424FA0
 int32_t STORMAPI SFile::List(SArchive* archive, int32_t (*callback)(const char* fileName, void* param), void* param) {
-    if (archive->m_type != 0 && archive->m_type != 1) {
+    if (archive->m_type != SARCHIVE_MPQ && archive->m_type != SARCHIVE_ZIP) {
         return 0;
     }
 
@@ -1375,7 +1407,7 @@ int32_t STORMAPI SFile::FileIsLocal(const char* name, int32_t flags) {
 // OFFSET: 0x004217C0
 int32_t STORMAPI SFile::FileIsLocal(SFileImpl* file, int32_t flags) {
 #if defined(WOWDECOMP_RETAIL_MODELS)
-    if (file->m_type == 6) {
+    if (file->m_type == SFILE_RETAIL) {
         return 1;
     }
 #endif
@@ -1397,7 +1429,7 @@ int32_t STORMAPI SFile::MakeFileLocal(const char* name, int32_t priority, bool w
 // OFFSET: 0x00421820
 int32_t STORMAPI SFile::MakeFileLocal(SFileImpl* file, int32_t priority, bool wait) {
 #if defined(WOWDECOMP_RETAIL_MODELS)
-    if (file->m_type == 6) {
+    if (file->m_type == SFILE_RETAIL) {
         return 1;
     }
 #endif

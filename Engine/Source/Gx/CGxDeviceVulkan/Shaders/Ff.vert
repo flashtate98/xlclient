@@ -1,7 +1,7 @@
 // The fixed-function vertex program: the position through the device's World * View * ProjNative,
 // the vertex colour forwarded, texture coordinate sets 0 and 1 through their stages' texture
-// transforms, as the engine's fixed-function pipeline would (no lighting, no texgen). SXC: plus
-// D3D9's linear vertex fog factor, which Ff.frag applies.
+// transforms, as the engine's fixed-function pipeline would (no lighting). SXC: plus D3D9's linear
+// vertex fog factor, which Ff.frag applies, and texgen from the position (Push.glsl).
 #version 450
 #extension GL_GOOGLE_include_directive : require
 
@@ -23,6 +23,6 @@ void main()
     vFog        = FogFactor(clip.w);        // SXC: clip w = view-space depth, D3D's fog distance
     gl_Position = ToVulkanClip(clip);
     vColor      = inColor;
-    vTexCoord0  = TexTransform(0u, inTexCoord0);
-    vTexCoord1  = TexTransform(1u, inTexCoord1);
+    vTexCoord0  = TexTransform(0u, inPos, inTexCoord0);
+    vTexCoord1  = TexTransform(1u, inPos, inTexCoord1);
 }

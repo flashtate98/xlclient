@@ -3,12 +3,14 @@
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Frame/Internal.hpp"
 
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Present.hpp"
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Timings.hpp"   // SXC: the profiler's GPU times
 
 using namespace gxvk::vk::frame::detail;
 
 namespace
 {
     namespace present = gxvk::vk::present;
+    namespace timings = gxvk::vk::timings;
 
     /// vkCmdClearAttachments over `rect` (clamped to the target) or the whole target, colour and
     /// depth as the mask says.
@@ -111,6 +113,7 @@ namespace gxvk::vk::frame::detail
         s.queryPool          = VK_NULL_HANDLE;
         s.clearColourPending = false;
         s.clearDepthPending  = false;
+        timings::FrameOpened(s.fi, slot.pre, slot.cmd);   // SXC: the profiler's GPU times
         return true;
     }
 
@@ -196,6 +199,12 @@ namespace gxvk::vk::frame::detail
 
         EndPass();
         StagingFrameEnd(slot);
+        timings::FrameClosing();   // SXC: the profiler's GPU times
+        if (slot.secondOpen)   // SXC: a second view begun and never run (Vulkan/View.cpp)
+        {
+            d.EndCommandBuffer(slot.second);
+            slot.secondOpen = false;
+        }
 
         VkResult r = d.EndCommandBuffer(slot.pre);
         if (r == VK_SUCCESS) r = d.EndCommandBuffer(slot.cmd);
@@ -357,6 +366,140 @@ namespace gxvk::vk::frame
 
     bool QueryActive() { return s.open && s.queryActive; }
 
+    const char* s_refusal = "";
+
+    const char* EffectRefusal() { return s_refusal; }
+
+    bool BeginEffect(EffectTarget& out)
+    {
+        // SXC: each refusal says why (the water's status line: its capture failed at some camera angles).
+        const auto refuse = [](const char* why) { s_refusal = why; return false; };
+        if (!s.open) return refuse("no frame open");
+        if (s.queryActive) return refuse("an occlusion query is open");
+        if (s.clearColourPending || s.clearDepthPending) return refuse("a clear is pending");
+        const texture::Image* image  = nullptr;
+        VkFormat              format = VK_FORMAT_UNDEFINED;
+        VkExtent2D            extent = { 0, 0 };
+        if (!TargetView(s.target, image, format, extent)) return refuse("no target");
+        // Only over a target a pass has drawn into: the colour rests in its read layout, the depth
+        // holds this frame's geometry.
+        if (image->layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) return refuse("nothing drawn into the target yet");
+        const uint32_t fbi = FramebufferFor(s.target, format, extent);
+        if (fbi == UINT32_MAX) return refuse("no framebuffer");
+        Framebuffer& fb    = s.fbs[fbi];
+        DepthBuffer& depth = s.depths[fb.depth];
+        if (!depth.initialised || depth.sampleView == VK_NULL_HANDLE) return refuse("no depth to read");
+        if (depth.lastUsed != s.serial) return refuse("the depth holds no geometry this frame");
+        s_refusal = "";
+        EndPass();
+        fb.lastUsed      = s.serial;
+        out.cmd          = s.slots[s.fi].cmd;
+        out.colour       = fb.view;
+        out.format       = format;
+        out.extent       = extent;
+        out.depth        = depth.image;
+        out.depthView    = depth.sampleView;
+        out.depthAspects = VK_IMAGE_ASPECT_DEPTH_BIT | (s.depthFormat == VK_FORMAT_D24_UNORM_S8_UINT ? VK_IMAGE_ASPECT_STENCIL_BIT : 0u);
+        out.serial       = s.serial;
+        return true;
+    }
+
+    VkCommandBuffer BeginSecondary(const texture::Image& target)
+    {
+        if (!EnsureFrame()) return nullptr;
+        const detail::Target t{ &target, 0 };
+        const texture::Image* image  = nullptr;
+        VkFormat              format = VK_FORMAT_UNDEFINED;
+        VkExtent2D            extent = { 0, 0 };
+        if (!TargetView(t, image, format, extent)) return nullptr;
+        const uint32_t fbi = FramebufferFor(t, format, extent);
+        const PassSet* passes = PassesFor(format);
+        if (fbi == UINT32_MAX || !passes) return nullptr;
+
+        FrameSlot& slot = s.slots[s.fi];
+        if (!slot.second)
+        {
+            VkCommandBufferAllocateInfo alloc = {};
+            alloc.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            alloc.commandPool        = s.pool;
+            alloc.level              = VK_COMMAND_BUFFER_LEVEL_SECONDARY;
+            alloc.commandBufferCount = 1;
+            if (s.dapi->AllocateCommandBuffers(s.device, &alloc, &slot.second) != VK_SUCCESS)
+            {
+                slot.second = nullptr;
+                return nullptr;
+            }
+        }
+
+        VkCommandBufferInheritanceInfo inherit = {};
+        inherit.sType       = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO;
+        inherit.renderPass  = passes->pass[0];
+        inherit.subpass     = 0;
+        inherit.framebuffer = s.fbs[fbi].fb;
+        VkCommandBufferBeginInfo begin = {};
+        begin.sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        begin.flags            = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT | VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT;
+        begin.pInheritanceInfo = &inherit;
+        if (slot.secondOpen) s.dapi->EndCommandBuffer(slot.second);   // never run: ended before it is begun again
+        if (s.dapi->BeginCommandBuffer(slot.second, &begin) != VK_SUCCESS) return nullptr;
+        slot.secondOpen = true;
+        s.fbs[fbi].lastUsed = s.serial;
+        return slot.second;
+    }
+
+    bool RunSecondary(const texture::Image& target, VkCommandBuffer secondary, const float clear[4])
+    {
+        FrameSlot& slot = s.slots[s.fi];
+        if (!s.open || !secondary || secondary != slot.second || !slot.secondOpen) return false;
+        slot.secondOpen = false;
+        if (s.dapi->EndCommandBuffer(secondary) != VK_SUCCESS) return false;
+        const detail::Target t{ &target, 0 };
+        const texture::Image* image  = nullptr;
+        VkFormat              format = VK_FORMAT_UNDEFINED;
+        VkExtent2D            extent = { 0, 0 };
+        if (!TargetView(t, image, format, extent)) return false;
+        const uint32_t fbi = FramebufferFor(t, format, extent);
+        const PassSet* passes = PassesFor(format);
+        if (fbi == UINT32_MAX || !passes) return false;
+
+        // A clear asked for the current target before its pass opened lands first, as SetTarget does.
+        if (s.clearColourPending || s.clearDepthPending) BeginPass();
+        EndPass();
+        Framebuffer& fb    = s.fbs[fbi];
+        DepthBuffer& depth = s.depths[fb.depth];
+        VkClearValue clears[2] = {};
+        for (uint32_t i = 0; i < 4; ++i) clears[0].color.float32[i] = clear[i];
+        clears[1].depthStencil.depth = 1.0f;
+        VkRenderPassBeginInfo begin = {};
+        begin.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        begin.renderPass        = passes->pass[3];
+        begin.framebuffer       = fb.fb;
+        begin.renderArea.extent = extent;
+        begin.clearValueCount   = 2;
+        begin.pClearValues      = clears;
+        const VkCommandBuffer cmd = s.slots[s.fi].cmd;
+        s.dapi->CmdBeginRenderPass(cmd, &begin, VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS);
+        s.dapi->CmdExecuteCommands(cmd, 1, &secondary);
+        s.dapi->CmdEndRenderPass(cmd);
+        const_cast<texture::Image*>(image)->layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        depth.initialised = true;
+        depth.lastUsed    = s.serial;
+        fb.lastUsed       = s.serial;
+        ++s.stats.targetPasses;
+        ++s.stats.passes;
+        return true;
+    }
+
+    void RetireFramebuffer(VkFramebuffer framebuffer, uint64_t lastUsed)
+    {
+        if (framebuffer == VK_NULL_HANDLE || !s.dapi) return;
+        Retired e;
+        e.framebuffer = framebuffer;
+        Retire(e, lastUsed);
+    }
+
+    bool DepthSampled() { return s.depthSampled; }
+
     void Flush()
     {
         if (!s.open) return;
@@ -389,6 +532,17 @@ namespace gxvk::vk::frame
     {
         if (s.target.image) return s.target.image->extent;
         return s.scene.handle != VK_NULL_HANDLE ? s.scene.extent : s.extent;
+    }
+
+    void PixelWritesToReads(VkCommandBuffer cmd)
+    {
+        if (!cmd || !s.dapi) return;
+        VkMemoryBarrier b = {};
+        b.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        b.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        s.dapi->CmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_DEPENDENCY_BY_REGION_BIT, 1, &b, 0,
+                                   nullptr, 0, nullptr);
     }
 
     uint32_t Slot() { return s.fi; }

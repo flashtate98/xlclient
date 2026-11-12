@@ -1,7 +1,12 @@
 // The descriptor set layouts and the pipeline layouts: set 0 is one combined image sampler per
 // declared sampler slot (one layout per distinct slot set), set 1 the translated interface's
-// dynamic uniform buffer; every pipeline layout is {set 0, set 1} plus the push range.
+// dynamic uniform buffer; every pipeline layout is {set 0, set 1} plus the push range (SXC: our terrain
+// shader's {set 0, set 1, the covers' set 2, the lights' set 3}).
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Pipelines/Internal.hpp"
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"  // SXC:
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Lights.hpp" // SXC:
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Water.hpp"  // SXC:
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/DeviceCaps.hpp"
 
 namespace gxvk::vk::pipelines::detail
 {
@@ -14,6 +19,9 @@ namespace gxvk::vk::pipelines::detail
         binding.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         binding.descriptorCount = 1;
         binding.stageFlags      = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        // SXC: a raised terrain chunk's tessellation stages read the registers too (step 5c).
+        if (context::Caps().enabled & gxvk::vk::kCapTessellation)
+            binding.stageFlags |= VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
         VkDescriptorSetLayoutCreateInfo layout = {};
         layout.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         layout.bindingCount = 1;
@@ -35,14 +43,31 @@ namespace gxvk::vk::pipelines::detail
      * pipeline.
      *
      * @param uint32 samplerMask : bit N for slot N
+     * @param uint32 extra : SXC: kExtraCover, the covers' set 2 and the lights' set 3 (our terrain
+     *        shader; Vulkan/Cover and Vulkan/Lights ready); kExtraLights, an empty set 2 and the lights'
+     *        set 3 (the translated pixel modules flagged `lights`)
      * @param uint32& index : receives the table index
      * @return bool ok : false when the table is full or a create failed (logged)
      */
-    bool LayoutFor(uint32_t samplerMask, uint32_t& index)
+    bool LayoutFor(uint32_t samplerMask, uint32_t extra, uint32_t& index)
     {
+        // SXC: sets 2 and 3.
+        const bool cover = extra == kExtraCover;
+        if (extra == kExtraLights && s.emptyLayout == VK_NULL_HANDLE)
+        {
+            VkDescriptorSetLayoutCreateInfo empty = {};
+            empty.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            if (s.dapi->CreateDescriptorSetLayout(s.device, &empty, nullptr, &s.emptyLayout) != VK_SUCCESS) s.emptyLayout = VK_NULL_HANDLE;
+        }
+        const VkDescriptorSetLayout set2 = cover ? gxvk::vk::cover::SetLayout()
+                                         : extra == kExtraLights ? s.emptyLayout
+                                         : extra == kExtraWater  ? gxvk::vk::water::SetLayout()  // our water: the scene behind it
+                                                                 : VK_NULL_HANDLE;
+        const VkDescriptorSetLayout lightsLayout = extra != kExtraNone ? gxvk::vk::lights::SetLayout() : VK_NULL_HANDLE;
+        if (extra != kExtraNone && (set2 == VK_NULL_HANDLE || lightsLayout == VK_NULL_HANDLE)) return false;
         for (uint32_t i = 0; i < s.layoutCount; ++i)
         {
-            if (s.layouts[i].mask == samplerMask)
+            if (s.layouts[i].mask == samplerMask && s.layouts[i].extra == extra)
             {
                 index = i;
                 return true;
@@ -69,6 +94,9 @@ namespace gxvk::vk::pipelines::detail
             b.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             b.descriptorCount = 1;
             b.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+            // SXC: our terrain's tessellation reads the alpha map (step 5c: where cover lies, its height).
+            if (cover && (context::Caps().enabled & gxvk::vk::kCapTessellation))
+                b.stageFlags |= VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
         }
         VkDescriptorSetLayoutCreateInfo setLayout = {};
         setLayout.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -76,7 +104,8 @@ namespace gxvk::vk::pipelines::detail
         setLayout.pBindings    = count ? bindings : nullptr;
 
         LayoutEntry e;
-        e.mask = samplerMask;
+        e.mask  = samplerMask;
+        e.extra = extra;
         VkResult r = d.CreateDescriptorSetLayout(s.device, &setLayout, nullptr, &e.set0);
         if (r != VK_SUCCESS)
         {
@@ -88,10 +117,10 @@ namespace gxvk::vk::pipelines::detail
         push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         push.offset     = 0;
         push.size       = kPushBytes;
-        const VkDescriptorSetLayout sets[2] = { e.set0, s.regsLayout };
+        const VkDescriptorSetLayout sets[4] = { e.set0, s.regsLayout, set2, lightsLayout };
         VkPipelineLayoutCreateInfo layout = {};
         layout.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        layout.setLayoutCount         = 2;
+        layout.setLayoutCount         = extra != kExtraNone ? 4 : 2;
         layout.pSetLayouts            = sets;
         layout.pushConstantRangeCount = 1;
         layout.pPushConstantRanges    = &push;
@@ -106,7 +135,8 @@ namespace gxvk::vk::pipelines::detail
         index = s.layoutCount;
         s.layouts[s.layoutCount++] = e;
         s.stats.layouts = s.layoutCount;
-        Write(Debug, "vulkan: pipelines: layout #%u for sampler slots 0x%04X (%u binding%s)", s.layoutCount, samplerMask, count, count == 1 ? "" : "s");
+        Write(Debug, "vulkan: pipelines: layout #%u for sampler slots 0x%04X (%u binding%s)%s", s.layoutCount, samplerMask, count, count == 1 ? "" : "s",
+              cover ? " with the covers' and the lights' sets" : (extra == kExtraLights ? " with the lights' set" : (extra == kExtraWater ? " with the water's and the lights' sets" : "")));
         return true;
     }
 
@@ -122,5 +152,7 @@ namespace gxvk::vk::pipelines::detail
         s.layoutCount = 0;
         if (s.regsLayout != VK_NULL_HANDLE) d.DestroyDescriptorSetLayout(s.device, s.regsLayout, nullptr);
         s.regsLayout = VK_NULL_HANDLE;
+        if (s.emptyLayout != VK_NULL_HANDLE) d.DestroyDescriptorSetLayout(s.device, s.emptyLayout, nullptr);  // SXC:
+        s.emptyLayout = VK_NULL_HANDLE;
     }
 }

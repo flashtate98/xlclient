@@ -1,4 +1,5 @@
 #include "MapRenderChunk.h"
+#include "WoW/Source/WorldClient/WorldConstants.h"
 #include <cmath>
 #include <cstring>
 #include "Engine/Source/Gx/CGxBuf.h"
@@ -23,6 +24,9 @@
 #include "WoW/Source/WorldClient/MapLight.h"
 #include "WoW/Source/WorldClient/Types.h"
 #include "WoW/Source/WorldClient/World.h"
+#include "SXC/Cover/Cover.h"  // SXC:
+#include "SXC/Log.h"  // SXC:
+#include "SXC/Terrain/TextureParams.h"  // SXC:
 #if defined(_MSC_VER)
 #include <malloc.h>
 #else
@@ -371,7 +375,92 @@ void CMapRenderChunk::CreateLayer(CMapArea* area, SMLayer* layer, int32_t checkD
         this->m_renderFlags |= 0x4;
     }
 
+    renderLayer->m_sxcArea = area;  // SXC: for its texture's parameters (SxcLayerParams)
+    renderLayer->m_sxcParamsGeneration = ~0u;
+    renderLayer->m_sxcHeight = areaTexture->m_sxcHeight;
     this->m_layersCount++;
+}
+
+// SXC: a layer's UV scale (its texture's MTXF scale bits) and height scale and offset, TerrainTextureParams
+// over the tile's own; again whenever the table changes (an edit shows at once).
+static CMapRenderChunkLayer& SxcLayerParams(CMapRenderChunkLayer& layer) {
+    const uint32_t generation = SXC::Terrain::Generation();
+
+    if (layer.m_sxcParamsGeneration != generation) {
+        layer.m_sxcParamsGeneration = generation;
+        layer.m_sxcUvScale = 1.0f;
+        layer.m_sxcHeightScale = 0.0f;
+        layer.m_sxcHeightOffset = 1.0f;
+        layer.m_sxcNormalStrength = 0.0f;
+        layer.m_sxcParallaxDepth = 0.0f;
+        layer.m_sxcParallaxSmooth = 0.0f;
+        CMapArea* area = layer.m_sxcArea;
+
+        if (area && layer.m_textureId >= 0 && static_cast<uint32_t>(layer.m_textureId) < area->m_textures.Count()) {
+            const uint32_t mtxf = area->m_textureFlags ? static_cast<uint32_t>(area->m_textureFlags[layer.m_textureId]) : 0u;
+            const char* name = area->m_textures[layer.m_textureId].m_textureName;
+            const SXC::Terrain::TextureParams params = SXC::Terrain::Resolve(CMap::mapName, area->m_index.x, area->m_index.y, name, mtxf);
+            layer.m_sxcUvScale = SXC::Terrain::UvScale(params.mtxf);
+            layer.m_sxcHeightScale = params.heightScale;
+            layer.m_sxcHeightOffset = params.heightOffset;
+            layer.m_sxcNormalStrength = params.normalStrength;
+            layer.m_sxcParallaxDepth = params.parallaxDepth;
+            layer.m_sxcParallaxSmooth = params.parallaxSmooth;
+        }
+    }
+
+    return layer;
+}
+
+static float SxcLayerUvScale(CMapRenderChunkLayer& layer) {
+    return SxcLayerParams(layer).m_sxcUvScale;
+}
+
+// SXC: the layers' height textures (stages 9..12), their height scales and offsets (pixel p14, p15 as
+// offset - 1: all zero is the stock blend), normal strengths (vertex v58, zero: the stock light) and
+// parallax depths and smoothing (v59, v60), the covers' burying of them (v61.x [Terrain] PatternBuried,
+// v61.y the steady wind)
+// for our terrain shader's height blending, bumps and parallax; or all off.
+static void SxcSetHeights(CMapRenderChunk* chunk, bool on) {
+    float scale[4] = {};
+    float offset[4] = {};
+    float normal[4] = {};
+    float parallax[4] = {};
+    float smoothing[4] = {};
+
+    for (int32_t i = 0; i < 4; i++) {
+        CGxTex* gxTex = nullptr;
+
+        // A reflective layer 0 (a cube map, read by the reflection vector) has none of them.
+        const bool reflective = i == 0 && (chunk->m_renderFlags & 0x4);
+
+        if (on && i < chunk->m_layersCount && !reflective) {
+            CMapRenderChunkLayer& layer = SxcLayerParams(chunk->m_layers[i]);
+            scale[i] = layer.m_sxcHeightScale;
+            offset[i] = layer.m_sxcHeightOffset - 1.0f;
+
+            if (layer.m_sxcHeight) {
+                normal[i] = layer.m_sxcNormalStrength;
+                parallax[i] = layer.m_sxcParallaxDepth;
+                smoothing[i] = layer.m_sxcParallaxSmooth;
+                gxTex = TextureGetGxTex(layer.m_sxcHeight, 0, nullptr);
+
+                if (gxTex) {
+                    GxTexSetWrap(gxTex, GxTex_Wrap, GxTex_Wrap);
+                }
+            }
+        }
+
+        g_theGxDevicePtr->RsSet(static_cast<EGxRenderState>(GxRs_Texture9 + i), gxTex);
+    }
+
+    GxShaderConstantsSet(GxSh_Pixel, 14, scale, 1);
+    GxShaderConstantsSet(GxSh_Pixel, 15, offset, 1);
+    GxShaderConstantsSet(GxSh_Vertex, 58, normal, 1);
+    GxShaderConstantsSet(GxSh_Vertex, 59, parallax, 1);
+    GxShaderConstantsSet(GxSh_Vertex, 60, smoothing, 1);
+    const float buried[4] = { SXC::Terrain::PatternBuried(), SXC::Cover::SteadyWind(), 0.0f, 0.0f };
+    GxShaderConstantsSet(GxSh_Vertex, 61, buried, 1);
 }
 
 // VERIFY: 6c5dc3eb manual
@@ -590,7 +679,7 @@ void CMapRenderChunk::UpdatePools() {
     CMap::ClearAllRenderChunks();
     CMapRenderChunk::Destroy();
 
-    int32_t radius = 1 - static_cast<int32_t>(World::s_farClip * -0.03f);
+    int32_t radius = 1 - static_cast<int32_t>(World::s_farClip * -OO_COORD_TO_CHUNK);
     uint32_t count = (2 * radius * radius + 1) & ~1u;
 
     CMapRenderChunk::s_pnEstimateVertex = 145 * count;
@@ -2007,7 +2096,7 @@ void CMapRenderChunk::InitializeVertexShaderConstants(const C44Matrix& world, co
         consts.m_sunDir.y = dir.y;
         consts.m_sunDir.z = dir.z;
         consts.m_sunDir.w = 1.0f;
-        consts.m_sunSpecularW = 20.0f;
+        consts.m_sunSpecularW = TERRAIN_SPEC_EXP;
     } else {
         consts.m_sunAmbient = C3Vector(1.0f, 1.0f, 1.0f);
         consts.m_sunAmbientW = 1.0f;
@@ -2083,8 +2172,18 @@ void CMapRenderChunk::SetVertexShader(CMapRenderChunk* renderChunk, int32_t laye
     layerScale.z = 0.0f;
     layerScale.w = 0.0f;
 
+    // SXC: a single-pass draw (all the chunk's layers, then the alpha) gives each layer its texture
+    // scale (MTXF bits 4-7 with TerrainTextureParams over them); the multi-pass fallback stays stock.
+    const bool allLayers = layerCount == renderChunk->m_layersCount + 1;
+
     for (int32_t i = 1; i < layerCount; i++) {
         consts.m_texScale[i] = layerScale;
+
+        if (allLayers) {
+            const float uv = SxcLayerUvScale(renderChunk->m_layers[i - 1]);
+            consts.m_texScale[i].x *= uv;
+            consts.m_texScale[i].y *= uv;
+        }
     }
 
     C4Vector alphaScale;
@@ -2202,7 +2301,7 @@ void CMapRenderChunk::RenderMultiPassAdditive(CMapRenderChunk* renderChunk) {
         g_theGxDevicePtr->Draw(&renderChunk->m_batch, 1);
 
         if (i == 0 && specular) {
-            GxRsSet(GxRs_TexGen0, GxTexGen_EyeLinear);
+            GxRsSet(GxRs_TexGen0, GxTexGen_World);
             GxRsSet(GxRs_TextureShader0, 1);
         }
 
@@ -2273,7 +2372,7 @@ void CMapRenderChunk::RenderMultiPassAlpha(CMapRenderChunk* renderChunk) {
         g_theGxDevicePtr->Draw(&renderChunk->m_batch, 1);
 
         if (i == 0 && specular) {
-            GxRsSet(GxRs_TexGen0, GxTexGen_EyeLinear);
+            GxRsSet(GxRs_TexGen0, GxTexGen_World);
             GxRsSet(GxRs_TextureShader0, 1);
         }
 
@@ -2367,7 +2466,7 @@ void CMapRenderChunk::RenderMultiPassPixelShaderBigAlpha(CMapRenderChunk* render
         g_theGxDevicePtr->Draw(&renderChunk->m_batch, 1);
 
         if (i == 0 && specular) {
-            GxRsSet(GxRs_TexGen0, GxTexGen_EyeLinear);
+            GxRsSet(GxRs_TexGen0, GxTexGen_World);
             GxRsSet(GxRs_TextureShader0, 1);
         }
 
@@ -2445,7 +2544,7 @@ void CMapRenderChunk::RenderMultiPassPixelShader(CMapRenderChunk* renderChunk) {
         g_theGxDevicePtr->Draw(&renderChunk->m_batch, 1);
 
         if (i == 0 && specular) {
-            GxRsSet(GxRs_TexGen0, GxTexGen_EyeLinear);
+            GxRsSet(GxRs_TexGen0, GxTexGen_World);
             GxRsSet(GxRs_TextureShader0, 1);
         }
 
@@ -2624,6 +2723,33 @@ void CMapRenderChunk::RenderMultiPassVertexPixelShader(CMapRenderChunk* renderCh
     GxRsSet(GxRs_Texture1, 0);
 }
 
+// SXC: the reflective chunk's shaders sample stage 0 (layer 0) as a cube map. Reports once per texture
+// set when layer 0 isn't one (a 2D image or not loaded yet): which layer carries the 0x400 flag and
+// what each layer is, to tell bad data from a draw the device drops.
+static void SxcReportReflectiveLayer(const CMapRenderChunk* chunk) {
+    CGxTex* first = chunk->m_layersCount ? TextureGetGxTex(chunk->m_layers[0].m_texture, 0, nullptr) : nullptr;
+
+    if (first && first->m_target == GxTex_CubeMap) {
+        return;
+    }
+
+    char key[600] = "reflective|";
+    char layers[1200] = "";
+
+    for (int32_t i = 0; i < chunk->m_layersCount; i++) {
+        const CMapRenderChunkLayer& layer = chunk->m_layers[i];
+        CGxTex* gxTex = TextureGetGxTex(layer.m_texture, 0, nullptr);
+        const char* name = layer.m_texture ? layer.m_texture->m_filename : "(none)";
+        char line[300];
+        SStrPrintf(line, sizeof(line), "  layer %d: %s, flags 0x%X%s, %s\n", i, name, layer.m_flags, (layer.m_flags & 0x400) ? " (reflective)" : "",
+                   !gxTex ? "no image yet" : gxTex->m_target == GxTex_CubeMap ? "cube map" : "2D");
+        SStrPack(layers, line, sizeof(layers));
+        SStrPack(key, name, sizeof(key));
+    }
+
+    SXC::LogOnce(key, "terrain: a reflective chunk's layer 0 is no cube map; the cube shaders sample it as one\n%s", layers);
+}
+
 // VERIFY: 22069b93 manual
 // OFFSET: 0x007D28B0
 void CMapRenderChunk::RenderSinglePassPixelShader() {
@@ -2674,6 +2800,10 @@ void CMapRenderChunk::RenderSinglePassPixelShader() {
         }
     }
 
+    if (specular) {
+        SxcReportReflectiveLayer(this);  // SXC:
+    }
+
     g_theGxDevicePtr->RsSet(static_cast<EGxRenderState>(GxRs_Texture0 + i), TextureGetGxTex(this->m_terrainBlendTexture, 1, nullptr));
     GxXformSet(static_cast<EGxXform>(GxXform_Tex0 + i), alphaMatrix);
     g_theGxDevicePtr->Draw(&this->m_batch, 1);
@@ -2720,11 +2850,18 @@ void CMapRenderChunk::RenderSinglePassVertexPixelShader() {
         }
     }
 
+    if (specular) {
+        SxcReportReflectiveLayer(this);  // SXC:
+    }
+
     CGxTex* blendTex = this->m_terrainBlendTexture ? TextureGetGxTex(this->m_terrainBlendTexture, 1, nullptr) : nullptr;
     g_theGxDevicePtr->RsSet(static_cast<EGxRenderState>(GxRs_Texture0 + i), blendTex);
 
     CMapRenderChunk::SetVertexShader(this, this->m_layersCount + 1, specular);
+    SXC::Cover::BeforeChunkDraw(this);  // SXC: the layers' cover entries for our terrain shader
+    SxcSetHeights(this, true);          // SXC: and their heights
     g_theGxDevicePtr->Draw(&this->m_batch, 1);
+    SxcSetHeights(this, false);
 
     for (uint32_t j = 0; j < this->m_layersCount; j++) {
         if (this->m_layers[j].m_flags & 0x40) {

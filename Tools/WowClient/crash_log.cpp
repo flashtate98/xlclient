@@ -100,9 +100,9 @@ static LONG CALLBACK FirstChanceHandler(EXCEPTION_POINTERS* info) {
         char line[1024];
 
         if (code == EXCEPTION_ACCESS_VIOLATION && info->ExceptionRecord->NumberParameters >= 2) {
-            _snprintf_s(line, sizeof(line), _TRUNCATE, "CRASH 0x%08lX at %s (%s 0x%llX)\n", code, where, info->ExceptionRecord->ExceptionInformation[0] ? "write" : "read", static_cast<unsigned long long>(info->ExceptionRecord->ExceptionInformation[1]));
+            _snprintf_s(line, sizeof(line), _TRUNCATE, "first-chance exception 0x%08lX at %s (%s 0x%llX), may be handled\n", code, where, info->ExceptionRecord->ExceptionInformation[0] ? "write" : "read", static_cast<unsigned long long>(info->ExceptionRecord->ExceptionInformation[1]));
         } else {
-            _snprintf_s(line, sizeof(line), _TRUNCATE, "CRASH 0x%08lX at %s\n", code, where);
+            _snprintf_s(line, sizeof(line), _TRUNCATE, "first-chance exception 0x%08lX at %s, may be handled\n", code, where);
         }
 
         LogLine(line);
@@ -140,7 +140,10 @@ static struct CrashLogInit {
         DeleteFileA(s_logPath);
         s_logFile = CreateFileA(s_logPath, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
 
-        if (AllocConsole()) {
+        // SXC: the console window only on request ("-debugConsole" on the command line; "-console" is the
+        // game's own, its in-game console): it opened with every start. Everything still goes to
+        // WowClient_crash.log.
+        if (strstr(GetCommandLineA(), "-debugConsole") && AllocConsole()) {
             SetConsoleTitleA("WowClient");
             s_console = CreateFileA("CONOUT$", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
         }

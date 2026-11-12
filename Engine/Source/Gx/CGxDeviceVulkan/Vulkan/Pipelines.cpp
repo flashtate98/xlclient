@@ -1,8 +1,14 @@
 // The graphics pipelines a draw binds: the module's life and the record of one draw.
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Pipelines/Internal.hpp"
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"  // SXC:
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Lights.hpp" // SXC:
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Water.hpp"  // SXC:
 
+#include <cstdio>
 #include <cstring>
 #include <new>
+#include <vector>
+#include <windows.h>
 
 namespace gxvk::vk::pipelines::detail
 {
@@ -13,11 +19,52 @@ using namespace gxvk::vk::pipelines::detail;
 
 namespace
 {
+    /// SXC: the pipeline cache kept between sessions. Pipelines compiled at first use stalled frames up
+    /// to 3.3 s in the driver's compiler (the water, the mirror's copies; the watchdog, 2026-11-03..05),
+    /// every session again. Vulkan checks the data's header against the driver and the GPU itself.
+    const char* const kCacheFile = "Cache\\vulkan-pipelines.bin";
+
+    std::vector<uint8_t> ReadCacheFile()
+    {
+        std::vector<uint8_t> data;
+        FILE* f = std::fopen(kCacheFile, "rb");
+        if (!f) return data;
+        std::fseek(f, 0, SEEK_END);
+        const long size = std::ftell(f);
+        std::fseek(f, 0, SEEK_SET);
+        if (size > 0 && size < 512L * 1024L * 1024L)
+        {
+            data.resize(static_cast<size_t>(size));
+            if (std::fread(data.data(), 1, data.size(), f) != data.size()) data.clear();
+        }
+        std::fclose(f);
+        return data;
+    }
+
+    /// Written to a temporary file first, then moved over the old one (a crash mid-write leaves the old).
+    void WriteCacheFile(const loader::Device& d, VkDevice device, VkPipelineCache cache)
+    {
+        size_t size = 0;
+        if (d.GetPipelineCacheData(device, cache, &size, nullptr) != VK_SUCCESS || !size) return;
+        std::vector<uint8_t> data(size);
+        if (d.GetPipelineCacheData(device, cache, &size, data.data()) != VK_SUCCESS) return;
+        CreateDirectoryA("Cache", nullptr);
+        const char* const temp = "Cache\\vulkan-pipelines.tmp";
+        FILE* f = std::fopen(temp, "wb");
+        if (!f) return;
+        const bool written = std::fwrite(data.data(), 1, size, f) == size;
+        std::fclose(f);
+        if (written) MoveFileExA(temp, kCacheFile, MOVEFILE_REPLACE_EXISTING);
+        Write(Debug, "vulkan: pipelines: cache saved (%u KiB)", static_cast<uint32_t>(size / 1024));
+    }
+
     /// The set-0 images of a draw for a layout: the draw's texture at each slot of the mask, or the
-    /// white image of the slot's kind when the draw has none there. False when a texture is bound
+    /// white image of the slot's kind when the draw has none there. SXC: also when a texture is bound
     /// of the other kind (a 2D image under a cube sampler or the reverse), which the module cannot
-    /// sample.
-    bool StageImages(const Draw& draw, const LayoutEntry& layout, uint32_t cubeMask, Texture* out)
+    /// sample: D3D9 draws such a draw, and skipping it left whole terrain chunks invisible (a
+    /// converted map's reflective layer on a plain texture). @p mismatched counts those slots. False
+    /// only when a white image is missing.
+    bool StageImages(const Draw& draw, const LayoutEntry& layout, uint32_t cubeMask, Texture* out, uint32_t& mismatched)
     {
         for (uint32_t slot = 0; slot < kTextureStages; ++slot)
         {
@@ -25,9 +72,12 @@ namespace
             const bool wantCube = (cubeMask & (1u << slot)) != 0;
             if ((draw.textureMask & (1u << slot)) && draw.textures[slot].view != VK_NULL_HANDLE)
             {
-                if (draw.textures[slot].cube != wantCube) return false;
-                out[slot] = draw.textures[slot];
-                continue;
+                if (draw.textures[slot].cube == wantCube)
+                {
+                    out[slot] = draw.textures[slot];
+                    continue;
+                }
+                ++mismatched;
             }
             const texture::Image* white = White(wantCube);
             if (!white) return false;
@@ -84,6 +134,8 @@ namespace gxvk::vk::pipelines
             Shutdown();
             return false;
         }
+        gxvk::vk::cover::Init();  // SXC: optional; without it the terrain stays on the stock shaders
+        gxvk::vk::lights::Init(); // SXC: our terrain shader needs it too (its set 3)
 
         // The set-1 sets, one per uniform chunk, for the session.
         VkDescriptorPoolSize size = {};
@@ -103,9 +155,21 @@ namespace gxvk::vk::pipelines
             return false;
         }
 
+        // SXC: the last session's cache when there is one (the driver ignores data that isn't its own;
+        // one refusing it outright gets an empty cache).
+        const std::vector<uint8_t> saved = ReadCacheFile();
         VkPipelineCacheCreateInfo cache = {};
         cache.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
-        if (d.CreatePipelineCache(s.device, &cache, nullptr, &s.cache) != VK_SUCCESS) s.cache = VK_NULL_HANDLE;
+        cache.initialDataSize = saved.size();
+        cache.pInitialData = saved.empty() ? nullptr : saved.data();
+        if (d.CreatePipelineCache(s.device, &cache, nullptr, &s.cache) != VK_SUCCESS)
+        {
+            cache.initialDataSize = 0;
+            cache.pInitialData = nullptr;
+            if (d.CreatePipelineCache(s.device, &cache, nullptr, &s.cache) != VK_SUCCESS) s.cache = VK_NULL_HANDLE;
+        }
+        Write(Debug, "vulkan: pipelines: cache %s (%u KiB from %s)", s.cache != VK_NULL_HANDLE ? "ready" : "unavailable",
+              static_cast<uint32_t>(saved.size() / 1024), kCacheFile);
 
         if (!memory::CreateBuffer(kConstantBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, memory::Where::Stream, s.constant) || !s.constant.block.mapped)
         {
@@ -132,12 +196,20 @@ namespace gxvk::vk::pipelines
         DestroyDescriptorObjects();
         if (s.regsPool != VK_NULL_HANDLE) d.DestroyDescriptorPool(s.device, s.regsPool, nullptr);
         DestroyLayouts();
+        gxvk::vk::cover::Shutdown();  // SXC: after the pipeline layouts over its set layout
+        gxvk::vk::lights::Shutdown();
         memory::DestroyBuffer(s.constant);
-        if (s.cache != VK_NULL_HANDLE) d.DestroyPipelineCache(s.device, s.cache, nullptr);
+        if (s.cache != VK_NULL_HANDLE)
+        {
+            WriteCacheFile(d, s.device, s.cache);  // SXC: for the next session (above)
+            d.DestroyPipelineCache(s.device, s.cache, nullptr);
+        }
         DestroyPrograms();
         delete[] s.entries;
         s = State();
     }
+
+    void ForgetBound() { s.bound = Bound(); s.boundSecond = Bound(); }  // SXC: (either may hold the main buffer's)
 
     bool Record(VkCommandBuffer cmd, VkRenderPass pass, uint32_t passGeneration, uint64_t serial, uint32_t slot, const Draw& draw)
     {
@@ -146,7 +218,8 @@ namespace gxvk::vk::pipelines
             ++s.stats.skipped;
             return false;
         }
-        if (draw.streamCount == 0 || draw.streamCount > kMaxStreams || !(draw.attribMask & (1u << kAttribPosition)) || draw.count == 0)
+        if (draw.streamCount == 0 || draw.streamCount > kMaxStreams || !(draw.attribMask & (1u << kAttribPosition)) || (draw.count == 0 && draw.runCount == 0)
+            || (draw.runs && !draw.indexed))
         {
             ++s.stats.skipped;
             return false;
@@ -170,10 +243,24 @@ namespace gxvk::vk::pipelines
             samplerMask = draw.fragmentRecord->samplerMask;
             cubeMask    = draw.fragmentRecord->cubeMask;
         }
-        else if (draw.fragment == FragmentProgram::FixedFunction || draw.fragment == FragmentProgram::FixedFunctionTranslated)
+        else if (draw.fragment == FragmentProgram::Terrain)
+        {
+            samplerMask = terrain::SamplerMask(draw.terrainFragment);  // SXC: what the module declares
+            cubeMask    = (draw.terrainFragment & terrain::kFragmentCube) ? 1u : 0u;
+        }
+        else if (draw.fragment == FragmentProgram::FixedFunction || draw.fragment == FragmentProgram::FixedFunctionTranslated
+                 || draw.fragment == FragmentProgram::Decal)
             samplerMask = 3u;
         uint32_t layoutIndex = 0;
-        if (!LayoutFor(samplerMask, layoutIndex))
+        // SXC: our terrain shader and the decals on the covers read the covers' set 2 (and the lights'
+        // set 3); the translated pixel modules flagged `lights` (models, WMOs) the lights' set 3.
+        // The instanced grass reads the ground marks there (its vertex stage).
+        const bool cover = draw.fragment == FragmentProgram::Terrain || draw.fragment == FragmentProgram::Decal
+                           || (draw.vertex == VertexProgram::Translated && draw.vertexRecord && draw.vertexRecord->grass);
+        const bool lit = draw.fragment == FragmentProgram::Translated && draw.fragmentRecord && draw.fragmentRecord->lights;
+        // Our water (SXC/Water): the scene behind it in set 2, the lights' set 3.
+        const bool water = draw.fragment == FragmentProgram::Water;
+        if (!LayoutFor(samplerMask, cover ? kExtraCover : (water ? kExtraWater : (lit ? kExtraLights : kExtraNone)), layoutIndex))
         {
             ++s.stats.skipped;
             return false;
@@ -201,6 +288,11 @@ namespace gxvk::vk::pipelines
         k.vertexRecord   = draw.vertex == VertexProgram::Translated ? manifest::IndexOf(draw.vertexRecord) : manifest::kNoRecord;
         k.fragmentRecord = draw.fragment == FragmentProgram::Translated ? manifest::IndexOf(draw.fragmentRecord) : manifest::kNoRecord;
         k.layoutIndex    = layoutIndex;
+        k.terrainVertex   = draw.vertex == VertexProgram::Terrain ? draw.terrainVertex : 0u;      // SXC:
+        k.terrainFragment = draw.fragment == FragmentProgram::Terrain ? draw.terrainFragment : 0u;
+        k.instanceStreams = draw.instanceStreams;   // SXC: the instanced grass
+        k.plantStream     = draw.plantStream >= 0 ? static_cast<uint32_t>(draw.plantStream) + 1u : 0u;
+        k.copyStream      = draw.copyStream >= 0 ? static_cast<uint32_t>(draw.copyStream) + 1u : 0u;
 
         const Entry* entry = Lookup(k);
         if (!entry || entry->pipeline == VK_NULL_HANDLE)
@@ -213,11 +305,16 @@ namespace gxvk::vk::pipelines
         // Set 0: the images of the mask's slots (the fragment programs sample what they declare
         // unconditionally, so every slot binds a valid image of its kind).
         Texture stages[kTextureStages];
-        if (!StageImages(draw, layout, cubeMask, stages))
+        uint32_t mismatched = 0;
+        if (!StageImages(draw, layout, cubeMask, stages, mismatched))
         {
-            ++s.stats.cubeMismatch;
             ++s.stats.skipped;
             return false;
+        }
+        if (mismatched && s.stats.cubeMismatch++ == 0)
+        {
+            Write(Warn, "vulkan: pipelines: a draw binds a texture of the other kind than its sampler (2D / cube); "
+                        "drawn with white there instead (counted in the cube mismatches)");
         }
         const VkDescriptorSet set0 = DescriptorFor(slot, serial, layout, stages);
         if (set0 == VK_NULL_HANDLE)
@@ -235,8 +332,26 @@ namespace gxvk::vk::pipelines
             return false;
         }
 
+        // SXC: set 2, the covers' (written and uploaded at the frame's first terrain draw).
+        const VkDescriptorSet set2 = cover ? gxvk::vk::cover::FrameSet(slot, serial)
+                                     : water ? gxvk::vk::water::FrameSet(slot, serial)
+                                             : VK_NULL_HANDLE;
+        // SXC: set 3, the lights' (filled at the frame's first use), for the draw's surface class: the
+        // terrain outdoor; a lit module as the device found it (a WMO group indoor or outdoor, models
+        // any, another scene than the world's none).
+        const VkDescriptorSet set3 = cover ? gxvk::vk::lights::FrameSet(slot, serial, gxvk::vk::lights::kSurfaceOutdoor)
+                                     : (lit || water) ? gxvk::vk::lights::FrameSet(slot, serial, draw.lightsSurface)
+                                           : VK_NULL_HANDLE;
+        if (((cover || water) && set2 == VK_NULL_HANDLE) || ((cover || lit || water) && set3 == VK_NULL_HANDLE))
+        {
+            ++s.stats.skipped;
+            return false;
+        }
+
         const loader::Device& d = *s.dapi;
-        Bound& b = s.bound;
+        // SXC: a second view's draws go to their own buffer between the frame's: each keeps what it bound.
+        Bound& b = s.boundSecond.cmd == cmd && s.boundSecond.serial == serial ? s.boundSecond
+                   : s.bound.cmd == cmd || !s.bound.cmd || s.bound.serial != serial ? s.bound : s.boundSecond;
         if (b.cmd != cmd || b.serial != serial)
         {
             b        = Bound();
@@ -256,6 +371,8 @@ namespace gxvk::vk::pipelines
             b.layout = layout.layout;
             b.set0   = VK_NULL_HANDLE;
             b.set1   = VK_NULL_HANDLE;
+            b.set2   = VK_NULL_HANDLE;  // SXC:
+            b.set3   = VK_NULL_HANDLE;
             b.have1  = false;
             b.pushed = false;
         }
@@ -270,6 +387,16 @@ namespace gxvk::vk::pipelines
             b.set1    = set1;
             b.offset1 = offset1;
             b.have1   = true;
+        }
+        if ((cover || water) && b.set2 != set2)  // SXC:
+        {
+            d.CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout.layout, 2, 1, &set2, 0, nullptr);
+            b.set2 = set2;
+        }
+        if ((cover || lit || water) && b.set3 != set3)  // SXC:
+        {
+            d.CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout.layout, 3, 1, &set3, 0, nullptr);
+            b.set3 = set3;
         }
 
         VkBuffer     vbs[kMaxStreams + 1];
@@ -327,7 +454,8 @@ namespace gxvk::vk::pipelines
         std::memcpy(push, draw.xform, sizeof draw.xform);
         std::memcpy(push + 16, draw.params, sizeof draw.params);
         std::memcpy(push + 20, draw.tex, sizeof draw.tex);
-        std::memcpy(push + 32, draw.fog, sizeof draw.fog);  // SXC: fixed-function fog
+        std::memcpy(push + 36, draw.fog, sizeof draw.fog);  // SXC: fixed-function fog
+        static_assert(sizeof push == (36 + 4) * sizeof(float), "Shaders/Push.glsl's layout");
         if (!b.pushed || std::memcmp(b.push, push, sizeof push) != 0)
         {
             d.CmdPushConstants(cmd, layout.layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, kPushBytes, push);
@@ -347,7 +475,30 @@ namespace gxvk::vk::pipelines
                 d.CmdBindIndexBuffer(cmd, draw.indexBuffer, 0, VK_INDEX_TYPE_UINT16);
                 b.ib = draw.indexBuffer;
             }
-            d.CmdDrawIndexed(cmd, draw.count, 1, draw.firstIndex, 0, 0);
+            if (draw.runs)
+            {
+                // SXC: the instanced grass's runs, one bind for all of them; step 7d: a run of copies
+                // moves the copy stream to its entry.
+                const bool copies = draw.copyStream >= 0 && static_cast<uint32_t>(draw.copyStream) < draw.streamCount;
+                for (uint32_t r = 0; r < draw.runCount; ++r)
+                {
+                    const Run& run = draw.runs[r];
+                    if (!run.indexCount || !run.instanceCount) continue;
+                    if (copies)
+                    {
+                        const uint32_t      slot   = static_cast<uint32_t>(draw.copyStream);
+                        const VkDeviceSize  offset = draw.streams[slot].offset + static_cast<VkDeviceSize>(run.copy) * 16u;
+                        if (b.offsets[slot] != offset)
+                        {
+                            d.CmdBindVertexBuffers(cmd, slot, 1, &draw.streams[slot].buffer, &offset);
+                            b.offsets[slot] = offset;
+                        }
+                    }
+                    d.CmdDrawIndexed(cmd, run.indexCount, run.instanceCount, run.firstIndex, run.vertexOffset, run.firstInstance);
+                }
+            }
+            else
+                d.CmdDrawIndexed(cmd, draw.count, 1, draw.firstIndex, 0, 0);
         }
         else
         {

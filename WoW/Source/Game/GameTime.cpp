@@ -1,6 +1,9 @@
 #include "GameTime.h"
 #include "Engine/Source/Os/TimeManager.h"
 #include "Engine/Source/Storm/H/storm.h"
+#include "SXC/Sky/Sky.h"  // SXC:
+
+static const float MAXMINUTES_PER_SECOND = 60.0f;
 
 // STATIC: 0x00D37F98
 CGameTime g_clientGameTime;
@@ -33,8 +36,8 @@ float CGameTime::GameTimeSetMinutesPerSecond(float minutesPerSecond) {
 
     if (minutesPerSecond < 1.0f / 60.0f) {
         this->m_minutesPerSecond = 1.0f / 60.0f;
-    } else if (minutesPerSecond > 60.0f) {
-        this->m_minutesPerSecond = 60.0f;
+    } else if (minutesPerSecond > MAXMINUTES_PER_SECOND) {
+        this->m_minutesPerSecond = MAXMINUTES_PER_SECOND;
     } else {
         this->m_minutesPerSecond = minutesPerSecond;
     }
@@ -62,6 +65,7 @@ CGameTime::CGameTime() {
 // VERIFY: d1c1b754 auto
 // OFFSET: 0x004C9850
 bool CGameTime::IsDaytime() {
+    if (bool daytime; this == &g_clientGameTime && SXC::Sky::IsDaytime(daytime)) { return daytime; }  // SXC: the sky's time
     CGameTime time;
     time.SetHourAndMinutes(this->GetHourAndMinutes());
     time.SetDate(0, 0, 0);

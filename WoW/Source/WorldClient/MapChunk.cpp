@@ -1,4 +1,5 @@
 #include "MapChunk.h"
+#include "WoW/Source/WorldClient/WorldConstants.h"
 #include "WoW/Source/WorldClient/DetailDoodad.h"
 #include "WoW/Source/WorldClient/CDetailDoodadData.h"
 #include "Engine/Source/Tempest/CRandom.h"
@@ -44,6 +45,9 @@
 #include "WoW/Source/WorldClient/DayNight__DNInfo.h"
 #include "WoW/Source/WorldClient/DayNight.h"
 #include "Engine/Source/Model2/M2Light.h"
+#include "SXC/Api/sxc_grass.h"
+#include "SXC/Grass/Grass.h"
+#include "SXC/World/World.h"
 
 // STATIC: 0x00A3FBB8
 static const uint16_t s_bitMask[8] = { 0x1, 0x2, 0x4, 0x8, 0x10, 0x20, 0x40, 0x80 };
@@ -246,18 +250,18 @@ void CMapChunk::InitializeVertexGrid() {
     C3Vector* vertex = CMapChunk::vertexList;
 
     for (int32_t row = 0; row < 9; row++) {
-        float x = row * -4.1666665f;
+        float x = row * -SMOLTILE_SIZE;
 
         for (int32_t col = 0; col < 9; col++) {
             vertex->x = x;
-            vertex->y = 0.0f - col * 4.1666665f;
+            vertex->y = 0.0f - col * SMOLTILE_SIZE;
             vertex++;
         }
 
         if (row < 8) {
             for (int32_t col = 0; col < 8; col++) {
-                vertex->x = x - 2.0833333f;
-                vertex->y = 0.0f - col * 4.1666665f - 2.0833333f;
+                vertex->x = x - HALF_SMOLTILE_SIZE;
+                vertex->y = 0.0f - col * SMOLTILE_SIZE - HALF_SMOLTILE_SIZE;
                 vertex++;
             }
         }
@@ -357,14 +361,14 @@ void CMapChunk::CreateVerticesWorld(CGxVertexPN* v, const C3Vector& offset) {
     float top = 17066.666f - this->m_cOffset.y * 33.333332f;
     rows[0] = top;
     cols[0] = left;
-    rows[1] = top - 4.1666665f;
+    rows[1] = top - SMOLTILE_SIZE;
     rows[2] = top - 8.333333f;
     rows[3] = top - 12.5f;
     rows[4] = top - 16.666666f;
     rows[5] = top - 20.833332f;
     rows[6] = top - 25.0f;
     rows[7] = top - 29.166666f;
-    cols[1] = left - 4.1666665f;
+    cols[1] = left - SMOLTILE_SIZE;
     cols[2] = left - 8.333333f;
     cols[3] = left - 12.5f;
     cols[4] = left - 16.666666f;
@@ -393,8 +397,8 @@ void CMapChunk::CreateVerticesWorld(CGxVertexPN* v, const C3Vector& offset) {
 
         if (row < 8) {
             for (int32_t col = 0; col < 8; col++) {
-                v->m_position.x = rows[row] - 2.0833333f;
-                v->m_position.y = cols[col] - 2.0833333f;
+                v->m_position.x = rows[row] - HALF_SMOLTILE_SIZE;
+                v->m_position.y = cols[col] - HALF_SMOLTILE_SIZE;
                 v->m_position.z = this->m_topLeftCoords.z + height[col];
                 v->m_normal.x = normals[3 * col + 0] * 0.0078740157f;
                 v->m_normal.y = normals[3 * col + 1] * 0.0078740157f;
@@ -418,14 +422,14 @@ void CMapChunk::CreateVerticesWorld(CGxVertexPNC* v, const C3Vector& offset) {
     float top = 17066.666f - this->m_cOffset.y * 33.333332f;
     rows[0] = top;
     cols[0] = left;
-    rows[1] = top - 4.1666665f;
+    rows[1] = top - SMOLTILE_SIZE;
     rows[2] = top - 8.333333f;
     rows[3] = top - 12.5f;
     rows[4] = top - 16.666666f;
     rows[5] = top - 20.833332f;
     rows[6] = top - 25.0f;
     rows[7] = top - 29.166666f;
-    cols[1] = left - 4.1666665f;
+    cols[1] = left - SMOLTILE_SIZE;
     cols[2] = left - 8.333333f;
     cols[3] = left - 12.5f;
     cols[4] = left - 16.666666f;
@@ -468,8 +472,8 @@ void CMapChunk::CreateVerticesWorld(CGxVertexPNC* v, const C3Vector& offset) {
 
         if (row < 8) {
             for (int32_t col = 0; col < 8; col++) {
-                v->m_position.x = rows[row] - 2.0833333f;
-                v->m_position.y = cols[col] - 2.0833333f;
+                v->m_position.x = rows[row] - HALF_SMOLTILE_SIZE;
+                v->m_position.y = cols[col] - HALF_SMOLTILE_SIZE;
                 v->m_position.z = this->m_topLeftCoords.z + *height;
                 v->m_normal.x = normals[0] * 0.0078740157f;
                 v->m_normal.y = normals[1] * 0.0078740157f;
@@ -986,7 +990,7 @@ void CMapChunk::CreateRefs(CMapArea* area, uint32_t* mcrfPtr, uint32_t doodadRef
 
             if (proxy.m_sphere.r < 0.001f) {
                 proxy.m_sphere.r = 50.0f;
-                SysMsgPrintf(STATUS_ERROR, 2, "Destructible building WMO(%s) has invalid geobox", &area->m_wmoFileNames[area->m_wmoFilenamesOffsets[def->m_nameId]]);
+                SysMsgPrintf(SYSMSG_ERROR, 2, "Destructible building WMO(%s) has invalid geobox", &area->m_wmoFileNames[area->m_wmoFilenamesOffsets[def->m_nameId]]);
             }
 
             World::FindOrCreateDestructibleProxy(&proxy);
@@ -1163,8 +1167,8 @@ void CMapChunk::CreateDetailDoodads() {
             shadeCenter = shadeCorner + 9 * sizeof(uint32_t);
         }
 
-        float offsetX = y * -4.1666665f;
-        float offsetY = x * -4.1666665f;
+        float offsetX = y * -SMOLTILE_SIZE;
+        float offsetY = x * -SMOLTILE_SIZE;
 
         verts[0] = C3Vector(CMap::s_subchunkCoords[4].x + offsetX, CMap::s_subchunkCoords[4].y + offsetY, CMap::s_subchunkCoords[4].z);
         verts[0].z = height[9];
@@ -1201,32 +1205,8 @@ void CMapChunk::CreateDetailDoodads() {
     C3Vector position(0.0f, 0.0f, 0.0f);
     CImVector color;
 
-    for (uint32_t i = 0; i < World::s_detailDoodadDensity; i++) {
-        int32_t x = s_cells[i].x;
-        int32_t y = s_cells[i].y;
-
-        if ((this->m_predTexture[y] & s_bitMask[x]) >> s_bitShift[x]) {
-            continue;
-        }
-
-        if (this->m_header->m_holes & CMap::s_holeMask[4 * (y >> 1) + (x >> 1)]) {
-            continue;
-        }
-
-        uint32_t layer = (reinterpret_cast<uint16_t*>(this->m_lowQualityTexMap)[y] & CMap::s_2bitSplatMask[x]) >> CMap::s_2bitSplatShft[x];
-        GroundEffectTextureRec* record = g_groundEffectTextureDB.GetRecord(this->m_layers[layer].m_offectId);
-
-        if (!record) {
-            continue;
-        }
-
-        uint32_t count = record->m_density;
-
-        if (!count) {
-            count = 8;
-        }
-
-        int32_t doodads[16];
+    // A record's 16 slots of plant models, by their weights (as stock fills them).
+    auto fillSlots = [](const GroundEffectTextureRec* record, int32_t doodads[16]) {
         uint32_t slot = 0;
         uint32_t filled = 0;
 
@@ -1248,105 +1228,230 @@ void CMapChunk::CreateDetailDoodads() {
             doodads[slot & 15] = record->m_doodadID[filled & 3];
             slot += 13;
         }
+    };
+
+    // One plant (SXC: the stock loop's body, as a lambda so the paint-placed grass shares it; the same
+    // math and the same random draws in the same order; `return` where stock had `continue`).
+    // SXC: the steepest ground plants stand on (stock 0.4; SXC::Grass::SteepestGround).
+    const float steepest = SXC::Grass::SteepestGround();
+
+    auto placePlant = [&](uint32_t cellBase, float cellX, float cellY, uint32_t id, float u, float v) {
+        float px = u * HALF_SMOLTILE_SIZE + HALF_SMOLTILE_SIZE;
+        float py = v * HALF_SMOLTILE_SIZE + HALF_SMOLTILE_SIZE;
+
+        CDetailDoodadData* data = CDetailDoodad::s_doodadList[id];
+        position.x = -py;
+        position.y = -px;
+
+        uint32_t tri = 0;
+        float diagonal = -px - -py;
+
+        if (diagonal < 0.0f) {
+            tri = 1;
+        }
+
+        if (px - SMOLTILE_SIZE - -py > 0.0f) {
+            tri += 2;
+        }
+
+        tri += cellBase;
+        C4Plane& plane = s_planes[tri];
+
+        if (plane.n.z < steepest) {
+            return;
+        }
+
+        if ((data->m_record->m_flags & 2) || !this->m_vertexShading) {
+            color.r = 0xFF;
+            color.g = 0xFF;
+            color.b = 0xFF;
+        } else {
+            float s;
+            float t;
+
+            if (fabs(v) < fabs(u)) {
+                s = fabs(u);
+                t = 0.5f - v * 0.5f;
+            } else {
+                s = fabs(v);
+                t = 0.5f - u * 0.5f;
+            }
+
+            if (diagonal < 0.0f) {
+                t = 1.0f - t;
+            }
+
+            float st = s * t;
+            C3Vector shade(s_colorEdgeA[tri].x * s + s_colorBase[tri].x + s_colorEdgeB[tri].x * st, s_colorEdgeA[tri].y * s + s_colorBase[tri].y + s_colorEdgeB[tri].y * st, s_colorEdgeA[tri].z * s + s_colorBase[tri].z + s_colorEdgeB[tri].z * st);
+
+            if (shade.x > 255.0f) {
+                shade.x = 255.0f;
+            }
+
+            if (shade.y > 255.0f) {
+                shade.y = 255.0f;
+            }
+
+            if (shade.z > 255.0f) {
+                shade.z = 255.0f;
+            }
+
+            color.r = static_cast<uint8_t>(CMath::fint_(shade.x - 0.5f));
+            color.g = static_cast<uint8_t>(CMath::fint_(shade.y - 0.5f));
+            color.b = static_cast<uint8_t>(CMath::fint_(shade.z - 0.5f));
+        }
+
+        color.a = 0xFF;
+
+        if (this->m_shadowMap) {
+            float shadowX = (px + cellX) * OO_COORD_TO_SHADOW;
+            int32_t sx = CMath::fint_(shadowX - 0.5f);
+            float shadowY = (py + cellY) * OO_COORD_TO_SHADOW;
+            int32_t sy = CMath::fint_(shadowY - 0.5f);
+
+            if (this->m_shadowMap[8 * sy + (sx >> 3)] & (1 << (sx & 7))) {
+                color.a = 0;
+            }
+        }
+
+        position.x -= cellY;
+        position.y -= cellX;
+        position.z = -((position.x * plane.n.x + position.y * plane.n.y + plane.d) / plane.n.z);
+
+        float rotation = (CRandom::sfloat_(seed) + 1.0f) * 3.1415927f;
+        float scale = CRandom::sfloat_(seed) * 0.33f + 1.0f;
+
+        // SXC: an upright plant on a slope sunk by the drop under its downhill edge (0 unless set).
+        position.z -= SXC::Grass::SlopeSink(id, scale, plane.n);
+
+        inst->AddDoodad(id, position, rotation, scale, plane.n, static_cast<uint16_t>(tri), color);
+    };
+
+    // SXC: grass placed by paint (step 7d, SXC::Grass::PaintedMix): every layer with a ground effect
+    // offers its plants in every cell, and each is kept with the share of that layer painted where it
+    // falls. Stock takes the whole cell's plants from the cell's one "dominant" layer in the file (MCNK's
+    // low-quality map), which some maps have wrong (a 0% base marked dominant: no grass at all).
+    // Placement 1 instead keeps the stock way but works the dominant layer out from the paint (the
+    // largest average share over the cell: what the map's editor should have written).
+    const uint32_t placement = SXC::Grass::Placement();
+    const bool painted = placement == SXC_GRASS_PLACE_PAINTED;
+    const float minShare = SXC::Grass::PaintedMin();
+
+    auto dominantByPaint = [&](int32_t x, int32_t y, uint32_t fallback) {
+        float sum[4] = {};
+        bool any = false;
+
+        for (int32_t a = 0; a < 4; a++) {
+            for (int32_t b = 0; b < 4; b++) {
+                float weights[4] = {};
+                const float wx = this->m_topLeftCoords.x - (y + (a + 0.5f) * 0.25f) * SMOLTILE_SIZE;
+                const float wy = this->m_topLeftCoords.y - (x + (b + 0.5f) * 0.25f) * SMOLTILE_SIZE;
+                const int32_t n = SXC::WorldApi::LayerWeights(wx, wy, weights, 4);
+
+                for (int32_t l = 0; l < n; l++) {
+                    sum[l] += weights[l];
+                }
+
+                any |= n > 0;
+            }
+        }
+
+        uint32_t best = fallback;
+
+        for (uint32_t l = 0; any && l < this->m_header->m_nLayers && l < 4; l++) {
+            if (sum[l] > sum[best] + 1e-3f) {
+                best = l;
+            }
+        }
+
+        return best;
+    };
+
+    for (uint32_t i = 0; i < World::s_detailDoodadDensity; i++) {
+        int32_t x = s_cells[i].x;
+        int32_t y = s_cells[i].y;
+
+        if ((this->m_predTexture[y] & s_bitMask[x]) >> s_bitShift[x]) {
+            continue;
+        }
+
+        if (this->m_header->m_holes & CMap::s_holeMask[4 * (y >> 1) + (x >> 1)]) {
+            continue;
+        }
 
         uint32_t cellBase = 4 * (x + 8 * y);
-        float cellX = x * 4.1666665f;
-        float cellY = y * 4.1666665f;
+        float cellX = x * SMOLTILE_SIZE;
+        float cellY = y * SMOLTILE_SIZE;
+
+        if (painted) {
+            for (uint32_t layer = 0; layer < this->m_header->m_nLayers && layer < 4; layer++) {
+                GroundEffectTextureRec* record = this->m_layers[layer].m_offectId ? g_groundEffectTextureDB.GetRecord(this->m_layers[layer].m_offectId) : nullptr;
+
+                if (!record) {
+                    continue;
+                }
+
+                uint32_t count = record->m_density ? record->m_density : 8;
+                int32_t doodads[16];
+                fillSlots(record, doodads);
+
+                for (uint32_t j = 0; j < count; j++) {
+                    float u = CRandom::sfloat_(seed);
+                    float v = CRandom::sfloat_(seed);
+                    float keep = CRandom::sfloat_(seed) * 0.5f + 0.5f;
+                    uint32_t id = doodads[(i + j) & 15];
+
+                    if (!id) {
+                        continue;
+                    }
+
+                    // The layer's share where the plant would stand.
+                    float weights[4] = {};
+                    const float wx = this->m_topLeftCoords.x - (v * HALF_SMOLTILE_SIZE + HALF_SMOLTILE_SIZE) - cellY;
+                    const float wy = this->m_topLeftCoords.y - (u * HALF_SMOLTILE_SIZE + HALF_SMOLTILE_SIZE) - cellX;
+
+                    if (SXC::WorldApi::LayerWeights(wx, wy, weights, 4) <= static_cast<int32_t>(layer) || weights[layer] < minShare || keep >= weights[layer]) {
+                        continue;
+                    }
+
+                    placePlant(cellBase, cellX, cellY, id, u, v);
+                }
+            }
+
+            continue;
+        }
+
+        uint32_t layer = (reinterpret_cast<uint16_t*>(this->m_lowQualityTexMap)[y] & CMap::s_2bitSplatMask[x]) >> CMap::s_2bitSplatShft[x];
+
+        if (placement == SXC_GRASS_PLACE_DOMINANT) {
+            layer = dominantByPaint(x, y, layer);
+        }
+
+        GroundEffectTextureRec* record = g_groundEffectTextureDB.GetRecord(this->m_layers[layer].m_offectId);
+
+        if (!record) {
+            continue;
+        }
+
+        uint32_t count = record->m_density;
+
+        if (!count) {
+            count = 8;
+        }
+
+        int32_t doodads[16];
+        fillSlots(record, doodads);
 
         for (uint32_t j = 0; j < count; j++) {
             float u = CRandom::sfloat_(seed);
             float v = CRandom::sfloat_(seed);
             uint32_t id = doodads[(i + j) & 15];
-            float px = u * 2.0833333f + 2.0833333f;
-            float py = v * 2.0833333f + 2.0833333f;
 
             if (!id) {
                 continue;
             }
 
-            CDetailDoodadData* data = CDetailDoodad::s_doodadList[id];
-            position.x = -py;
-            position.y = -px;
-
-            uint32_t tri = 0;
-            float diagonal = -px - -py;
-
-            if (diagonal < 0.0f) {
-                tri = 1;
-            }
-
-            if (px - 4.1666665f - -py > 0.0f) {
-                tri += 2;
-            }
-
-            tri += cellBase;
-            C4Plane& plane = s_planes[tri];
-
-            if (plane.n.z < 0.4f) {
-                continue;
-            }
-
-            if ((data->m_record->m_flags & 2) || !this->m_vertexShading) {
-                color.r = 0xFF;
-                color.g = 0xFF;
-                color.b = 0xFF;
-            } else {
-                float s;
-                float t;
-
-                if (fabs(v) < fabs(u)) {
-                    s = fabs(u);
-                    t = 0.5f - v * 0.5f;
-                } else {
-                    s = fabs(v);
-                    t = 0.5f - u * 0.5f;
-                }
-
-                if (diagonal < 0.0f) {
-                    t = 1.0f - t;
-                }
-
-                float st = s * t;
-                C3Vector shade(s_colorEdgeA[tri].x * s + s_colorBase[tri].x + s_colorEdgeB[tri].x * st, s_colorEdgeA[tri].y * s + s_colorBase[tri].y + s_colorEdgeB[tri].y * st, s_colorEdgeA[tri].z * s + s_colorBase[tri].z + s_colorEdgeB[tri].z * st);
-
-                if (shade.x > 255.0f) {
-                    shade.x = 255.0f;
-                }
-
-                if (shade.y > 255.0f) {
-                    shade.y = 255.0f;
-                }
-
-                if (shade.z > 255.0f) {
-                    shade.z = 255.0f;
-                }
-
-                color.r = static_cast<uint8_t>(CMath::fint_(shade.x - 0.5f));
-                color.g = static_cast<uint8_t>(CMath::fint_(shade.y - 0.5f));
-                color.b = static_cast<uint8_t>(CMath::fint_(shade.z - 0.5f));
-            }
-
-            color.a = 0xFF;
-
-            if (this->m_shadowMap) {
-                float shadowX = (px + cellX) * 1.92f;
-                int32_t sx = CMath::fint_(shadowX - 0.5f);
-                float shadowY = (py + cellY) * 1.92f;
-                int32_t sy = CMath::fint_(shadowY - 0.5f);
-
-                if (this->m_shadowMap[8 * sy + (sx >> 3)] & (1 << (sx & 7))) {
-                    color.a = 0;
-                }
-            }
-
-            position.x -= cellY;
-            position.y -= cellX;
-            position.z = -((position.x * plane.n.x + position.y * plane.n.y + plane.d) / plane.n.z);
-
-            float rotation = (CRandom::sfloat_(seed) + 1.0f) * 3.1415927f;
-            float scale = CRandom::sfloat_(seed) * 0.33f + 1.0f;
-
-            inst->AddDoodad(id, position, rotation, scale, plane.n, static_cast<uint16_t>(tri), color);
+            placePlant(cellBase, cellX, cellY, id, u, v);
         }
     }
 }

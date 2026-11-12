@@ -10,15 +10,22 @@ namespace gxvk::vk::frame::detail
     {
         if (s.depthFormat != VK_FORMAT_UNDEFINED) return true;
         const VkFormat candidates[3] = { VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT, VK_FORMAT_D16_UNORM };
-        for (VkFormat f : candidates)
+        // SXC: the first format that can also be sampled (an effect over the scene reads the depth:
+        // SXC's volumetric fog), else the first that can be an attachment at all.
+        for (int sampled = 1; sampled >= 0; --sampled)
         {
-            VkFormatProperties props = {};
-            h.iapi->GetPhysicalDeviceFormatProperties(h.physical, f, &props);
-            if (props.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)
+            for (VkFormat f : candidates)
             {
-                s.depthFormat = f;
-                Write(Debug, "vulkan: frame: depth buffers are %s", FormatName(f));
-                return true;
+                VkFormatProperties props = {};
+                h.iapi->GetPhysicalDeviceFormatProperties(h.physical, f, &props);
+                const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | (sampled ? VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT : 0u);
+                if ((props.optimalTilingFeatures & need) == need)
+                {
+                    s.depthFormat  = f;
+                    s.depthSampled = sampled != 0;
+                    Write(Debug, "vulkan: frame: depth buffers are %s%s", FormatName(f), sampled ? " (sampleable)" : " (not sampleable)");
+                    return true;
+                }
             }
         }
         Write(Error, "vulkan: frame: the adapter offers no depth attachment format");
@@ -62,7 +69,7 @@ namespace gxvk::vk::frame::detail
         sub.pColorAttachments       = &colourRef;
         sub.pDepthStencilAttachment = &depthRef;
 
-        VkSubpassDependency dep[2] = {};
+        VkSubpassDependency dep[3] = {};
         dep[0].srcSubpass    = VK_SUBPASS_EXTERNAL;
         dep[0].dstSubpass    = 0;
         dep[0].srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
@@ -78,6 +85,15 @@ namespace gxvk::vk::frame::detail
         dep[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         dep[1].dstStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
         dep[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+        // SXC: a pixel shader's storage writes to a later draw's pixel shader reads at the same pixel,
+        // inside the pass (frame::PixelWritesToReads: the decals read the terrain's depth, step 5e).
+        dep[2].srcSubpass      = 0;
+        dep[2].dstSubpass      = 0;
+        dep[2].srcStageMask    = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        dep[2].srcAccessMask   = VK_ACCESS_SHADER_WRITE_BIT;
+        dep[2].dstStageMask    = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        dep[2].dstAccessMask   = VK_ACCESS_SHADER_READ_BIT;
+        dep[2].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 
         VkRenderPassCreateInfo info = {};
         info.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
@@ -85,7 +101,7 @@ namespace gxvk::vk::frame::detail
         info.pAttachments    = a;
         info.subpassCount    = 1;
         info.pSubpasses      = &sub;
-        info.dependencyCount = 2;
+        info.dependencyCount = 3;
         info.pDependencies   = dep;
         const VkResult r = s.dapi->CreateRenderPass(s.device, &info, nullptr, &out);
         if (r != VK_SUCCESS)
@@ -127,6 +143,12 @@ namespace gxvk::vk::frame::detail
     {
         if (retire)
         {
+            if (d.sampleView != VK_NULL_HANDLE)  // SXC: listed first, so it goes before its image
+            {
+                Retired v;
+                v.view = d.sampleView;
+                Retire(v, d.lastUsed);
+            }
             Retired e;
             e.view     = d.view;
             e.rawImage = d.image;
@@ -135,6 +157,7 @@ namespace gxvk::vk::frame::detail
         }
         else
         {
+            if (d.sampleView != VK_NULL_HANDLE) s.dapi->DestroyImageView(s.device, d.sampleView, nullptr);  // SXC:
             if (d.view != VK_NULL_HANDLE) s.dapi->DestroyImageView(s.device, d.view, nullptr);
             if (d.image != VK_NULL_HANDLE) s.dapi->DestroyImage(s.device, d.image, nullptr);
             memory::Free(d.block);
@@ -183,7 +206,7 @@ namespace gxvk::vk::frame::detail
         info.arrayLayers   = 1;
         info.samples       = VK_SAMPLE_COUNT_1_BIT;
         info.tiling        = VK_IMAGE_TILING_OPTIMAL;
-        info.usage         = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        info.usage         = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | (s.depthSampled ? VK_IMAGE_USAGE_SAMPLED_BIT : 0u);  // SXC: sampled
         info.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
         info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         DepthBuffer d;
@@ -213,10 +236,17 @@ namespace gxvk::vk::frame::detail
             view.subresourceRange.levelCount     = 1;
             view.subresourceRange.layerCount     = 1;
             r = s.dapi->CreateImageView(s.device, &view, nullptr, &d.view);
+            // SXC: a view of the depth aspect alone, for an effect to sample.
+            if (r == VK_SUCCESS && s.depthSampled)
+            {
+                view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+                if (s.dapi->CreateImageView(s.device, &view, nullptr, &d.sampleView) != VK_SUCCESS) d.sampleView = VK_NULL_HANDLE;
+            }
         }
         if (r != VK_SUCCESS)
         {
             Fail("vkBindImageMemory / vkCreateImageView (depth)", r);
+            if (d.view != VK_NULL_HANDLE) s.dapi->DestroyImageView(s.device, d.view, nullptr);
             s.dapi->DestroyImage(s.device, d.image, nullptr);
             memory::Free(d.block);
             return UINT32_MAX;

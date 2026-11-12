@@ -29,6 +29,13 @@ namespace gxvk::vk::manifest { struct Record; }
 //               FixedFunctionTranslated the fixed-function pixel stage in that interface, for a
 //                                      translated vertex module drawn with no pixel shader
 //
+//   SXC: our terrain shader (Shaders/Terrain.vert, Terrain.frag), in the translated interface, in place
+//   of the client's terrain records when [Terrain] OurShader is on: Terrain for both stages, the
+//   record's options as specialization constants (Draw::terrainVertex / terrainFragment). And Decal for
+//   both (Shaders/Decal.vert, Decal.frag): a projected texture's box, shaded onto the raised covers. And
+//   Water for both (Shaders/Water.vert, Water.frag): the stock water materials' meshes, drawn by SXC/Water
+//   through shaders named "SxcWater"; they read the lights' set 3.
+//
 // A pipeline is built for each distinct combination of vertex layout, programs (and records),
 // topology, blend mode, depth and culling state, colour write mask, fill mode, sampler-slot set and
 // render pass, on first use, and kept for the device's life. The viewport, the scissor, the depth
@@ -61,6 +68,9 @@ namespace gxvk::vk::pipelines
         Ui            = 1,
         FixedFunctionSemantic = 2,
         Translated    = 3,
+        Terrain       = 4,   // SXC:
+        Decal         = 5,   // SXC: projected textures on the raised covers (step 5e)
+        Water         = 6,   // SXC: our water (SXC/Water)
         Count
     };
 
@@ -71,8 +81,38 @@ namespace gxvk::vk::pipelines
         Desaturate    = 2,
         FixedFunctionTranslated = 3,
         Translated    = 4,
+        Terrain       = 5,   // SXC:
+        Decal         = 6,   // SXC: projected textures on the raised covers (step 5e)
+        Water         = 7,   // SXC: our water (SXC/Water)
         Count
     };
+
+    // SXC: our terrain shader's options, packed (Shaders/Terrain.vert, Terrain.frag).
+    namespace terrain
+    {
+        // Vertex: bits 0-1 layers - 1, 2 shadow, 3 env, 4 vertex colour, 5 specular, 6 point lights; the
+        // covers (step 5c): 7 raised through the tessellation, 8 the lowered underlay of a raised chunk,
+        // 9 big alpha (the raised points read the alpha map like the pixel record does).
+        constexpr uint32_t kVertexShadow = 1u << 2, kVertexEnv = 1u << 3, kVertexColor = 1u << 4, kVertexSpecular = 1u << 5, kVertexPointLights = 1u << 6;
+        constexpr uint32_t kVertexTess = 1u << 7, kVertexSunk = 1u << 8, kVertexBigAlpha = 1u << 9;
+        // Fragment: bits 0-1 layers - 1, 2-3 shadow group (0 none, 1 one cascade, 2 all), 4 big alpha,
+        // 5 unlit layers, 6 nine taps (shadow mode 3), 7 layer 0 a cube map (a reflective layer), 8 a second
+        // view's copy (Vulkan/View.cpp: writes nothing into the covers' grids).
+        constexpr uint32_t kFragmentBigAlpha = 1u << 4, kFragmentUnlit = 1u << 5, kFragmentNineTaps = 1u << 6, kFragmentCube = 1u << 7;
+        constexpr uint32_t kFragmentSecondView = 1u << 8;
+        inline uint32_t Layers(uint32_t options) { return (options & 3u) + 1u; }
+        inline uint32_t ShadowGroup(uint32_t fragment) { return (fragment >> 2) & 3u; }
+        /// The first slot of the layers' height textures (`_h`, one per layer; white where a layer has none).
+        constexpr uint32_t kHeightSlot = 9;
+        /// The samplers a fragment module of these options declares: the layers, the alpha map, the
+        /// cascades, the layers' height textures.
+        inline uint32_t SamplerMask(uint32_t fragment)
+        {
+            const uint32_t group = ShadowGroup(fragment);
+            const uint32_t layers = Layers(fragment);
+            return ((1u << (layers + 1u)) - 1u) | (group >= 1 ? 1u << 5 : 0u) | (group >= 2 ? 0xEu << 5 : 0u) | (((1u << layers) - 1u) << kHeightSlot);
+        }
+    }
 
     struct Stream
     {
@@ -97,6 +137,20 @@ namespace gxvk::vk::pipelines
         uint32_t    imageId    = 0;
         uint32_t    samplerKey = 0;
         bool        cube       = false;
+    };
+
+    /// SXC: one instanced draw of a run list (the instanced grass, step 7): indices of the bound index
+    /// buffer, instances of the instance-rate streams; `copy` picks the copy stream's entry (the grass
+    /// density, step 7d: 0 the plants themselves).
+    struct Run
+    {
+        uint32_t firstIndex    = 0;
+        uint32_t indexCount    = 0;
+        int32_t  vertexOffset  = 0;
+        uint32_t firstInstance = 0;
+        uint32_t instanceCount = 0;
+        uint32_t copy          = 0;
+        float    distance      = 0.0f;   ///< SXC: yd from the player to the run's chunk (a second view takes the near ones)
     };
 
     /// One draw, as the device reads it off the engine.
@@ -136,13 +190,18 @@ namespace gxvk::vk::pipelines
         FragmentProgram         fragment       = FragmentProgram::FixedFunction;
         const manifest::Record* vertexRecord   = nullptr;   ///< with VertexProgram::Translated
         const manifest::Record* fragmentRecord = nullptr;   ///< with FragmentProgram::Translated
+        uint32_t terrainVertex   = 0;   ///< SXC: with VertexProgram::Terrain, terrain::kVertex* options
+        uint32_t terrainFragment = 0;   ///< SXC: with FragmentProgram::Terrain, terrain::kFragment* options
+        bool     terrainUnderlay = false; ///< SXC: a raised terrain chunk: draw it flat and lowered first (kVertexSunk)
+        uint32_t lightsSurface = 0;       ///< SXC: which of our lights a lit translated module takes (lights::Surface: any, outdoor, indoor, off)
 
         /// The push constants (Shaders/Push.glsl): the transform (the row-major matrix, or c0..c3),
         /// the parameters (alpha reference, textured stages, colour ops, alpha ops) and the texture
-        /// transforms of stages 0 and 1 (identity by default).
+        /// transforms of stages 0 and 1 (identity by default): per stage the columns giving u and v
+        /// from (x, y, z, 1), stage s at tex[8s] (u) and tex[8s + 4] (v).
         float xform[16] = {};
         float params[4] = {};
-        float tex[12]   = { 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+        float tex[16]   = { 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f };
         /// SXC: D3D9's linear vertex fog for the fixed-function programs: GxRs_FogStart,
         /// GxRs_FogEnd, GxRs_FogColor's RGB as one integer (exact in a float), 1 when on.
         float fog[4]    = {};
@@ -161,6 +220,16 @@ namespace gxvk::vk::pipelines
 
         VkViewport viewport = {};
         VkRect2D   scissor  = {};
+
+        /// SXC: the instanced grass (step 7): the streams fed per instance (bit per stream), the stream
+        /// whose first 48 bytes are a plant's rows (a grass vertex record reads them at locations
+        /// 13..15; -1 none), and the runs recorded instead of the one draw (indexed; `count` ignored).
+        /// Step 7d: the copy stream (stride 0, 16 bytes an entry: a run's `copy` binds its entry; -1 none).
+        uint32_t   instanceStreams = 0;
+        int32_t    plantStream     = -1;
+        int32_t    copyStream      = -1;
+        const Run* runs     = nullptr;
+        uint32_t   runCount = 0;
     };
 
     /**
@@ -173,6 +242,10 @@ namespace gxvk::vk::pipelines
     /// Everything, after the device is idle. Before shaders::Shutdown(), texture::Shutdown() and
     /// memory::Shutdown().
     void Shutdown();
+
+    /// SXC: something else bound its own pipeline, sets and viewport on the main command buffer (an
+    /// effect between the engine's draws): the next draw binds everything again.
+    void ForgetBound();
 
     /**
      * Records one draw into an open render pass: the pipeline for the draw's key (built on first

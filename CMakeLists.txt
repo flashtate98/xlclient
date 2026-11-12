@@ -35,6 +35,14 @@ else ()
     message(FATAL_ERROR "Unsupported pointer size.")
 endif ()
 
+# SXC: Release with debug information (in the objects, /Z7) and a PDB from the linker, so the hang
+# watchdog (SXC/Watchdog) and the crash log name functions and lines. The code is the same; the linker keeps
+# dropping unused code and folding duplicates (/OPT:REF, /OPT:ICF, which /DEBUG would otherwise turn off).
+if (MSVC)
+    add_compile_options($<$<CONFIG:Release>:/Z7>)
+    add_link_options($<$<CONFIG:Release>:/DEBUG:FULL> $<$<CONFIG:Release>:/OPT:REF> $<$<CONFIG:Release>:/OPT:ICF>)
+endif ()
+
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
@@ -61,6 +69,15 @@ option(WOWDECOMP_RETAIL_MODELS "Load Retail (MD21) models, animations and skelet
 if (WOWDECOMP_RETAIL_MODELS)
     add_compile_definitions(WOWDECOMP_RETAIL_MODELS=1)
 endif ()
+# Game identity (build 12340, version 3.3.5, client name) lives in GameVersion.h at the repository root.
+# WaystoneVersion.h is regenerated from git on every build; the login screen shows its build number.
+set(WAYSTONE_VERSION_HEADER ${CMAKE_BINARY_DIR}/generated/WaystoneVersion.h)
+add_custom_target(WaystoneVersion
+    COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DOUTPUT=${WAYSTONE_VERSION_HEADER} -P ${CMAKE_SOURCE_DIR}/cmake/GenerateWaystoneVersion.cmake
+    BYPRODUCTS ${WAYSTONE_VERSION_HEADER}
+    VERBATIM
+)
+include_directories(${CMAKE_BINARY_DIR}/generated)
 
 # Third-party code is linked, not decompiled, for now.
 if (EXISTS ${CMAKE_SOURCE_DIR}/ThirdParty/CMakeLists.txt)
@@ -121,6 +138,9 @@ if (WOWDECOMP_ARCH_64)
 endif ()
 add_subdirectory(WarcraftXL)
 add_subdirectory(SXC)  # SXC: our own layer, links itself into the executables
+
+add_dependencies(Glue WaystoneVersion)
+add_dependencies(Ui WaystoneVersion)
 
 foreach (target Wow WowClient MapViewer M2Viewer GxTest MpqTest BlpTest DbcTest AssetCheck)
     if (TARGET ${target})

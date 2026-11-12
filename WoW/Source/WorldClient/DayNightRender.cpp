@@ -12,6 +12,8 @@
 #include "Engine/Source/Services/Texture.h"
 #include "Engine/Source/Tempest/C44Matrix.h"
 #include "Engine/Source/Tempest/CMath.h"
+#include "SXC/Sky/Sky.h"  // SXC:
+#include "Engine/Source/ShaderEffect/Types.h"
 
 // VERIFY: 410884f1 auto
 // OFFSET: 0x009ABB00
@@ -91,6 +93,7 @@ void DayNight::DNStars::Render() {
 // VERIFY: 5fee0e81 manual
 // OFFSET: 0x009AC660
 void DayNight::DNPlanet::Render() {
+    if (SXC::Sky::PlanetRender(this)) { return; }  // SXC: an sxc.sky provider's bodies instead of the stock three
     C3Vector verts[6];
     C2Vector texCoords[6];
     CImVector colors[6] = {};
@@ -136,8 +139,8 @@ void DayNight::DNPlanet::Render() {
     GxRsSet(GxRs_Fog, 0);
     GxRsSet(GxRs_DepthWrite, 0);
     g_theGxDevicePtr->RsSet(GxRs_Texture0, gxTex);
-    GxRsSet(GxRs_ColorOp0, 0);
-    GxRsSet(GxRs_AlphaOp0, 0);
+    GxRsSet(GxRs_ColorOp0, GxTexOp_Mod);
+    GxRsSet(GxRs_AlphaOp0, GxTexOp_Mod);
 
     GxPrimVertexPtr(vertCount, verts, sizeof(C3Vector), nullptr, 0, colors, sizeof(CImVector), texCoords, sizeof(C2Vector), nullptr, 0);
     GxPrimIndexPtr(indexCount, indices);
@@ -188,6 +191,7 @@ void DayNight::DNSky::Render() {
 
     GxXformPop(GxXform_World);
     g_theGxDevicePtr->RsPop();
+    SXC::Sky::AfterDome();  // SXC: bodies drawn after the dome
 }
 
 // VERIFY: 62766f13 manual

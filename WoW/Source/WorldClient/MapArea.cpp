@@ -1,7 +1,10 @@
 #include "MapArea.h"
+#include "WoW/Source/WorldClient/WorldConstants.h"
 #include <cstring>
 #include "Engine/Source/Services/AsyncFile.h"
 #include "Engine/Source/Storm/H/storm.h"
+#include "Engine/Source/BlizzardCore/SFile2-Core.h"  // SXC: the _s fallback
+#include "SXC/Terrain/TextureParams.h"  // SXC:
 #include "Engine/Source/Tempest/CiRect.h"
 #include "Engine/Source/Tempest/CImVector.h"
 #include "Engine/Source/Services/Texture.h"
@@ -67,6 +70,11 @@ void CMapArea::Purge() {
     for (uint32_t i = 0; i < this->m_textures.m_count; i++) {
         if (this->m_textures.m_data[i].m_texture) {
             HandleClose(reinterpret_cast<HOBJECT>(this->m_textures.m_data[i].m_texture));
+        }
+
+        if (this->m_textures.m_data[i].m_sxcHeight) {  // SXC:
+            HandleClose(reinterpret_cast<HOBJECT>(this->m_textures.m_data[i].m_sxcHeight));
+            this->m_textures.m_data[i].m_sxcHeight = nullptr;
         }
     }
 
@@ -161,15 +169,36 @@ void CMapArea::BatchChunks(const C2iVector& pos) {
 void CMapArea::LoadTerrainTexture(CMapAreaTexture* areaTexture, int32_t textureId) {
     bool shaders = g_theGxDevicePtr->Caps().m_texTarget[1] && g_theGxDevicePtr->Caps().m_shaderTargets[0] && g_theGxDevicePtr->Caps().m_shaderTargets[4];
 
-    uint8_t flags = 0;
+    uint32_t flags = 0;
 
     if (this->m_textureFlags) {
-        flags = this->m_textureFlags[textureId];
+        flags = static_cast<uint32_t>(this->m_textureFlags[textureId]);
+    }
+
+    // SXC: TerrainTextureParams' MTXF bits over the tile's own (a cube map's lost "no specular").
+    flags = SXC::Terrain::Resolve(CMap::mapName, this->m_index.x, this->m_index.y, areaTexture->m_textureName, flags).mtxf;
+
+    // SXC: the file the texture loads from, its MTEX name left as it is (our tables look textures up by
+    // it). Later ADTs name the _s file and derive the base from it; converted ones keep that name, which
+    // here loaded the _s file as the base (or asked for an "_s_s"). Such a name loads the base the
+    // _s belongs to, when that file exists.
+    char baseName[256];
+    SStrCopy(baseName, areaTexture->m_textureName, sizeof(baseName));
+    const size_t length = SStrLen(baseName);
+
+    if (length > 6 && !SStrCmpI(baseName + length - 6, "_s.blp", 6)) {
+        char stripped[256];
+        SStrCopy(stripped, baseName, sizeof(stripped));
+        SStrCopy(stripped + length - 6, ".blp", sizeof(stripped) - (length - 6));
+
+        if (SFile::FileExists(stripped)) {
+            SStrCopy(baseName, stripped, sizeof(baseName));
+        }
     }
 
     if ((flags & 0x1) || !CMap::enableSpecularTerrain) {
         if (!(flags & 0x1) || shaders) {
-            areaTexture->m_texture = CMap::LoadTexture(areaTexture->m_textureName);
+            areaTexture->m_texture = CMap::LoadTexture(baseName);
         } else {
             CImVector color;
             color.b = 0x00;
@@ -180,10 +209,33 @@ void CMapArea::LoadTerrainTexture(CMapAreaTexture* areaTexture, int32_t textureI
         }
     } else {
         char fileName[256];
-        SStrCopy(fileName, areaTexture->m_textureName, STORM_MAX_STR);
+        SStrCopy(fileName, baseName, STORM_MAX_STR);
         char* ext = SStrChrR(fileName, '.');
         SStrCopy(ext, "_s.blp", STORM_MAX_STR);
+
+        // SXC: stock loads only the _s file, and a texture without one (a converted map's cube maps,
+        // their MTXF "no specular" flag lost) became a solid stand-in. Then the base itself.
+        if (!SFile::FileExists(fileName)) {
+            SStrCopy(fileName, baseName, STORM_MAX_STR);
+        }
+
         areaTexture->m_texture = CMap::LoadTexture(fileName);
+    }
+
+    // SXC: the height texture (`_h`, retail since MoP; its alpha the height) beside the base, for our
+    // terrain shader's height blending (TerrainTextureParams' HeightScale / HeightOffset turn it on).
+    if (shaders && !areaTexture->m_sxcHeight) {
+        char heightName[256];
+        SStrCopy(heightName, baseName, sizeof(heightName));
+        char* ext = SStrChrR(heightName, '.');
+
+        if (ext && static_cast<size_t>(ext - heightName) + 7 <= sizeof(heightName)) {
+            SStrCopy(ext, "_h.blp", sizeof(heightName) - static_cast<size_t>(ext - heightName));
+
+            if (SFile::FileExists(heightName)) {
+                areaTexture->m_sxcHeight = CMap::LoadTexture(heightName);
+            }
+        }
     }
 }
 
@@ -290,6 +342,7 @@ void CMapArea::LoadTextures(char* fileNames, uint32_t fileNamesSize) {
         CMapAreaTexture* areaTexture = this->m_textures.New();
         areaTexture->m_textureName = &fileNames[offset];
         areaTexture->m_texture = nullptr;
+        areaTexture->m_sxcHeight = nullptr;  // SXC:
 
         if (!streaming) {
             this->LoadTerrainTexture(&this->m_textures.m_data[this->m_textures.Count() - 1], this->m_textures.Count() - 1);
@@ -343,6 +396,10 @@ void CMapArea::ProcessIffChunks() {
 // VERIFY: ff270d7a auto
 // OFFSET: 0x007D7020
 void CMapArea::AsyncCallback(void* param) {
+    if (wxl::seam::Listening(WXL_EV_TerrainTileLoad)) {
+        wxl::seam::MapArea::AsyncCallback::Before(param);
+    }
+
     CMapArea* area = static_cast<CMapArea*>(param);
 
     area->ProcessIffChunks();
@@ -458,8 +515,8 @@ static void SortLiquidChunks(LiquidChunkAndDistance* array, uint32_t count) {
 // OFFSET: 0x0079C360
 void CMapArea::QueryLiquidSounds(C3Vector* pos, float radius, TSGrowableArray<World::LiquidQueryResult>& results) {
     float relY = -(pos->y - this->m_topLeft2.y);
-    int32_t chunkX = CMath::fint_(-(pos->x - this->m_topLeft2.x) * 0.029999999f - 0.5f);
-    int32_t chunkY = CMath::fint_(relY * 0.029999999f - 0.5f);
+    int32_t chunkX = CMath::fint_(-(pos->x - this->m_topLeft2.x) * OO_COORD_TO_CHUNK - 0.5f);
+    int32_t chunkY = CMath::fint_(relY * OO_COORD_TO_CHUNK - 0.5f);
     int32_t chunkRadius = CMath::fint_(static_cast<float>(ceil(radius * 0.030000001f)) - 0.5f);
     int32_t rowStart = chunkX - chunkRadius <= 0 ? 0 : chunkX - chunkRadius;
     int32_t colStart = chunkY - chunkRadius <= 0 ? 0 : chunkY - chunkRadius;
@@ -519,19 +576,19 @@ void CMapArea::QueryLiquidSounds(C3Vector* pos, float radius, TSGrowableArray<Wo
                         result->m_offset.z = dz;
                     }
 
-                    dy -= 4.1666665f;
+                    dy -= SMOLTILE_SIZE;
                 }
 
                 dy += 33.333332f;
-                dx -= 4.1666665f;
+                dx -= SMOLTILE_SIZE;
             }
         } else {
             CMapChunk* chunk = entry->m_chunk;
             float relTileY = -(pos->y - chunk->m_topLeftCoords.y);
             float relTileX = -(pos->x - chunk->m_topLeftCoords.x);
             int32_t tileRadius = CMath::fint_(static_cast<float>(ceil(radius * 0.24000001f)) - 0.5f);
-            int32_t tileY = CMath::fint_(relTileY * 0.23999999f - 0.5f);
-            int32_t tileX = CMath::fint_(relTileX * 0.23999999f - 0.5f);
+            int32_t tileY = CMath::fint_(relTileY * OO_COORD_TO_SUBCHUNK - 0.5f);
+            int32_t tileX = CMath::fint_(relTileX * OO_COORD_TO_SUBCHUNK - 0.5f);
             int32_t tileRowStart = tileX - tileRadius;
             int32_t tileColStart = tileY - tileRadius;
             int32_t tileRowEnd = tileX + tileRadius + 1;
@@ -557,8 +614,8 @@ void CMapArea::QueryLiquidSounds(C3Vector* pos, float radius, TSGrowableArray<Wo
                 continue;
             }
 
-            float dx = chunk->m_topLeftCoords.x - static_cast<float>(tileRowStart) * 4.1666665f - 2.0833333f - pos->x;
-            float dy = chunk->m_topLeftCoords.y - static_cast<float>(tileColStart) * 4.1666665f - 2.0833333f - pos->y;
+            float dx = chunk->m_topLeftCoords.x - static_cast<float>(tileRowStart) * SMOLTILE_SIZE - HALF_SMOLTILE_SIZE - pos->x;
+            float dy = chunk->m_topLeftCoords.y - static_cast<float>(tileColStart) * SMOLTILE_SIZE - HALF_SMOLTILE_SIZE - pos->y;
             float dz = (liquid->m_height.y + liquid->m_height.x) * 0.5f - pos->z;
 
             int32_t colBegin = tileColStart - liquid->m_tileBegin.y;
@@ -572,7 +629,7 @@ void CMapArea::QueryLiquidSounds(C3Vector* pos, float radius, TSGrowableArray<Wo
                 continue;
             }
 
-            float rowStep = static_cast<float>(colSpan) * 4.1666665f;
+            float rowStep = static_cast<float>(colSpan) * SMOLTILE_SIZE;
             int32_t bitIndex = rowFirst * stride;
 
             for (int32_t rows = rowLast - rowFirst; rows; rows--) {
@@ -585,12 +642,12 @@ void CMapArea::QueryLiquidSounds(C3Vector* pos, float radius, TSGrowableArray<Wo
                         result->m_offset.z = dz;
                     }
 
-                    dy -= 4.1666665f;
+                    dy -= SMOLTILE_SIZE;
                 }
 
                 bitIndex += stride;
                 dy += rowStep;
-                dx -= 4.1666665f;
+                dx -= SMOLTILE_SIZE;
             }
         }
     }

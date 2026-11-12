@@ -1,0 +1,45 @@
+// SXC: the scene behind our water (Vulkan/Water.cpp): at the frame's first water draw, the target's colour
+// and depth as the opaque world left them, copied into two images the water's pixels read (Water.frag's
+// set 2): the colour as it is, the depth as the view's w (the clip w Water.vert gives its own points), so
+// the two compare directly. Pixels with nothing drawn (the far plane) get a very large w.
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D targetColour;
+layout(set = 0, binding = 1) uniform sampler2D targetDepth;
+layout(set = 0, binding = 2, rgba8) uniform writeonly image2D outColour;
+layout(set = 0, binding = 3, r32f) uniform writeonly image2D outDepth;
+
+// depthRange: the viewport's min and max depth; proj: the native projection's P22, P32, P23, P33 (row
+// vectors: clip.z = z P22 + P32, clip.w = z P23 + P33); size: the target in pixels.
+layout(push_constant) uniform Capture
+{
+    vec4  depthRange;
+    vec4  proj;
+    ivec4 size;
+} pc;
+
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+
+    if (any(greaterThanEqual(p, pc.size.xy)))
+    {
+        return;
+    }
+
+    vec4 colour = texelFetch(targetColour, p, 0);
+    float d = texelFetch(targetDepth, p, 0).r;
+    float ndc = (d - pc.depthRange.x) / max(pc.depthRange.y - pc.depthRange.x, 1e-6);
+    float w = 1e6;
+
+    if (ndc < 0.99999)
+    {
+        float z = (pc.proj.y - ndc * pc.proj.w) / (ndc * pc.proj.z - pc.proj.x);
+        w = z * pc.proj.z + pc.proj.w;
+    }
+
+    imageStore(outColour, p, vec4(colour.rgb, 1.0));
+    imageStore(outDepth, p, vec4(w));
+}

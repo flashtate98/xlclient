@@ -9,6 +9,8 @@
 
 #include "Engine/Source/Gx/CGxDeviceVulkan/Shaders/PresentSpirv.inc"
 
+#include "SXC/Ui/UiVulkan.h"  // SXC: the debug overlay
+
 #include <cstring>
 
 namespace
@@ -429,6 +431,7 @@ namespace gxvk::vk::present
     void Shutdown()
     {
         if (!s.dapi || !s.device) return;
+        SXC::Ui::ShutdownVulkan();  // SXC: the overlay's pipeline uses this pass
         const loader::Device& d = *s.dapi;
         Drop();
         DropPassObjects();
@@ -485,6 +488,25 @@ namespace gxvk::vk::present
         s.scene   = VK_NULL_HANDLE;
     }
 
+    // SXC: hands the debug overlay (SXC/Ui) what ImGui's Vulkan backend needs and lets it record into
+    // the present pass, after the scene went through the gamma ramp: on top of everything, unaffected
+    // by the game's gamma.
+    static void SxcOverlay(VkCommandBuffer cmd)
+    {
+        const context::Handles* h = context::Get();
+        if (!h) return;
+        SXC::Ui::VulkanTarget target = {};
+        target.instance            = h->instance;
+        target.physical            = h->physical;
+        target.device              = h->device;
+        target.queueFamily         = h->graphicsFamily;
+        target.queue               = h->graphicsQueue;
+        target.renderPass          = s.pass;
+        target.imageCount          = h->imageCount;
+        target.getInstanceProcAddr = loader::Api().GetInstanceProcAddr;
+        SXC::Ui::RenderVulkan(cmd, target);
+    }
+
     bool Record(VkCommandBuffer cmd, uint32_t image, uint32_t slotIndex)
     {
         if (!s.ready || !cmd || image >= s.fbCount || slotIndex >= kSlots || s.pipeline == VK_NULL_HANDLE)
@@ -530,6 +552,7 @@ namespace gxvk::vk::present
         d.CmdSetViewport(cmd, 0, 1, &viewport);
         d.CmdSetScissor(cmd, 0, 1, &scissor);
         d.CmdDraw(cmd, 3, 1, 0, 0);
+        SxcOverlay(cmd);  // SXC:
         d.CmdEndRenderPass(cmd);
         return true;
     }

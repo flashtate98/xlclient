@@ -24,15 +24,21 @@
 #include "Engine/Source/Tempest/C4Vector.h"
 #include "Engine/Source/Tempest/C44Matrix.h"
 #include "Engine/Source/Tempest/C33Matrix.h"
+#include "SXC/Cover/Cover.h"
+#include <vector>
+#include "Engine/Source/ShaderEffect/Types.h"
+
+static const int32_t FADETEX_WIDTH = 64;
+static const int32_t FADETEX_HEIGHT = 8;
 
 // STATIC: 0x00AF3E08
 int32_t s_shadowLOD = 1;
 
 // STATIC: 0x00AF3E20
-static uint32_t s_shadowTexelCount = 64 * 8;
+static uint32_t s_shadowTexelCount = FADETEX_WIDTH * FADETEX_HEIGHT;
 
 // STATIC: 0x00AF3E24
-static CImVector s_shadowTexels[64 * 8];
+static CImVector s_shadowTexels[FADETEX_WIDTH * FADETEX_HEIGHT];
 
 // STATIC: 0x00AF3E0C
 static int32_t s_queryFrame = -1;
@@ -206,8 +212,8 @@ void ShadowSetLOD(int32_t lod) {
     s_shadowLOD = lod;
 
     CiRect rect;
-    rect.maxY = 8;
-    rect.maxX = 64;
+    rect.maxY = FADETEX_HEIGHT;
+    rect.maxX = FADETEX_WIDTH;
 
     if (lod == 1) {
         TextureSetUserData(s_shadowAddTexture, ShadowAddCallback, nullptr);
@@ -223,8 +229,8 @@ void ShadowInit() {
     CStatus status;
 
     s_shadowBlobTexture = TextureCreate("Textures\\ShadowBlob.blp", CGxTexFlags(), &status, 1);
-    s_shadowAddTexture = TextureCreate(64, 8, GxTex_Argb8888, GxTex_Argb8888, CGxTexFlags(), nullptr, ShadowAddCallback, "ShadowAdd", 0);
-    s_shadowModTexture = TextureCreate(64, 8, GxTex_Argb8888, GxTex_Argb8888, CGxTexFlags(), nullptr, ShadowModCallback, "ShadowMod", 0);
+    s_shadowAddTexture = TextureCreate(FADETEX_WIDTH, FADETEX_HEIGHT, GxTex_Argb8888, GxTex_Argb8888, CGxTexFlags(), nullptr, ShadowAddCallback, "ShadowAdd", 0);
+    s_shadowModTexture = TextureCreate(FADETEX_WIDTH, FADETEX_HEIGHT, GxTex_Argb8888, GxTex_Argb8888, CGxTexFlags(), nullptr, ShadowModCallback, "ShadowMod", 0);
     s_cvShadowLOD = CVar::Register("shadowLOD", "Unit shadow LOD", 1, "1", ShadowLODCallback, CATEGORY_GRAPHICS, false, nullptr, false);
     s_cvExtShadowQuality = CVar::Lookup("extShadowQuality");
 }
@@ -313,12 +319,12 @@ void CWorldScene::RenderStreamingRequestDecal(CM2Model* model, const CAaBox* box
     GxRsSet(GxRs_DepthWrite, 0);
     g_theGxDevicePtr->RsSet(GxRs_Texture0, TextureGetGxTex(s_shadowBlobTexture, 1, nullptr));
     GxRsSet(GxRs_FogColor, static_cast<int32_t>(0xFFFFFFFF));
-    GxRsSet(GxRs_ColorOp0, 5);
-    GxRsSet(GxRs_AlphaOp0, 3);
+    GxRsSet(GxRs_ColorOp0, GxTexOp_Fade);
+    GxRsSet(GxRs_AlphaOp0, GxTexOp_PassThru);
     float alpha = 0.0f;
 
     if (0.0f == scale) {
-        GxRsSet(GxRs_DepthFunc, 1);
+        GxRsSet(GxRs_DepthFunc, GxCmp_Equal);
         alpha = 0.0f;
     }
 
@@ -501,6 +507,58 @@ static int32_t ProjectTexRenderGetQuery2d(const CAaBox& box, uint32_t flags, uin
     return s_doodadModelCount || World::TriData::nBatches;
 }
 
+// SXC: a projected texture again on the covers where they're raised (step 5e): the stock triangles lie
+// on the terrain, under the raised cover. The decal's box, drawn with the decal's own state between
+// SXC::Cover::DecalBegin and DecalEnd: the device shades it onto the terrain it drew this frame where the
+// cover is raised (Shaders/Decal.frag), so it follows the cover, its trails and its filling in exactly;
+// bare ground and floors keep the stock decal alone. Taller than the decal's box (its fade keeps the
+// box's own range: the coordinates come from the decal's matrices, not from this geometry).
+static void ProjectTexDrawOnCover(const CAaBox& box, const C44Matrix& view, const CImVector& color, uint32_t flags, bool shaderEffect) {
+    if (!SXC::Cover::DecalsOnCover()) {
+        return;
+    }
+
+    // Corner k at x b/t by bit 0, y by bit 1, z by bit 2; each face wound counter-clockwise seen from
+    // outside (the device keeps the faces turned away from the camera: each pixel once, inside or out).
+    static C3Vector s_corners[8];
+    static uint16_t s_faces[36] = {
+        0, 2, 3, 0, 3, 1,   // bottom (-z)
+        4, 5, 7, 4, 7, 6,   // top (+z)
+        0, 1, 5, 0, 5, 4,   // -y
+        2, 6, 7, 2, 7, 3,   // +y
+        0, 4, 6, 0, 6, 2,   // -x
+        1, 3, 7, 1, 7, 5,   // +x
+    };
+
+    for (int k = 0; k < 8; k++) {
+        s_corners[k] = C3Vector((k & 1) ? box.t.x : box.b.x, (k & 2) ? box.t.y : box.b.y, (k & 4) ? box.t.z + 3.0f : box.b.z - 1.0f);
+    }
+
+    World::TriData::Batch triBatch = {};
+    triBatch.m_vertexList = s_corners;
+    triBatch.m_indices = s_faces;
+    triBatch.m_indexCount = 36;
+
+    GxXformSet(GxXform_World, view);
+    CGxBatch batch;
+    batch.m_primType = GxPrim_Triangles;
+    batch.m_start = 0;
+    batch.m_count = triBatch.m_indexCount;
+    batch.m_minIndex = 0;
+    batch.m_maxIndex = triBatch.m_indexCount - 1;
+    ProjectTexBuildVertexBuffer(&triBatch, &batch, flags | 0x4);  // 0x4: every face
+    ProjectTexRenderIndices(&triBatch);
+
+    if (shaderEffect) {
+        CShaderEffect::SetDefaultShaders(0);
+        CShaderEffect::UpdateWorldViewMatrix();
+    }
+
+    SXC::Cover::DecalBegin(shaderEffect ? 1 : 0, color.r / 255.0f, color.g / 255.0f, color.b / 255.0f, color.a / 255.0f);
+    GxDraw(&batch, 1);
+    SXC::Cover::DecalEnd();
+}
+
 // VERIFY: f32d24b7 manual
 // OFFSET: 0x007E3AA0
 void ProjectTex2dDrawShaderEffect(const CAaBox& box, const CImVector& color, uint32_t triFlags, uint32_t flags, float polygonOffset) {
@@ -585,6 +643,8 @@ void ProjectTex2dDrawShaderEffect(const CAaBox& box, const CImVector& color, uin
                 GxDraw(&batch, 1);
             }
         }
+
+        ProjectTexDrawOnCover(box, view, color, flags, true);  // SXC: on the raised covers too
     }
 
     if (doodads) {
@@ -620,12 +680,12 @@ static void ProjectTexRender2d(const CAaBox& box, const CImVector& color, uint32
 
     if (states[GxRs_BlendingMode].m_value.m_data.i[0] == GxBlend_Mod) {
         g_theGxDevicePtr->RsSet(GxRs_Texture1, TextureGetGxTex(s_shadowModTexture, 1, nullptr));
-        GxRsSet(GxRs_ColorOp1, 2);
-        GxRsSet(GxRs_AlphaOp1, 2);
+        GxRsSet(GxRs_ColorOp1, GxTexOp_Add);
+        GxRsSet(GxRs_AlphaOp1, GxTexOp_Add);
     } else if (!states[GxRs_Texture1].m_value.m_data.i[0]) {
         g_theGxDevicePtr->RsSet(GxRs_Texture1, TextureGetGxTex(s_shadowAddTexture, 1, nullptr));
-        GxRsSet(GxRs_ColorOp1, 0);
-        GxRsSet(GxRs_AlphaOp1, 0);
+        GxRsSet(GxRs_ColorOp1, GxTexOp_Mod);
+        GxRsSet(GxRs_AlphaOp1, GxTexOp_Mod);
     }
 
     if (polygonOffset != 0.0f) {
@@ -694,6 +754,8 @@ static void ProjectTexRender2d(const CAaBox& box, const CImVector& color, uint32
                 GxDraw(&batch, 1);
             }
         }
+
+        ProjectTexDrawOnCover(box, view, color, flags, false);  // SXC: on the raised covers too
     }
 
     if (doodads) {

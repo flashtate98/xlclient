@@ -3,6 +3,7 @@
 #include "Engine/Source/Gx/CGxDevice/CGxDevice.h"
 #include "Engine/Source/Gx/CGxLight.h"
 #include "Engine/Source/Storm/H/storm.h"
+#include "SXC/Water/Water.h"  // SXC: our water
 
 // STATIC: 0x00B23F6C
 Liquid::CRenderer::DrawListSorter Liquid::CRenderer::s_drawListSorter[2] = {
@@ -115,6 +116,11 @@ void Liquid::CRenderer::Flush(const C3Vector& cameraPos, uint32_t pass) {
         g_theGxDevicePtr->Light(i, lights[i]);
     }
 
+    // SXC: our water's per-frame work, whether any water is drawn or not (SXC/Water).
+    if (pass == 0) {
+        SXC::Water::Frame(cameraPos);
+    }
+
     TSGrowableArray<Liquid::CInstance*>& instances = this->m_instances[pass];
     qsort(instances.m_data, instances.Count(), sizeof(Liquid::CInstance*), Liquid::CRenderer::s_drawListSorter[pass]);
 
@@ -122,7 +128,12 @@ void Liquid::CRenderer::Flush(const C3Vector& cameraPos, uint32_t pass) {
 
     for (uint32_t i = 0; i < count; i++) {
         Liquid::CInstance* instance = instances.m_data[i];
-        instance->m_material->Render(instance->m_environment, instance->m_geomFactory, instance->m_waveManager, cameraPos, &instance->m_transform, &instance->m_bounds, instance->m_settings);
+
+        // SXC: our water draws the stock water materials' instances while it's on (SXC/Water).
+        if (!SXC::Water::Draw(instance, cameraPos)) {
+            instance->m_material->Render(instance->m_environment, instance->m_geomFactory, instance->m_waveManager, cameraPos, &instance->m_transform, &instance->m_bounds, instance->m_settings);
+        }
+
         instance->m_queued = 0;
     }
 

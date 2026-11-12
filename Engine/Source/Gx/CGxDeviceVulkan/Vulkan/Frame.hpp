@@ -135,6 +135,57 @@ namespace gxvk::vk::frame
     /// Whether a query is active on the open frame.
     bool QueryActive();
 
+    /// SXC: the current target as an effect drawn over it between the engine's draws sees it (the
+    /// volumetric fog): its colour (in SHADER_READ_ONLY_OPTIMAL) and its depth buffer (in
+    /// DEPTH_STENCIL_ATTACHMENT_OPTIMAL, written this session).
+    struct EffectTarget
+    {
+        VkCommandBuffer cmd        = nullptr;          ///< the main buffer, outside any pass
+        VkImageView     colour     = VK_NULL_HANDLE;   ///< a 2D view of the target (its layer)
+        VkFormat        format     = VK_FORMAT_UNDEFINED;
+        VkExtent2D      extent     = { 0, 0 };
+        VkImage         depth      = VK_NULL_HANDLE;
+        VkImageView     depthView  = VK_NULL_HANDLE;   ///< the depth aspect alone, sampleable
+        VkImageAspectFlags depthAspects = 0;           ///< every aspect of the depth image (for its barriers)
+        uint64_t        serial     = 0;                ///< the open frame's
+    };
+
+    /**
+     * SXC: ends the open pass and hands out the current target for an effect: the effect records
+     * its own work into `cmd` and leaves the colour in SHADER_READ_ONLY_OPTIMAL and the depth in
+     * DEPTH_STENCIL_ATTACHMENT_OPTIMAL, contents kept; the next Pass() resumes the target. The
+     * engine's draw path forgets what it had bound (pipelines::ForgetBound).
+     *
+     * @return bool ok : false when there is nothing to draw over yet (no pass on the target this
+     *         frame, a clear pending), a query is active, or the depth can't be sampled
+     */
+    bool BeginEffect(EffectTarget& out);
+
+    /// SXC: why the last BeginEffect refused ("" when it didn't), for the effects' status lines.
+    const char* EffectRefusal();
+
+    /**
+     * SXC: a second view (Vulkan/View.cpp): the open frame slot's secondary command buffer, begun to
+     * draw into `target` (a render target of the scene's colour format, with the depth buffer of its
+     * size) while the frame's own pass goes on. Record() into it with RenderPass(): the pass sets of one
+     * colour format share their pipelines. Null when the frame or the target can't be had.
+     */
+    VkCommandBuffer BeginSecondary(const texture::Image& target);
+
+    /**
+     * SXC: ends the secondary buffer and runs it in a pass of its own over `target` (colour cleared to
+     * `clear`, depth cleared), in frame order: after everything recorded so far, before what follows.
+     * The open pass ends; the next Pass() resumes the current target. The target rests in
+     * SHADER_READ_ONLY_OPTIMAL after.
+     */
+    bool RunSecondary(const texture::Image& target, VkCommandBuffer secondary, const float clear[4]);
+
+    /// SXC: a framebuffer an effect made for this frame, destroyed once the frame completes.
+    void RetireFramebuffer(VkFramebuffer framebuffer, uint64_t lastUsed);
+
+    /// SXC: whether the depth buffers can be sampled (an effect needs it).
+    bool DepthSampled();
+
     /// Submits the open frame's work so far without presenting (the next call opens a new frame
     /// on the same targets, their contents kept): what a blocking query read needs.
     void Flush();
@@ -148,6 +199,11 @@ namespace gxvk::vk::frame
 
     /// The extent of the current target.
     VkExtent2D Extent();
+
+    /// SXC: inside the open pass, the pixel shaders' storage writes of the draws so far made visible to
+    /// the next draws' pixel shader reads at the same pixel (the passes' self-dependency): the decals
+    /// read the terrain's depth (step 5e).
+    void PixelWritesToReads(VkCommandBuffer cmd);
 
     /// The slot of the open frame (0 .. kFramesInFlight - 1), or of the frame that opens next.
     uint32_t Slot();

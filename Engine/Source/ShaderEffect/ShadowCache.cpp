@@ -10,6 +10,39 @@
 #include "Engine/Source/ShaderEffect/ShaderEffect.h"
 #include "Engine/Source/Tempest/CFrustum.h"
 #include "Engine/Source/Tempest/CImVector.h"
+#include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler (the sun shadows' parts)
+#include "SXC/Settings/Settings.h"  // SXC: [Shadows] the bands kept between frames
+#include "Engine/Source/Os/TimeManager.h"
+
+// SXC: the far bands kept between frames on Very High (the stock redraws all three every frame with
+// everything in them: 1-3 ms CPU and 1-7 ms GPU in Dalaran, 2026-11-05). Band 0 (40 yd, the units) is
+// still drawn every frame; bands 1 and 2 when their cell moves, the sun turns, or they've grown old
+// (models loading in, transports), without units (mostly below their size limit anyway), at most one
+// of them a frame. Each keeps the sun it was drawn with, for its matrix.
+namespace {
+    C3Vector s_bandSun[3];
+    bool     s_bandValid[3];
+    uint32_t s_bandDrawn[3];
+
+    SXC::Settings::Bool& BandCache() {
+        static SXC::Settings::Bool s_setting("Shadows", "SunBandCache", true, "Sun shadows: keep the far bands",
+                                             "On Very High, redraw the sun's far shadow bands only when they move, the sun turns "
+                                             "or they grow old, instead of every frame. Off: as the stock client.");
+        return s_setting;
+    }
+
+    SXC::Settings::Float& BandMaxAge() {
+        static SXC::Settings::Float s_setting("Shadows", "SunBandMaxAge", 2.0f, 0.25f, 30.0f, "Sun shadows: far bands' age (s)",
+                                              "Redraw a kept band at least this often (models loading in, moving transports).");
+        return s_setting;
+    }
+
+    SXC::Settings::Float& BandSunAngle() {
+        static SXC::Settings::Float s_setting("Shadows", "SunBandSunAngle", 0.5f, 0.05f, 5.0f, "Sun shadows: far bands' sun turn (deg)",
+                                              "Redraw a kept band when the sun has turned this far since it was drawn.");
+        return s_setting;
+    }
+}
 
 // STATIC: 0x00B1D518
 float CShadowCache::s_debugAspect = 1.0f;
@@ -556,6 +589,13 @@ void CShadowCache::GatherBands(CShadowCacheQueryData& data, const C3Vector& pos,
     } else {
         frame = CShadowCache::s_frameCounter;
 
+        // SXC: which far bands are due (above).
+        const bool cache = BandCache().Get();
+        const uint32_t now = OsGetAsyncTimeMs();
+        const uint32_t maxAge = static_cast<uint32_t>(BandMaxAge().Get() * 1000.0f);
+        const float minCos = std::cos(BandSunAngle().Get() * 0.017453292f);
+        bool keptDrawn = false;
+
         for (uint32_t i = 0; i < 3; i++) {
             CShadowBand& band = CShadowCache::s_extShadowBands[i];
 
@@ -591,6 +631,12 @@ void CShadowCache::GatherBands(CShadowCacheQueryData& data, const C3Vector& pos,
             data.m_texBounds[i][2] = 0.0f;
             data.m_texBounds[i][3] = 1.0f;
 
+            // SXC: a kept band is drawn whole. The callback clips a band to the camera's view (g_shadowCull:
+            // the casters and the scissor) unless its query flags are 8; a kept band clipped so lasts past
+            // the view it was drawn for (turning showed the scene unshadowed until the band was due).
+            const bool kept = cache && i > 0;
+            data.m_queryFlags[i] = kept ? 8 : 0;
+
             CShadowCache::s_frustumCallback(data.m_frustums[i], data.m_matrices[i], band.m_dir, data, i);
             data.m_frustums[i].Extents(data.m_extents[i]);
 
@@ -600,14 +646,35 @@ void CShadowCache::GatherBands(CShadowCacheQueryData& data, const C3Vector& pos,
                 data.m_cullFrustums[i] = frustum;
             }
 
-            data.m_queryFlags[i] = 13;
+            // SXC: a kept band is skipped (no casters, not drawn: its texture and matrix stay) until due.
+            bool draw = true;
+
+            if (kept) {
+                const C3Vector& sun = CShadowCache::s_sunDir;
+                const C3Vector& drawn = s_bandSun[i];
+                const bool moved = band.m_pos.x != band.m_lastPos.x || band.m_pos.y != band.m_lastPos.y || band.m_pos.z != band.m_lastPos.z;
+                const bool turned = sun.x * drawn.x + sun.y * drawn.y + sun.z * drawn.z < minCos;
+                const bool old = now - s_bandDrawn[i] >= maxAge;
+                draw = (!s_bandValid[i] || moved || turned || old) && !keptDrawn;
+            }
+
+            data.m_queryFlags[i] = draw ? (kept ? 12 : 13) : 0;
             frustum = data.m_frustums[i];
             frustum.InvertPlanes();
+            useCullFrustum = 1;
+
+            if (!draw) {
+                continue;
+            }
+
+            keptDrawn = keptDrawn || kept;
+            s_bandSun[i] = CShadowCache::s_sunDir;
+            s_bandDrawn[i] = now;
+            s_bandValid[i] = true;
 
             band.m_lastPos = band.m_pos;
             data.m_active[i] = 1;
             data.m_lastBand = i;
-            useCullFrustum = 1;
         }
     }
 
@@ -681,10 +748,15 @@ void CShadowCache::PostUpdate() {
     CShadowCache::s_shadowMatrices[2].z = matrix.c2;
     CShadowCache::s_shadowMatrices[2].w = matrix.d2;
 
+    // SXC: each band by the sun it was drawn with (a kept band may be older than this frame's sun).
+    const C3Vector sun = CShadowCache::s_sunDir;
+
     for (int32_t i = 0; i < 3; i++) {
         CShadowBand& band = CShadowCache::s_extShadowBands[i];
 
+        CShadowCache::s_sunDir = s_bandValid[i] && CShadowCache::s_shadowMode >= SHADOW_VERY_HIGH ? s_bandSun[i] : sun;
         CShadowCache::s_matrixCallback(band.m_lastPos, band.m_radius, matrix, band.m_dir, i);
+        CShadowCache::s_sunDir = sun;
         matrix = matrix * scale * translate;
 
         CShadowCache::s_shadowMatrices[3 + 3 * i].x = matrix.a0;
@@ -772,24 +844,24 @@ void CShadowCache::ClearBandTextures() {
 
         if (CShadowCache::s_extDynShadow.m_textures[1]) {
             GxRenderTargetSet(GxBuffers_Depth, TextureGetGxTex(CShadowCache::s_extDynShadow.m_textures[1], 1, nullptr), 0);
-            GxSceneClear(3, clearColor);
+            GxSceneClear(GxBufferBit_Color | GxBufferBit_Depth, clearColor);
         }
 
         if (CShadowCache::s_intDynShadow) {
             GxRenderTargetSet(GxBuffers_Depth, TextureGetGxTex(CShadowCache::s_intDynShadow, 1, nullptr), 0);
-            GxSceneClear(3, clearColor);
+            GxSceneClear(GxBufferBit_Color | GxBufferBit_Depth, clearColor);
         }
     } else {
         GxRenderTargetSet(GxBuffers_Depth, nullptr, 0);
 
         if (CShadowCache::s_extDynShadow.m_textures[0]) {
             GxRenderTargetSet(GxBuffers_Color, TextureGetGxTex(CShadowCache::s_extDynShadow.m_textures[0], 1, nullptr), 0);
-            GxSceneClear(3, clearColor);
+            GxSceneClear(GxBufferBit_Color | GxBufferBit_Depth, clearColor);
         }
 
         if (CShadowCache::s_intDynShadow) {
             GxRenderTargetSet(GxBuffers_Color, TextureGetGxTex(CShadowCache::s_intDynShadow, 1, nullptr), 0);
-            GxSceneClear(3, clearColor);
+            GxSceneClear(GxBufferBit_Color | GxBufferBit_Depth, clearColor);
         }
     }
 
@@ -811,12 +883,12 @@ void CShadowCache::ClearBandTextures() {
 
         if (band.m_textures[0]) {
             GxRenderTargetSet(buffer, TextureGetGxTex(band.m_textures[0], 1, nullptr), 0);
-            GxSceneClear(3, clearColor);
+            GxSceneClear(GxBufferBit_Color | GxBufferBit_Depth, clearColor);
         }
 
         if (band.m_textures[1]) {
             GxRenderTargetSet(buffer, TextureGetGxTex(band.m_textures[1], 1, nullptr), 0);
-            GxSceneClear(3, clearColor);
+            GxSceneClear(GxBufferBit_Color | GxBufferBit_Depth, clearColor);
         }
     }
 
@@ -834,6 +906,7 @@ void CShadowCache::ClearBandTextures() {
         band.m_pos = C3Vector(0.0f, 0.0f, 0.0f);
         band.m_updateCount = 0;
         band.m_current = 0;
+        s_bandValid[i] = false;  // SXC: kept bands drawn again
     }
 
     CShadowCache::s_needsRebuild = 0;
@@ -1012,10 +1085,13 @@ int32_t CShadowCache::Update(const C3Vector& pos, int32_t useCullFrustum) {
 
     data.m_queryFlags[0] = 3;
     data.m_useFrustum = 0;
+    CGxTex* target = nullptr;
+    CGxTex* colorTarget = nullptr;
+    {
+    SXC::Profiler::Scope p(SXC::Profiler::kSunUnits);
     CShadowCache::s_queryCallback(data, frame);
 
-    CGxTex* target = TextureGetGxTex(CShadowCache::s_intDynShadow, 1, nullptr);
-    CGxTex* colorTarget = nullptr;
+    target = TextureGetGxTex(CShadowCache::s_intDynShadow, 1, nullptr);
 
     if (CShaderEffect::s_usePcfFiltering) {
         target = TextureGetGxTex(CShadowCache::s_extDynShadow.m_textures[0], 1, nullptr);
@@ -1023,8 +1099,10 @@ int32_t CShadowCache::Update(const C3Vector& pos, int32_t useCullFrustum) {
     }
 
     CShadowCache::s_renderCallback(data, 0, target, colorTarget, CShadowCache::s_extDynShadow.m_dir);
+    }
 
     if (useCullFrustum) {
+        SXC::Profiler::Scope p(SXC::Profiler::kSunIndoor);
         data.m_queryFlags[0] = 1;
 
         if (mode > SHADOW_HIGH) {
@@ -1046,6 +1124,8 @@ int32_t CShadowCache::Update(const C3Vector& pos, int32_t useCullFrustum) {
     }
 
     if (mode > SHADOW_MEDIUM) {
+        SXC::Profiler::Scope p(SXC::Profiler::kSunBands);
+
         if (CShadowCache::s_needsRebuild) {
             CShadowCache::ClearBandTextures();
         }

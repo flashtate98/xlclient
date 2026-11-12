@@ -64,7 +64,7 @@ namespace gxvk::vk::pipelines::detail
     /// device that offers less). Every pipeline layout carries the range; the translated modules do
     /// not read it.
     // SXC: + 4 floats of fixed-function fog (was 128 bytes).
-    constexpr uint32_t kPushBytes = 16 * sizeof(float) + 4 * sizeof(float) + 12 * sizeof(float) + 4 * sizeof(float);
+    constexpr uint32_t kPushBytes = 16 * sizeof(float) + 4 * sizeof(float) + 16 * sizeof(float) + 4 * sizeof(float);
 
     /// Samplers kept at once.
     constexpr uint32_t kMaxSamplers = 64;
@@ -77,7 +77,7 @@ namespace gxvk::vk::pipelines::detail
 
     /// Set-0 descriptor sets one frame may allocate, and the combined image samplers behind them.
     constexpr uint32_t kSetsPerSlot        = 4096;
-    constexpr uint32_t kDescriptorsPerSlot = 4 * kSetsPerSlot;
+    constexpr uint32_t kDescriptorsPerSlot = 6 * kSetsPerSlot;  // SXC: our terrain's sets hold up to 13 (heights)
 
     /// The per-slot cache over those sets: twice the sets, a power of two, for short probes.
     constexpr uint32_t kCacheSlots = 2 * kSetsPerSlot;
@@ -106,13 +106,14 @@ namespace gxvk::vk::pipelines::detail
 
     /// The engine attribute indices (EGxVertexAttrib) the programs read.
     constexpr uint32_t kAttribPosition  = 0;
+    constexpr uint32_t kAttribNormal    = 3;  // SXC: our terrain shader
     constexpr uint32_t kAttribColor0    = 4;
     constexpr uint32_t kAttribTexCoord0 = 6;
     constexpr uint32_t kAttribTexCoord1 = 7;
 
     /// Whether a program is of the translated family (reads set 1, the semantic interface).
-    inline bool TranslatedFamily(VertexProgram v) { return v == VertexProgram::Translated || v == VertexProgram::FixedFunctionSemantic; }
-    inline bool TranslatedFamily(FragmentProgram f) { return f == FragmentProgram::Translated || f == FragmentProgram::FixedFunctionTranslated; }
+    inline bool TranslatedFamily(VertexProgram v) { return v == VertexProgram::Translated || v == VertexProgram::FixedFunctionSemantic || v == VertexProgram::Terrain || v == VertexProgram::Decal || v == VertexProgram::Water; }
+    inline bool TranslatedFamily(FragmentProgram f) { return f == FragmentProgram::Translated || f == FragmentProgram::FixedFunctionTranslated || f == FragmentProgram::Terrain || f == FragmentProgram::Decal || f == FragmentProgram::Water; }
 
     /// What a pipeline is built from. Compared bytewise, so every byte is set (zeroed first).
     struct Key
@@ -136,6 +137,11 @@ namespace gxvk::vk::pipelines::detail
         uint16_t     vertexRecord;    ///< manifest index, kNoRecord when not Translated
         uint16_t     fragmentRecord;
         uint32_t     layoutIndex;     ///< the set-0 layout (sampler-slot set)
+        uint32_t     terrainVertex;   ///< SXC: VertexProgram::Terrain's options, else 0
+        uint32_t     terrainFragment; ///< SXC: FragmentProgram::Terrain's options, else 0
+        uint32_t     instanceStreams; ///< SXC: streams fed per instance (instanced grass)
+        uint32_t     plantStream;     ///< SXC: the plant rows' stream + 1; 0 none
+        uint32_t     copyStream;      ///< SXC: the grass copies' number stream + 1; 0 none
     };
 
     struct Entry
@@ -153,6 +159,8 @@ namespace gxvk::vk::pipelines::detail
         VkPipelineLayout layout   = VK_NULL_HANDLE;
         VkDescriptorSet  set0     = VK_NULL_HANDLE;
         VkDescriptorSet  set1     = VK_NULL_HANDLE;
+        VkDescriptorSet  set2     = VK_NULL_HANDLE;   ///< SXC: the covers' (our terrain shader)
+        VkDescriptorSet  set3     = VK_NULL_HANDLE;   ///< SXC: the lights' (our terrain shader)
         uint32_t         offset1  = 0;
         bool             have1    = false;
         VkBuffer         vbs[kMaxStreams + 1]     = {};
@@ -177,10 +185,12 @@ namespace gxvk::vk::pipelines::detail
     };
 
     /// One set-0 layout: binding s for each slot s of the mask, and the pipeline layout over it
-    /// and the set-1 layout.
+    /// and the set-1 layout (SXC: and the covers' set 2, for our terrain shader).
     struct LayoutEntry
     {
         uint32_t              mask   = 0;
+        uint32_t              extra  = 0;       ///< SXC: kExtraCover (set 2 Vulkan/Cover's, set 3 Vulkan/Lights'), kExtraLights (set 2 empty, set 3 the lights'), kExtraWater (set 2 Vulkan/Water's, set 3 the lights')
+
         VkDescriptorSetLayout set0   = VK_NULL_HANDLE;
         VkPipelineLayout      layout = VK_NULL_HANDLE;
     };
@@ -224,7 +234,13 @@ namespace gxvk::vk::pipelines::detail
         const loader::Device* dapi   = nullptr;
         VkShaderModule        vert[kVertexPrograms]   = {};   ///< the backend's own; Translated stays null
         VkShaderModule        frag[kFragmentPrograms] = {};
+        VkShaderModule        terrainVert       = VK_NULL_HANDLE;   ///< SXC: Shaders/Terrain.vert
+        VkShaderModule        terrainFrag[2][2][4][3] = {};         ///< SXC: Shaders/Terrain.frag by bindless covers, cube layer 0, layers - 1, shadow group
+        VkShaderModule        terrainPatchVert = VK_NULL_HANDLE;    ///< SXC: raised chunks (step 5c): Shaders/TerrainPatch.vert,
+        VkShaderModule        terrainTesc[4]   = {};                ///<      Terrain.tesc by layers - 1,
+        VkShaderModule        terrainTese[4]   = {};                ///<      Terrain.tese by layers - 1 (made where the device tessellates)
         VkDescriptorSetLayout regsLayout = VK_NULL_HANDLE;    ///< set 1: one dynamic uniform buffer, both stages
+        VkDescriptorSetLayout emptyLayout = VK_NULL_HANDLE;   ///< SXC: set 2 of the lit translated pipelines (they read set 3 only)
         VkDescriptorPool      regsPool   = VK_NULL_HANDLE;    ///< the set-1 sets, for the session
         VkPipelineCache       cache      = VK_NULL_HANDLE;
         memory::Buffer        constant;                       ///< the constant stream (kConstantBytes)
@@ -232,6 +248,7 @@ namespace gxvk::vk::pipelines::detail
         uint32_t              entryCount = 0;
         uint32_t              passGen    = 0;                 ///< the generation the entries were built for
         Bound                 bound;
+        Bound                 boundSecond;                    ///< SXC: a second view's secondary buffer (Vulkan/View.cpp), recorded alongside
 
         LayoutEntry  layouts[kMaxLayouts];
         uint32_t     layoutCount = 0;
@@ -261,13 +278,30 @@ namespace gxvk::vk::pipelines::detail
 
     // Programs.cpp
     bool CreatePrograms();
+    bool CreateTerrainModules();  // SXC:
     void DestroyPrograms();
     VkShaderModule VertexModule(const Key& k);
     VkShaderModule FragmentModule(const Key& k);
+    /// SXC: the specialization constants of a key's terrain stage (null for any other program). The
+    /// returned info points into `storage`, which must outlive the pipeline's creation.
+    struct TerrainSpecialization
+    {
+        VkSpecializationMapEntry entries[8];
+        uint32_t                 values[8];
+        VkSpecializationInfo     info;
+    };
+    const VkSpecializationInfo* VertexSpecialization(const Key& k, TerrainSpecialization& storage);
+    const VkSpecializationInfo* FragmentSpecialization(const Key& k, TerrainSpecialization& storage);
+    /// SXC: a raised terrain chunk's tessellation stages (null modules for any other key); the
+    /// evaluation stage takes the vertex constants (VertexSpecialization).
+    bool TerrainTessellated(const Key& k);
+    VkShaderModule TessControlModule(const Key& k);
+    VkShaderModule TessEvalModule(const Key& k);
 
     // Layouts.cpp
     bool CreateRegsLayout();
-    bool LayoutFor(uint32_t samplerMask, uint32_t& index);
+    constexpr uint32_t kExtraNone = 0, kExtraCover = 1, kExtraLights = 2, kExtraWater = 3;  // SXC: LayoutEntry::extra
+    bool LayoutFor(uint32_t samplerMask, uint32_t extra, uint32_t& index);
     void DestroyLayouts();
 
     // Build.cpp

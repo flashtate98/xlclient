@@ -1,0 +1,62 @@
+// SXC: our water's inverse FFT (WaterWaves.glsl): one line of one cascade per workgroup, N threads, radix 2
+// in shared memory (after Crest's FFTCompute.compute, MIT, see WaterWaves.glsl; the weights computed here
+// rather than read from a table, the spectrum in standard order so no sign flip is needed). COLUMNS=0: the
+// rows, spectrum -> waveRows*; COLUMNS=1: the columns, waveRows* -> the displacement (the real parts).
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 256) in;
+
+#include "WaterWaves.glsl"
+
+shared vec2 sH[2][kWaveN];
+shared vec2 sX[2][kWaveN];
+shared vec2 sY[2][kWaveN];
+
+void main()
+{
+    int i = int(gl_LocalInvocationID.x);
+    int line = int(gl_WorkGroupID.y);
+    int c = int(gl_WorkGroupID.z);
+    int from = int(bitfieldReverse(uint(i)) >> (32 - kWaveLog2N));
+
+#if COLUMNS
+    vec4 a = imageLoad(waveRowsA, ivec3(line, from, c));
+    vec4 b = imageLoad(waveRowsB, ivec3(line, from, c));
+#else
+    vec4 a = imageLoad(waveSpecA, ivec3(from, line, c));
+    vec4 b = imageLoad(waveSpecB, ivec3(from, line, c));
+#endif
+    sH[0][i] = a.xy;
+    sX[0][i] = a.zw;
+    sY[0][i] = b.xy;
+
+    for (int s = 0; s < kWaveLog2N; s++)
+    {
+        barrier();
+        int src = s & 1;
+        int half_ = 1 << s;
+        int j = i & (2 * half_ - 1);
+        int r = j & (half_ - 1);
+        int lo = i - j + r;
+        int hi = lo + half_;
+        float angle = kTau * float(r) / float(2 * half_);   // the inverse transform: e^(+i angle)
+        vec2 t = vec2(cos(angle), sin(angle));
+        float sgn = j < half_ ? 1.0 : -1.0;
+        sH[1 - src][i] = sH[src][lo] + sgn * Cmul(t, sH[src][hi]);
+        sX[1 - src][i] = sX[src][lo] + sgn * Cmul(t, sX[src][hi]);
+        sY[1 - src][i] = sY[src][lo] + sgn * Cmul(t, sY[src][hi]);
+    }
+
+    barrier();
+    int last = kWaveLog2N & 1;
+
+#if COLUMNS
+    ivec3 at = ivec3(line, i, c);
+    imageStore(waveDisp, at, vec4(sX[last][i].x, sY[last][i].x, sH[last][i].x, 0.0));
+#else
+    ivec3 at = ivec3(i, line, c);
+    imageStore(waveRowsA, at, vec4(sH[last][i], sX[last][i]));
+    imageStore(waveRowsB, at, vec4(sY[last][i], 0.0, 0.0));
+#endif
+}

@@ -1,0 +1,1 @@
+v1.92.9b-docking (https://github.com/ocornut/imgui, tag v1.92.9b-docking, MIT; core + win32/vulkan/dx9 backends only)

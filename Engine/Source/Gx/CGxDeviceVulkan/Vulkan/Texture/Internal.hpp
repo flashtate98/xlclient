@@ -34,7 +34,10 @@ namespace gxvk::vk::texture::detail
 
     /// The most images tracked at once: a fixed table, so a full table is a logged refusal rather
     /// than silent growth. A zone holds a few thousand. Heap-allocated at Init().
-    constexpr uint32_t kMaxImages = 16384;
+    // SXC: was 16384. With the raised far clip the terrain keeps far more chunks loaded, each with its
+    // own blend (alpha/shadow) texture: a session reached 19.5k live textures and the refused ones drew
+    // white (2026-10-21).
+    constexpr uint32_t kMaxImages = 65536;
 
     /// The index over the table, twice its size (a load factor of at most one half keeps linear
     /// probing short), a power of two for the mask.

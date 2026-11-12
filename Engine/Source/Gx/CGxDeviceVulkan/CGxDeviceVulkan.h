@@ -8,6 +8,13 @@
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Texture.hpp"
 #include "Engine/Source/Gx/CGxDevice/CGxDevice.h"
 #include "Engine/Source/Storm/H/stpl.h"
+#include "SXC/Fog/Fog.h"  // SXC: volumetric fog
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"  // SXC: surface covers
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Lights.hpp" // SXC: point lights
+#include "SXC/Grass/Grass.h"  // SXC: the instanced grass
+
+namespace SXC::Cover { struct Decal; }  // SXC: projected textures on the raised covers
+namespace SXC::Water { struct Waves; struct MediumFrame; }  // SXC: our water's waves, the underwater medium
 
 // Not in the original: the Vulkan backend, a CGxDevice beside the D3D9 / D3D9Ex / OpenGL ones,
 // selected with the gxApi CVar ("Vulkan") or "-vulkan" on the command line. The engine above the
@@ -52,6 +59,7 @@ class CGxDeviceVulkan : public CGxDevice {
     // and persist across the shadow's per-present clear as D3D's registers do.
     float m_vertexRegs[ShadowConstants::Count * 4];
     float m_pixelRegs[ShadowConstants::Count * 4];
+    float m_sxcPixelRows[gxvk::vk::pipelines::kPixelRows * 4];  // a draw's pixel register file as recorded (IDrawState)
     // The hardware cursor: a Win32 cursor built from the engine's 32x32 cursor image, remade when
     // the image changes (CursorUnlock), shown over the client area by WM_SETCURSOR.
     HCURSOR m_hcursor;
@@ -148,6 +156,8 @@ class CGxDeviceVulkan : public CGxDevice {
     gxvk::vk::texture::Image* ITexImage(CGxTex* texId);
     void ITexTouch(CGxTex* texId);
     void IReleaseTextures();
+    VkImageView SxcShadowTexture(CGxTex* texId);  // SXC: alpha-keyed shadow casters
+    void SxcShadowUploads();                      // SXC: the ones they asked for, at the frame's end
     // CGxDeviceVulkanTarget.cpp: the render targets, the back-buffer copies, the read-back
     int32_t ITargetImage(CGxTex* texId, gxvk::vk::texture::Image*& image, uint32_t plane, uint32_t& layer);
     // CGxDeviceVulkanCursor.cpp: the hardware cursor
@@ -161,7 +171,21 @@ class CGxDeviceVulkan : public CGxDevice {
     int32_t IPlaceD3d(VkViewport& viewport, VkRect2D& scissor);
     void IModelViewProj(float out[16]);
     void IRenderStates(gxvk::vk::pipelines::Draw& draw);
+    bool IDrawState(gxvk::vk::pipelines::Draw& draw);
     void ITexTransforms(gxvk::vk::pipelines::Draw& draw);
+    bool IDecalOnCover(gxvk::vk::pipelines::Draw& draw, const SXC::Cover::Decal& decal);  // SXC: step 5e
+    // SXC: the volumetric fog's renderer (SXC/Fog/Fog.h), registered at ICreateDrawPath.
+    static bool SxcFogRender(const SXC::Fog::Input& in);
+    // SXC: the covers' data for our terrain shader (SXC/Cover/Cover.h -> Vulkan/Cover), its textures
+    // resolved to this device's images. Registered at ICreateDrawPath.
+    static bool SxcCoverFrame(gxvk::vk::cover::Frame& out);
+    // SXC: our point lights for the shaders that light per pixel (SXC/Lights -> Vulkan/Lights).
+    static bool SxcLightsFrame(gxvk::vk::lights::Frame& out);
+    // SXC: the instanced grass (SXC/Grass -> Vulkan/Grass): a texture's runs with the client's grass state.
+    static bool SxcGrassDraw(CGxTex* texture, const SXC::Grass::Run* runs, uint32_t count);
+    static bool SxcWaterCapture(const SXC::Water::Waves& waves, bool* first);  // SXC: our water: the scene behind it and the waves, once per frame
+    // SXC: the underwater medium (SXC/Water/Medium.h -> Vulkan/Medium) with this device's view of the draws.
+    static bool SxcMediumRender(const SXC::Water::MediumFrame& in);
 };
 
 CGxDevice* CreateCGxDeviceVulkan();

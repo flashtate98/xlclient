@@ -12,7 +12,7 @@ namespace gxvk::vk::memory::detail
 
     const char* WhereName(Where w)
     {
-        return w == Where::HostVisible ? "HostVisible" : w == Where::Stream ? "Stream" : "DeviceLocal";
+        return w == Where::HostVisible ? "HostVisible" : w == Where::Stream ? "Stream" : w == Where::Readback ? "Readback" : "DeviceLocal";
     }
 
     VkDeviceSize BlockSize(Where w) { return w != Where::DeviceLocal ? kBlockHostVisible : kBlockDeviceLocal; }
@@ -113,6 +113,17 @@ namespace gxvk::vk::memory::detail
             }
             // Fall through: the host-visible answer.
         }
+        if (where == Where::Readback)
+        {
+            // SXC: cached for the CPU's reads, coherent where offered (no invalidate needed then).
+            uint32_t t = FindType(bits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            why = "first type with HOST_VISIBLE|HOST_CACHED|HOST_COHERENT";
+            if (t != kNoType) return t;
+            t = FindType(bits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+            why = "first type with HOST_VISIBLE|HOST_CACHED (reads need InvalidateHost())";
+            if (t != kNoType) return t;
+            // Fall through: the host-visible answer (uncached: slow reads, still right).
+        }
         if (where == Where::DeviceLocal)
         {
             uint32_t t = FindType(bits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
@@ -170,6 +181,7 @@ namespace gxvk::vk::memory::detail
             { reinterpret_cast<const void*>(d.MapMemory),                         "vkMapMemory" },
             { reinterpret_cast<const void*>(d.UnmapMemory),                       "vkUnmapMemory" },
             { reinterpret_cast<const void*>(d.FlushMappedMemoryRanges),           "vkFlushMappedMemoryRanges" },
+            { reinterpret_cast<const void*>(d.InvalidateMappedMemoryRanges),      "vkInvalidateMappedMemoryRanges" },
             { reinterpret_cast<const void*>(d.CreateBuffer),                      "vkCreateBuffer" },
             { reinterpret_cast<const void*>(d.DestroyBuffer),                     "vkDestroyBuffer" },
             { reinterpret_cast<const void*>(d.GetBufferMemoryRequirements),       "vkGetBufferMemoryRequirements" },

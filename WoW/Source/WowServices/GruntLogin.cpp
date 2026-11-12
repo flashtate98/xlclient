@@ -2,7 +2,7 @@
 
 // SXC: set by SXC/CMakeLists.txt; stock when built without it.
 #ifndef SXC_GAME_BUILD
-#define SXC_GAME_BUILD 12340
+#define SXC_GAME_BUILD GAME_BUILD
 #endif
 #include "Engine/Source/Os/OsSecureRandom.h"
 #include "WoW/Source/Net/NetClient/NetClient.h"
@@ -16,6 +16,7 @@
 #include "Engine/Source/Storm/H/storm.h"
 #include "Engine/Source/Storm/Source/MD5.h"
 #include "WoW/Source/WowServices/LoginResponse.h"
+#include "GameVersion.h"
 
 // INLINED
 GruntLogin::MATRIXINPUT::MATRIXINPUT() {
@@ -75,10 +76,10 @@ void GruntLogin::GetLogonMethod() {
 
     logon.m_processor = OsGetProcessorId();
     logon.m_os = OsGetOsId();
-    logon.m_versionMajor = 3;
-    logon.m_versionMinor = 3;
-    logon.m_versionPatch = 5;
-    logon.m_build = SXC_GAME_BUILD;  // SXC: stock 12340; the SXC_GAME_BUILD CMake option (SXC/CMakeLists.txt)
+    logon.m_versionMajor = GAME_VERSION_MAJOR;
+    logon.m_versionMinor = GAME_VERSION_MINOR;
+    logon.m_versionPatch = GAME_VERSION_PATCH;
+    logon.m_build = SXC_GAME_BUILD;  // SXC: stock GAME_BUILD; the SXC_GAME_BUILD CMake option (SXC/CMakeLists.txt)
     logon.m_locale = SFile::s_locale;
     logon.m_timeZone = OsGetTimeZone();
 

@@ -22,19 +22,22 @@
 #include "Engine/Source/Tempest/C33Matrix.h"
 #include "Engine/Source/Tempest/C3Ray.h"
 #include "Engine/Source/Tempest/NTempest.h"
+#include <chrono>
 #include "SXC/Log.h"  // SXC:
+#include "SXC/Lights/Lights.h"  // SXC: the world's lights only on the world's scene
 
 // SXC: the mesh IntersectHitTestTriangles is testing, for its out-of-range check and report: set by
 // HitTestGeometry (a skin section) and HitTestCollision (the collision mesh, section -1).
 static const CM2Model* s_sxcHitModel;
 static int32_t s_sxcHitSection;
 static uint32_t s_sxcHitVertexCount;
+#include "WarcraftXL/Profile.h"
 
 // STATIC: 0x00A45374
-const uint32_t s_localLighting[7] = { 1, 1, 1, 1, 1, 0, 0 };
+const uint32_t s_localLighting[M2BLEND_COUNT] = { 1, 1, 1, 1, 1, 0, 0, 1 };
 
 // STATIC: 0x00A453B0
-const uint32_t s_blendModes[3][7] = { { 0, 1, 2, 10, 3, 4, 5 }, { 2, 2, 2, 10, 3, 4, 5 }, { 2, 2, 2, 10, 3, 4, 5 } };
+const uint32_t s_blendModes[3][M2BLEND_COUNT] = { { 0, 1, 2, 10, 3, 4, 5, 12 }, { 2, 2, 2, 10, 3, 4, 5, 12 }, { 2, 2, 2, 10, 3, 4, 5, 12 } };
 
 // STATIC: 0x00AF5898
 uint32_t CM2Scene::s_optFlags = 0xFFFFFFFF;
@@ -53,12 +56,37 @@ void CM2Scene::SetTime(uint32_t time) {
     this->m_cache->GarbageCollect(0);
 }
 
+// SXC: a probe for the freezes in "models: animation" (Seyri, 2026-11-03: seconds to minutes on
+// coming back to a place seen before): each step of the scene's animation, and each model's part in it,
+// that takes longer than 20 ms goes to the log with the model's file, so the one that hangs names itself.
+namespace {
+    using SxcClock = std::chrono::steady_clock;
+
+    double SxcMs(SxcClock::time_point since) {
+        return std::chrono::duration<double, std::milli>(SxcClock::now() - since).count();
+    }
+
+    void SxcSlow(const char* step, SxcClock::time_point since, const CM2Model* model = nullptr) {
+        const double ms = SxcMs(since);
+
+        if (ms >= 20.0) {
+            SXC::Log("slow model animation: %s took %.1f ms%s%s", step, ms, model && model->m_shared ? " for " : "",
+                     model && model->m_shared ? model->m_shared->m_fileName : "");
+        }
+    }
+}
+
 // VERIFY: fb95d1fc auto
 // OFFSET: 0x0081C9C0
 void CM2Scene::AdvanceTime(uint32_t delta) {
+    WXL_CORE_ZONE("M2.AdvanceTime");
     this->m_time += delta;
+    SxcClock::time_point sxcStep = SxcClock::now();
     this->m_cache->UpdateShared();
+    SxcSlow("loading models (UpdateShared)", sxcStep);
+    sxcStep = SxcClock::now();
     this->m_cache->GarbageCollect(0);
+    SxcSlow("freeing models (GarbageCollect)", sxcStep);
     this->m_flags |= 4;
     this->m_timeDelta = delta;
 
@@ -67,7 +95,9 @@ void CM2Scene::AdvanceTime(uint32_t delta) {
 
         while (model) {
             CM2Model* next = model->m_animateNext;
+            const SxcClock::time_point sxcModel = SxcClock::now();
             model->ProcessCallbacksRecursive();
+            SxcSlow("its events (ProcessCallbacks)", sxcModel, model);
             model = next;
         }
     }
@@ -86,19 +116,21 @@ void CM2Scene::SetFloat18(float value) {
 uint32_t ParticleBlendToM2Blend(uint32_t blend) {
     switch (blend) {
         case 1:
-            return 1;
+            return M2BLEND_ALPHA_KEY;
         case 2:
-            return 2;
+            return M2BLEND_ALPHA;
         case 3:
-            return 4;
+            return M2BLEND_ADD;
         case 4:
-            return 5;
+            return M2BLEND_MOD;
         case 5:
-            return 6;
+            return M2BLEND_MOD2X;
         case 10:
-            return 3;
+            return M2BLEND_NO_ALPHA_ADD;
+        case GxBlend_BlendAdd: // WarcraftXL: M2 blend mode 7
+            return M2BLEND_BLEND_ADD;
         default:
-            return 0;
+            return M2BLEND_OPAQUE;
     }
 }
 
@@ -639,7 +671,7 @@ M2HitRec* CM2Scene::HitTestGeometry(const CM2Model* model, uint32_t pass, const 
 
         M2Material* material = &data->m_materials[batch->m_materialIndex];
 
-        if (model->m_hitTestMode == 2 && !material->m_blendMode) {
+        if (model->m_hitTestMode == 2 && material->m_blendMode == M2BLEND_OPAQUE) {
             continue;
         }
 
@@ -689,7 +721,7 @@ M2HitRec* CM2Scene::HitTestGeometry(const CM2Model* model, uint32_t pass, const 
             this->TransformHitTestVerticesBlend(model, skinData, section, pass, dir, d);
         }
 
-        const uint16_t* indices = &skinData->m_indices[M2WideIndexStart(section, skinData->m_indices.m_count)];
+        const uint16_t* indices = &skinData->m_indices[M2SkinSectionIndexStart(*skinData, *section)];
         s_sxcHitModel = model, s_sxcHitSection = batch->m_skinSectionIndex, s_sxcHitVertexCount = section->m_vertexCount;  // SXC:
         best = this->IntersectHitTestTriangles(indices, indices + section->m_indexCount, section->m_vertexStart, start, pass, rec, t, best);
     }
@@ -1502,9 +1534,10 @@ void __stdcall CM2Scene::ComputeElementShaders(M2Element* element) {
     uint32_t boneInfluences = element->m_skinSection->m_boneInfluences;
     int32_t alphaTest;
 
-    if (!material->m_blendMode) {
+    // WarcraftXL: blend add (7) adds colour where alpha is 0 too, so it is not alpha-tested
+    if (material->m_blendMode == M2BLEND_OPAQUE || material->m_blendMode == M2BLEND_BLEND_ADD) {
         alphaTest = 0;
-    } else if (material->m_blendMode == 1) {
+    } else if (material->m_blendMode == M2BLEND_ALPHA_KEY) {
         alphaTest = static_cast<int32_t>(element->m_alpha * 224.0f);
     } else {
         alphaTest = 1;
@@ -1603,7 +1636,7 @@ void CM2Scene::SortAdditiveParticleElements(uint32_t pass) {
     for (uint32_t i = 0; i < list.m_count; i++) {
         M2Element* element = &this->m_elements.m_data[list.m_data[i]];
         M2Data* data = element->m_model->m_shared->m_data;
-        uint32_t blend = 0;
+        uint32_t blend = M2BLEND_OPAQUE;
 
         switch (element->m_type) {
             case 0:
@@ -1615,7 +1648,7 @@ void CM2Scene::SortAdditiveParticleElements(uint32_t pass) {
                 blend = data->m_materials[data->m_ribbons[element->m_index].m_materialIndices[0]].m_blendMode;
                 break;
             case 4:
-                blend = (this->m_cache->m_flags & 0x100) ? 4 : ParticleBlendToM2Blend(element->m_emitter->m_params.m_materialBlend);
+                blend = (this->m_cache->m_flags & 0x100) ? M2BLEND_ADD : ParticleBlendToM2Blend(element->m_emitter->m_params.m_materialBlend);
                 break;
             default:
                 break;
@@ -1680,7 +1713,7 @@ CM2Scene::~CM2Scene() {
 // VERIFY: 7bb79c57 manual
 // OFFSET: 0x00821930
 M2Element* CM2Scene::AddParticleElement(CParticleEmitter2* emitter, CM2Model* model, float depth, float alpha, int32_t split, uint32_t& index, uint32_t& additiveCount) {
-    if (!emitter->HasLiveParticles() || emitter->m_params.m_hasModel == 1) {
+    if (!emitter->HasLiveParticles() || emitter->m_params.m_hasModel == CParticleEmitter2::PT_MODEL) {
         return nullptr;
     }
 
@@ -1724,6 +1757,7 @@ M2Element* CM2Scene::AddParticleElement(CParticleEmitter2* emitter, CM2Model* mo
 // VERIFY: d0feeb6c manual
 // OFFSET: 0x00821A20
 int32_t CM2Scene::Animate(const C3Vector& cameraPos) {
+    WXL_CORE_ZONE("M2.Animate");
     this->m_frameStamp++;
 
     uint32_t optFlags = this->m_cache->m_flags & 0xE000;
@@ -1738,16 +1772,22 @@ int32_t CM2Scene::Animate(const C3Vector& cameraPos) {
     this->m_view.Translate(move);
     this->m_viewInv = this->m_view.Inverse(this->m_view.Determinant());
 
+    const SxcClock::time_point sxcBones = SxcClock::now();
+
     if (this->m_cache->m_flags & 4) {
         this->m_cache->BeginThread(&CM2Scene::AnimateThread, this);
 
         for (CM2Model* model = this->m_animateList; model; ) {
             if (!model->m_attachParent) {
+                const SxcClock::time_point sxcModel = SxcClock::now();
+
                 if (model->m_fFlags & 0x1000) {
                     model->AnimateMTSimple(&this->m_view, C3Vector(1.0f, 1.0f, 1.0f), C3Vector(0.0f, 0.0f, 0.0f), 1.0f, 1.0f);
                 } else {
                     model->AnimateMT(&this->m_view, C3Vector(1.0f, 1.0f, 1.0f), C3Vector(0.0f, 0.0f, 0.0f), 1.0f, 1.0f);
                 }
+
+                SxcSlow("its bones (AnimateMT)", sxcModel, model);
             }
 
             CM2Model* next = model->m_animateNext;
@@ -1766,17 +1806,25 @@ int32_t CM2Scene::Animate(const C3Vector& cameraPos) {
                 continue;
             }
 
+            const SxcClock::time_point sxcModel = SxcClock::now();
+
             if (model->m_fFlags & 0x1000) {
                 model->AnimateMTSimple(&this->m_view, C3Vector(1.0f, 1.0f, 1.0f), C3Vector(0.0f, 0.0f, 0.0f), 1.0f, 1.0f);
             } else {
                 model->AnimateMT(&this->m_view, C3Vector(1.0f, 1.0f, 1.0f), C3Vector(0.0f, 0.0f, 0.0f), 1.0f, 1.0f);
             }
+
+            SxcSlow("its bones (AnimateMT)", sxcModel, model);
         }
     }
 
+    SxcSlow("all bones (AnimateMT, both threads)", sxcBones);
+
     for (CM2Model* model = this->m_animateList; model; model = model->m_animateNext) {
         if (!model->m_attachParent) {
+            const SxcClock::time_point sxcModel = SxcClock::now();
             model->AnimateST();
+            SxcSlow("its particles and ribbons (AnimateST)", sxcModel, model);
         }
     }
 
@@ -1785,7 +1833,9 @@ int32_t CM2Scene::Animate(const C3Vector& cameraPos) {
         this->m_animateList = model->m_animateNext;
         model->m_animatePrev = nullptr;
         model->m_animateNext = nullptr;
+        const SxcClock::time_point sxcModel = SxcClock::now();
         model->SetupLighting();
+        SxcSlow("its lighting (SetupLighting)", sxcModel, model);
     }
 
     this->m_doodadElements.m_count = 0;
@@ -1890,7 +1940,7 @@ int32_t CM2Scene::Animate(const C3Vector& cameraPos) {
 #else
             M2Material* baseMaterial = batch->m_materialLayer ? &data->m_materials[batch->m_materialIndex - batch->m_materialLayer] : material;
 #endif
-            int32_t transparent = baseMaterial->m_blendMode > 1 || alpha < 0.99998999f;
+            int32_t transparent = baseMaterial->m_blendMode > M2BLEND_ALPHA_KEY || alpha < 0.99998999f;
             CShaderEffect* effect = optimized ? model->m_optGeo->m_effects[i] : model->m_shared->m_effects[i];
 
             if (!effect) {
@@ -2068,7 +2118,7 @@ int32_t CM2Scene::Animate(const C3Vector& cameraPos) {
             element->m_pixelPermute = 0xFFFFFFFF;
             element->m_shadowValue = 0;
 
-            if (material->m_blendMode > 1 || alpha < 0.99998999f) {
+            if (material->m_blendMode > M2BLEND_ALPHA_KEY || alpha < 0.99998999f) {
                 if (above) {
                     this->m_passElements[1].New(elementIndex);
                 } else {
@@ -2263,6 +2313,7 @@ void CM2Scene::Release() {
 // VERIFY: 610b7e45 manual
 // OFFSET: 0x00823CB0
 void CM2Scene::Draw(M2PASS pass) {
+    WXL_CORE_ZONE("M2.Draw");
     if (!((1 << pass) & this->m_passMask)) {
         return;
     }
@@ -2275,10 +2326,14 @@ void CM2Scene::Draw(M2PASS pass) {
         CM2Scene::s_optFlags = optFlags;
     }
 
+    SXC::Lights::SceneDrawBegin(this);  // SXC: another scene than the world's draws without our lights
+
     CM2SceneRender render(this);
     render.Draw(pass, this->m_elements.m_data, this->m_passElements[pass].m_data, this->m_passElements[pass].m_count);
 
     if (pass == M2PASS_0) {
         render.Draw(M2PASS_0, this->m_elements.m_data, this->m_doodadElements.m_data, this->m_doodadElements.m_count);
     }
+
+    SXC::Lights::SceneDrawEnd(this);
 }

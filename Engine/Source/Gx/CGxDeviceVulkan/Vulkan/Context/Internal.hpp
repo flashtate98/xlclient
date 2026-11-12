@@ -184,6 +184,7 @@ namespace gxvk::vk::context::detail
         VkPhysicalDevice16BitStorageFeatures      storage16 = {};
         VkPhysicalDeviceShaderFloat16Int8Features float16   = {};
         VkPhysicalDeviceMultiviewFeatures         multiview = {};
+        VkPhysicalDeviceDescriptorIndexingFeatures indexing = {};   ///< SXC: a 1.2 device's non-uniform sampler indexing
         void*                                     head      = nullptr;
     };
     void PlanCaps(VkPhysicalDeviceFeatures& features, CapsChain& chain, void* tail, const char** names, uint32_t& count,

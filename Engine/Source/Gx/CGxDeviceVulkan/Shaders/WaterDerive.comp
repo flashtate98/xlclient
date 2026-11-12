@@ -1,0 +1,26 @@
+// SXC: our water's wave slopes (WaterWaves.glsl): from the displacement, per texel, the height's slopes
+// over the displaced surface and the Jacobian of the horizontal displacement (below 1 the crest folds:
+// where the foam goes, after Crest's UpdateFoam.compute), and the height for the vertex stage.
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+#include "WaterWaves.glsl"
+
+void main()
+{
+    ivec3 id = ivec3(gl_GlobalInvocationID);
+    int mask = kWaveN - 1;
+    float texel = pw.sizes[id.z] / float(kWaveN);
+    vec3 d  = imageLoad(waveDisp, id).xyz;
+    vec3 xp = imageLoad(waveDisp, ivec3((id.x + 1) & mask, id.y, id.z)).xyz;
+    vec3 xm = imageLoad(waveDisp, ivec3((id.x - 1) & mask, id.y, id.z)).xyz;
+    vec3 yp = imageLoad(waveDisp, ivec3(id.x, (id.y + 1) & mask, id.z)).xyz;
+    vec3 ym = imageLoad(waveDisp, ivec3(id.x, (id.y - 1) & mask, id.z)).xyz;
+    vec3 ddx = (xp - xm) / (2.0 * texel);
+    vec3 ddy = (yp - ym) / (2.0 * texel);
+    float jacobian = (1.0 + ddx.x) * (1.0 + ddy.y) - ddx.y * ddy.x;
+    vec2 slope = vec2(ddx.z / max(1.0 + ddx.x, 0.2), ddy.z / max(1.0 + ddy.y, 0.2));
+    imageStore(waveSlopes, id, vec4(slope, jacobian, d.z));
+}

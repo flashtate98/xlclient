@@ -1,0 +1,270 @@
+// SXC: the underwater medium (Vulkan/Medium.cpp; kb: underwater). With the camera in water, over the opaque
+// world and the water's surface: each pixel loses its colour channels by the distance the view travels
+// through the water (each channel halved every `1 / loss` yd: red goes first), goes grey towards
+// `glow.w` yd, and fades into the water's glow (`misc.y` per yd: 95% at the visibility). Pixels with
+// nothing drawn are the glow. Our lamps light the water itself (a halo round each, brighter looking toward
+// it): their light at points along the view, from the fog's light volume (FogLights.comp), scattered
+// towards the camera and lost on the way like the rest. The waterline: with the camera at the surface, only
+// pixels whose point on the near plane lies under the surface (as the water moves it this frame: Water.frag
+// decides the surface's side the same way) get the water, the rest stays the air's. After surfacing, the lens stays
+// wet a moment: a few drops towards the edges, sliding down and refracting. Written into our image;
+// MediumCopy.frag puts it back on the target.
+//
+// WAVES 1 (with the water's set 2 bound): the surface at each pixel's near point as the water moves it
+// (WaterMove.glsl, this frame); without it, the camera's queried height tilted by its slopes.
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+#ifndef WAVES
+#define WAVES 0
+#endif
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(std140, set = 0, binding = 0) uniform MediumParams
+{
+    mat4 invViewProj;  // clip (D3D: y up, z 0..1) -> camera-relative position
+    vec4 viewport;     // the world's viewport in target pixels: x, y, width, height
+    vec4 depth;        // the viewport's min and max depth, 0, 0
+    vec4 loss;         // rgb: per yd, log2 of each channel's loss (0: none); w 0
+    vec4 glow;         // rgb: the water's glow; w: yd until grey (0: never)
+    vec4 misc;         // x: the debug view (1 the fade, 2 the distance, 3 the lamps alone, 4 the waterline), y: the fade per yd, zw 0
+    vec4 halo;         // our lamps in the water: x per yd scattered (0 off), y the light volume's near, z its reach (yd),
+                       // w 1 = the volume filled this frame
+    vec4 line;         // the waterline: x the moving surface at the camera relative to it (yd), y z its slopes (dz/dx, dz/dy),
+                       // w 1 = on (else every pixel is under)
+    vec4 lens;         // x seconds, y how wet the lens is (1 just surfaced), zw 0
+    vec4 origin;       // the camera's world position, w 0
+    vec4 move;         // x the still surface at the camera (world z), y the water's clock (s), z 1 = its movement readable (WAVES), w 0
+    vec4 moveLook;     // the movement row without a look grid (WaterMove.glsl)
+} mp;
+
+layout(set = 0, binding = 1) uniform sampler2D targetColour;
+layout(set = 0, binding = 2) uniform sampler2D targetDepth;
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D outColour;
+layout(set = 0, binding = 5) uniform sampler3D lightVolume;   // the fog's: our lamps' light per froxel (rgb)
+
+const int kLightSlices = 64;   // Fog.glsl's
+
+#if WAVES
+#define SHORE_TERRAIN 1.0
+#include "WaterScene.glsl"
+#include "WaterShore.glsl"
+
+layout(set = 2, binding = 4) uniform sampler2DArray waveDisp;   // per cascade: dx, dy, height (yd)
+
+#include "WaterMove.glsl"
+
+// The surface's rise at a world point (its still height in z) as Water.vert moves it (WaterQuery.comp's).
+float RiseAt(vec3 world)
+{
+    ivec2 g = ShoreCellOf(world.xy);
+    bool near = NearCovers(world.xy);
+    vec4 cell = near ? ShoreCell(g) : vec4(0.0);
+    float depthY = near ? max(cell.w - 1.0, 0.0) : 1.0;
+    float ease;
+    return SurfaceMove(world, near, cell, depthY, LookMoveAt(world, mp.moveLook), mp.origin.xyz, mp.move.y, ease).z;
+}
+#endif
+
+// The lamps' light scattered towards the camera along the view, out to `distance`: steps growing with the
+// distance (the volume's slices do too), each lit by the volume's froxel, dimmed by what lies between it
+// and the camera (the fade into the glow and the channels' loss).
+vec3 LampsInWater(vec2 uv, float distance)
+{
+    vec3 sum = vec3(0.0);
+
+    if (mp.halo.w < 0.5 || mp.halo.x <= 0.0)
+    {
+        return sum;
+    }
+
+    float near = mp.halo.y, reach = mp.halo.z;
+    float end = min(distance, reach);
+    const int kSteps = 24;
+    float t = 0.0;
+
+    for (int i = 1; i <= kSteps && t < end; i++)
+    {
+        float next = end > near ? near * pow(end / near, float(i) / float(kSteps)) : end * float(i) / float(kSteps);
+        float mid = 0.5 * (t + next);
+        float slice = log(max(mid, near) / near) / log(reach / near) * float(kLightSlices);
+        vec3 light = textureLod(lightVolume, vec3(uv, slice / float(kLightSlices)), 0.0).rgb;
+        vec3 kept = exp2(-mp.loss.rgb * mid) * exp(-mp.misc.y * mid);
+        sum += light * kept * (next - t);
+        t = next;
+    }
+
+    return sum * mp.halo.x;
+}
+
+// A camera-relative position from clip x, y (D3D: y up) and depth z 0..1.
+vec3 Unproject(vec2 ndc, float z)
+{
+    vec4 q = mp.invViewProj * vec4(ndc, z, 1.0);
+    return q.xyz / q.w;
+}
+
+float LensHash(vec2 c)
+{
+    return fract(sin(dot(c, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+// The wet lens at a pixel, as a normal map: a few drops, more towards the edges than the middle (the view
+// stays clear), each a small dome sliding down at its own pace, bending the scene behind it through its
+// slope (strongest at its rim, none at its top) with a faint highlight, and leaving a narrow trail above it.
+// `edge` 0 in the middle of the view .. 1 at its border. Returns the offset (px) to read the scene at, and
+// the highlight (z). Fewer drops as the lens dries.
+vec3 Lens(vec2 px, float edge, float t, float wet)
+{
+    float vignette = smoothstep(0.35, 0.95, edge);
+    vec2 offset = vec2(0.0);
+    float highlight = 0.0;
+    const vec3 kLight = vec3(-0.35, -0.6, 0.72);   // from the upper left (screen y grows downwards)
+
+    for (int k = 0; k < 2; k++)
+    {
+        float cell = k == 0 ? 150.0 : 95.0;
+        vec2 g = px / cell;
+        float column = floor(g.x);
+        g.y -= t * (0.1 + 0.35 * LensHash(vec2(column, float(k) * 7.0)));
+        vec2 id = floor(g);
+
+        if (LensHash(id + float(k) * 13.0) > wet * vignette * 0.6)
+        {
+            continue;
+        }
+
+        vec2 centre = vec2(0.3 + 0.4 * LensHash(id + 3.1), 0.35 + 0.35 * LensHash(id + 5.7));
+        float radius = 0.12 + 0.12 * LensHash(id + 9.3);
+        vec2 v = fract(g) - centre;
+        v.y *= 0.85;
+        float r = length(v) / radius;
+
+        if (r < 1.0)
+        {
+            // The dome's normal: its slope grows towards the rim.
+            vec2 slope = v / radius;
+            vec3 n = normalize(vec3(slope, sqrt(max(1.0 - r * r, 0.04))));
+            offset -= n.xy / max(n.z, 0.3) * 4.0;
+            highlight = max(highlight, pow(max(dot(n, normalize(kLight)), 0.0), 24.0) * 0.12);
+        }
+        else if (v.y < 0.0)
+        {
+            // The trail it left above it, narrowing and fading away from the drop.
+            float along = clamp(-v.y / max(centre.y, 0.05), 0.0, 1.0);
+            float width = radius * 0.3 * (1.0 - along);
+            float across = width > 0.0 ? v.x / width : 2.0;
+
+            if (abs(across) < 1.0)
+            {
+                offset.x -= across * 1.5 * (1.0 - along);
+            }
+        }
+    }
+
+    return vec3(offset, highlight);
+}
+
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+
+    if (any(greaterThanEqual(p, textureSize(targetColour, 0))))
+    {
+        return;
+    }
+
+    vec4 c = texelFetch(targetColour, p, 0);
+    vec2 uv = (vec2(p) + 0.5 - mp.viewport.xy) / mp.viewport.zw;
+
+    // Outside the world's viewport: as it is (MediumCopy.frag's scissor leaves it anyway).
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
+    {
+        imageStore(outColour, p, vec4(c.rgb, 0.0));
+        return;
+    }
+
+    // The view's distance through the water; nothing drawn: very far.
+    float d = texelFetch(targetDepth, p, 0).r;
+    float distance = 1e6;
+
+    if (d < mp.depth.y * 0.99999)
+    {
+        float z = (d - mp.depth.x) / max(mp.depth.y - mp.depth.x, 1e-6);
+        vec2 ndc = vec2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+        vec4 q = mp.invViewProj * vec4(ndc, z, 1.0);
+        distance = length(q.xyz / q.w);
+    }
+
+    // The waterline: is this pixel's point on the near plane under the surface (as the water moves it this
+    // frame, else the camera's queried height tilted by its slopes)? A soft edge of a pixel or two.
+    float under = 1.0;
+
+    if (mp.line.w > 0.5)
+    {
+        vec2 ndcHere = vec2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+        vec3 a = Unproject(ndcHere, 0.0);
+        vec3 b = Unproject(ndcHere + vec2(0.0, 2.0 / mp.viewport.w), 0.0);
+        float s = mp.line.x + mp.line.y * a.x + mp.line.z * a.y - a.z;
+#if WAVES
+        if (mp.move.z > 0.5)
+        {
+            vec3 at = mp.origin.xyz + a;
+            s = mp.move.x + RiseAt(vec3(at.xy, mp.move.x)) - at.z;
+        }
+#endif
+        under = clamp(s / (max(abs(b.z - a.z), 1e-6) * 1.5) + 0.5, 0.0, 1.0);
+    }
+
+    // The air's side: the scene as it is, through the wet lens.
+    vec3 dry = c.rgb;
+
+    if (mp.lens.y > 0.01 && under < 1.0)
+    {
+        vec2 centred = (uv - 0.5) * vec2(mp.viewport.z / max(mp.viewport.w, 1.0), 1.0);
+        vec3 l = Lens(vec2(p), clamp(length(centred) * 1.6, 0.0, 1.0), mp.lens.x, mp.lens.y);
+        ivec2 at = clamp(p + ivec2(l.xy), ivec2(0), textureSize(targetColour, 0) - 1);
+        dry = texelFetch(targetColour, at, 0).rgb + l.z;
+    }
+
+    vec3 colour = c.rgb * exp2(-mp.loss.rgb * distance);
+
+    if (mp.glow.w > 0.0)
+    {
+        float grey = dot(colour, vec3(0.299, 0.587, 0.114));
+        colour = mix(colour, vec3(grey), smoothstep(0.0, mp.glow.w, distance));
+    }
+
+    float fade = 1.0 - exp(-mp.misc.y * distance);
+    colour = mix(colour, mp.glow.rgb, fade) + LampsInWater(uv, distance);
+    colour = mix(dry, colour, under);
+
+    if (mp.misc.x > 0.5 && mp.misc.x < 1.5)
+    {
+        colour = vec3(fade);
+    }
+    else if (mp.misc.x > 3.5)
+    {
+        // The waterline: red under, green above (by the surface's movement), blue by the camera's height alone
+        // (bright: under), grey without a waterline.
+        bool moving = false;
+#if WAVES
+        moving = mp.move.z > 0.5;
+#endif
+        colour = c.rgb * 0.35 + (mp.line.w < 0.5 ? vec3(0.3) : moving ? mix(vec3(0.0, 0.6, 0.0), vec3(0.7, 0.0, 0.0), under) : vec3(0.0, 0.0, 0.2 + 0.5 * under));
+    }
+    else if (mp.misc.x > 2.5)
+    {
+        colour = LampsInWater(uv, distance);
+    }
+    else if (mp.misc.x > 1.5)
+    {
+        // Bands every 10 yd, a brighter one every 100.
+        float band = fract(distance / 10.0) < 0.08 ? 1.0 : 0.0;
+        colour = mix(c.rgb * 0.5, mod(floor(distance / 10.0), 10.0) < 0.5 ? vec3(1.0, 0.3, 0.2) : vec3(0.2, 0.8, 1.0), band);
+    }
+
+    // The alpha: how far the pixel is under the water, for the fog after us (Fog.frag: no fog in the water).
+    imageStore(outColour, p, vec4(colour, under));
+}

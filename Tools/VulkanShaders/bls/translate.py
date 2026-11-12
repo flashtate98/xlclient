@@ -20,7 +20,7 @@ import tempfile
 
 from . import archive
 from . import emitter as emitter_module
-from .emitter import (Emitter, Refused, companion_module, companion_block, manifest_block, FOG_ROW,
+from .emitter import (Emitter, Refused, companion_module, companion_block, manifest_block, is_grass_vertex, grass_instanced_module, grass_block, FOG_ROW,
                       PCONST, VCONST_SMALL)
 
 
@@ -142,6 +142,7 @@ def main(argv):
     blocks = []
     index_lines = []
     companions = collections.OrderedDict()    # md5 of the text -> [meta, [names], status, log]
+    grass_blocks = []                         # SXC: the instanced grass variants (step 7)
     for md5, rec in selected.items():
         rec.names = names[md5]
         em = Emitter(rec)
@@ -171,7 +172,23 @@ def main(argv):
             companions[comp_md5][1].extend(n + '@ff' for n in rec.names)
             if companions[comp_md5][2] == 'failed':
                 comp_md5 = None
-        blocks.append(manifest_block(em, rec, '%s/%s.spv' % (rec.kind, md5), comp_md5))
+        # SXC: the instanced grass variant of a DetailDoodad vertex record (step 7), folded by its text.
+        grass_md5 = None
+        if is_grass_vertex(rec):
+            try:
+                gtext = grass_instanced_module(em, glsl)
+            except Refused as e:
+                print('grass variant refused for %s: %s' % (' = '.join(rec.names), e), file=sys.stderr)
+                gtext = None
+            if gtext:
+                grass_md5 = hashlib.md5(gtext.encode('utf-8')).hexdigest()
+                gstatus, glog = write_module('vertex', grass_md5, gtext)
+                if gstatus == 'failed':
+                    print('FAILED grass variant %s: %s' % (' = '.join(rec.names), glog), file=sys.stderr)
+                    grass_md5 = None
+                else:
+                    grass_blocks.append(grass_block(em, rec, grass_md5, 'vertex/%s.spv' % grass_md5, comp_md5))
+        blocks.append(manifest_block(em, rec, '%s/%s.spv' % (rec.kind, md5), comp_md5, grass_md5))
         for n in rec.names:
             if ':' in n:
                 extra = (' '.join('s%d:%s' % kv for kv in sorted(em.samplers.items())) or '-') \
@@ -194,6 +211,11 @@ def main(argv):
                       '# `companion` line (no pixel shader exists for them; profile `ff`, no bytecode, md5 of\n'
                       '# the module text). Bound when the draw has no pixel shader.\n' + comp_blocks[0])
         blocks.extend(comp_blocks[1:])
+    if grass_blocks:
+        blocks.append('# SXC: the instanced grass variants of the DetailDoodad vertex records (step 7): the position\n'
+                      '# through the plant\'s rows (locations 13..15), normal and colour per instance. Reached\n'
+                      '# through the stock record\'s `instanced` line.\n' + grass_blocks[0])
+        blocks.extend(grass_blocks[1:])
 
     refused = [(r, why) for r, status, why, em in results if status not in ('validated', 'emitted')]
     head = list(MANIFEST_HEAD)

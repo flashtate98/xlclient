@@ -12,6 +12,8 @@
 #include <cstdint>
 #include <cstring>
 #include <new>
+#include <cstdlib>        // SXC:
+#include <unordered_map>  // SXC:
 #include <unordered_set>  // SXC:
 #include "Engine/Source/Gx/CGxDeviceVulkan/CGxDeviceVulkan.h"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Log.hpp"
@@ -20,6 +22,11 @@
 #include "Engine/Source/Gx/CGxDevice/CGxShader.h"
 #include "Engine/Source/Storm/H/storm.h"
 #include "SXC/Log.h"  // SXC:
+#include "SXC/Settings/Settings.h"  // SXC: [Terrain] OurShader
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"  // SXC: our terrain shader's covers
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Lights.hpp" // SXC: and its point lights
+#include "SXC/Lights/Lights.h"
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Frame.hpp"  // SXC:
 
 namespace {
     namespace manifest  = gxvk::vk::manifest;
@@ -42,6 +49,9 @@ namespace {
     Program g_uiVertex   = { pipelines::VertexProgram::Ui, pipelines::FragmentProgram::FixedFunction, nullptr };
     Program g_uiPixel    = { pipelines::VertexProgram::FixedFunction, pipelines::FragmentProgram::Ui, nullptr };
     Program g_desaturate = { pipelines::VertexProgram::FixedFunction, pipelines::FragmentProgram::Desaturate, nullptr };
+    // SXC: our water (SXC/Water creates the "SxcWater" pair; no .bls behind them, this device knows them by name).
+    Program g_waterVertex = { pipelines::VertexProgram::Water, pipelines::FragmentProgram::FixedFunction, nullptr };
+    Program g_waterPixel  = { pipelines::VertexProgram::FixedFunction, pipelines::FragmentProgram::Water, nullptr };
 
     Program* g_translated      = nullptr;   ///< one per manifest record, made at first need
     uint32_t g_translatedCount = 0;
@@ -74,7 +84,15 @@ namespace {
             if (!SStrCmpI(name, "UI", STORM_MAX_STR) || !SStrCmpI(name, "UI:0", STORM_MAX_STR) || !SStrCmpI(name, "UI:1", STORM_MAX_STR)) {
                 return &g_uiVertex;
             }
+
+            if (!SStrCmpI(name, "SxcWater", STORM_MAX_STR)) {  // SXC:
+                return &g_waterVertex;
+            }
         } else if (shader->m_target == GxSh_Pixel) {
+            if (!SStrCmpI(name, "SxcWater", STORM_MAX_STR)) {  // SXC:
+                return &g_waterPixel;
+            }
+
             if (!SStrCmpI(name, "UI", STORM_MAX_STR)) {
                 return &g_uiPixel;
             }
@@ -135,6 +153,87 @@ namespace {
     // in Halls of Origination with two floats (620.3, 1.0) in the vertex shader slot. Such a value is
     // drawn as the fixed function and reported once instead.
     std::unordered_set<const CGxShader*> g_liveShaders;
+
+    // SXC: our terrain shader (Shaders/Terrain.vert, Terrain.frag) in place of the client's terrain
+    // records, when [Terrain] OurShader is on. The options come from the engine's own shader names:
+    //   vertex  "Terrain:n"   n = 64 point lights + 16 (layers - 1) + 8 specular + 4 vertex colour + 2 env + shadow
+    //   pixel   "Terrain1:n"  n = 16 unlit + 8 big alpha + 2 (layers - 1) + cube   (no shadow map)
+    //           "Terrain3:n"  n = 48 unlit + 24 big alpha + 8 (mode - 1) + 2 (layers - 1) + cube   (modes 1-3)
+    // (CMapRenderChunk::GetVertexShader, CMap::GetTerrainPixelShader); the cube records (a reflective
+    // layer 0) since 2026-10-27, with kFragmentCube. Not covered, so stock: Terrain2 and the _pcf families
+    // (this device takes the shadow cache's R32F path), Terrain0.
+    SXC::Settings::Bool& OurTerrain() {
+        static SXC::Settings::Bool s_setting("Terrain", "OurShader", true, "Our terrain shader (Vulkan)",
+                                             "Draw the terrain with our own shader instead of the client's 128 + 128 translated ones. It looks the same; covers, wetness and our lights build on it.");
+        return s_setting;
+    }
+
+    struct TerrainDecode {
+        bool     decoded = false;
+        bool     covered = false;
+        uint32_t options = 0;
+    };
+    std::unordered_map<const CGxShader*, TerrainDecode> g_terrainDecodes;
+    uint64_t g_terrainDraws = 0, g_terrainStock = 0;
+
+    // "Family:n" -> family, n (n = 0 when the name has no permutation).
+    bool SplitName(const char* name, char* family, size_t size, uint32_t& n) {
+        if (!name) {
+            return false;
+        }
+
+        const char* colon = strchr(name, ':');
+        const size_t length = colon ? static_cast<size_t>(colon - name) : strlen(name);
+
+        if (length + 1 > size) {
+            return false;
+        }
+
+        memcpy(family, name, length);
+        family[length] = '\0';
+        n = colon ? static_cast<uint32_t>(strtoul(colon + 1, nullptr, 10)) : 0u;
+        return true;
+    }
+
+    const TerrainDecode& DecodeTerrain(const CGxShader* shader) {
+        TerrainDecode& d = g_terrainDecodes[shader];
+
+        if (d.decoded) {
+            return d;
+        }
+
+        d.decoded = true;
+        char family[32];
+        uint32_t n = 0;
+
+        if (!SplitName(shader->m_key.m_str, family, sizeof(family), n)) {
+            return d;
+        }
+
+        namespace terrain = pipelines::terrain;
+
+        if (shader->m_target == GxSh_Vertex && !strcmp(family, "Terrain") && n < 128) {
+            d.options = ((n >> 4) & 3u) | ((n & 1u) ? terrain::kVertexShadow : 0u) | ((n & 2u) ? terrain::kVertexEnv : 0u) |
+                        ((n & 4u) ? terrain::kVertexColor : 0u) | ((n & 8u) ? terrain::kVertexSpecular : 0u) | ((n & 64u) ? terrain::kVertexPointLights : 0u);
+            d.covered = true;
+        } else if (shader->m_target == GxSh_Pixel && !strcmp(family, "Terrain1") && n < 32) {
+            d.options = ((n >> 1) & 3u) | ((n & 8u) ? terrain::kFragmentBigAlpha : 0u) | ((n & 16u) ? terrain::kFragmentUnlit : 0u) |
+                        ((n & 1u) ? terrain::kFragmentCube : 0u);
+            d.covered = true;
+        } else if (shader->m_target == GxSh_Pixel && !strcmp(family, "Terrain3") && n < 96) {
+            const uint32_t mode = (n % 24u) / 8u + 1u;
+            d.options = ((n >> 1) & 3u) | ((mode == 1 ? 1u : 2u) << 2) | (((n / 24u) & 1u) ? terrain::kFragmentBigAlpha : 0u) |
+                        ((n / 48u) ? terrain::kFragmentUnlit : 0u) | (mode == 3 ? terrain::kFragmentNineTaps : 0u) | ((n & 1u) ? terrain::kFragmentCube : 0u);
+            d.covered = true;
+        }
+
+        return d;
+    }
+
+    bool IsTerrainName(const CGxShader* shader) {
+        const char* name = shader ? shader->m_key.m_str : nullptr;
+        return name && !SStrCmpI(name, "Terrain", 7);
+    }
 
     // The shader the engine set for a stage, created if it never was, or null for the fixed function.
     Program* Bound(CGxDeviceVulkan* device, void* value, const char* stage) {
@@ -231,6 +330,7 @@ void CGxDeviceVulkan::ShaderDestroy(CGxShader*& shader) {
         shader->m_apiSpecific = nullptr;
         shader->m_loaded = 0;
         g_liveShaders.erase(shader);  // SXC: the base deletes it with this last reference
+        g_terrainDecodes.erase(shader);  // SXC: a new object may get this address
     }
 
     CGxDevice::ShaderDestroy(shader);
@@ -346,6 +446,7 @@ uint32_t CGxDeviceVulkan::IShaderPrograms(pipelines::Draw& draw) {
     draw.vertexRecord = nullptr;
     draw.fragmentRecord = nullptr;
     draw.vertexRows = pipelines::kVertexRowsSmall;
+    draw.lightsSurface = SXC::Lights::DrawSurface();  // SXC: inside / outside / any; a portrait's models get none of the world's lights
 
     if (!vsTranslated && !psTranslated) {
         if (vs) {
@@ -354,6 +455,16 @@ uint32_t CGxDeviceVulkan::IShaderPrograms(pipelines::Draw& draw) {
 
         if (ps) {
             draw.fragment = ps->fragment;
+        }
+
+        // SXC: our water pairs only with itself; it reads the registers (set 1) and the lights' set 3,
+        // made now, before the draw takes the pass (as the terrain's).
+        if ((draw.vertex == pipelines::VertexProgram::Water) != (draw.fragment == pipelines::FragmentProgram::Water)) {
+            draw.vertex = pipelines::VertexProgram::FixedFunction;
+            draw.fragment = pipelines::FragmentProgram::FixedFunction;
+        } else if (draw.vertex == pipelines::VertexProgram::Water) {
+            gxvk::vk::lights::FrameSet(gxvk::vk::frame::Slot(), gxvk::vk::frame::Serial(), draw.lightsSurface);
+            return 1u;
         }
 
         if (draw.vertex == pipelines::VertexProgram::Ui) {
@@ -365,6 +476,57 @@ uint32_t CGxDeviceVulkan::IShaderPrograms(pipelines::Draw& draw) {
         // The fixed-function pixel stages read texture stages 0 and 1; the UI and Desaturate
         // shaders stage 0 alone.
         return draw.fragment == pipelines::FragmentProgram::FixedFunction ? 3u : 1u;
+    }
+
+    // SXC: our terrain shader for a terrain pair it covers (both stages: it pairs only with itself). It
+    // reads the covers' set 2 and the lights' set 3, so it needs Vulkan/Cover and Vulkan/Lights.
+    if (vsTranslated && psTranslated && OurTerrain().Get() && gxvk::vk::cover::Ready() && gxvk::vk::lights::Ready()) {
+        const CGxShader* vsShader = static_cast<const CGxShader*>(this->m_appRenderStates[GxRs_VertexShader].m_value.m_data.p);
+        const CGxShader* psShader = static_cast<const CGxShader*>(this->m_appRenderStates[GxRs_PixelShader].m_value.m_data.p);
+
+        if (IsTerrainName(vsShader) && IsTerrainName(psShader)) {
+            const TerrainDecode& v = DecodeTerrain(vsShader);
+            const TerrainDecode& p = DecodeTerrain(psShader);
+
+            if (v.covered && p.covered) {
+                draw.vertex = pipelines::VertexProgram::Terrain;
+                draw.fragment = pipelines::FragmentProgram::Terrain;
+                draw.vertexRecord = vs->record;
+                draw.vertexRows = pipelines::kVertexRowsSmall;
+                draw.terrainVertex = v.options;
+                draw.terrainFragment = p.options;
+
+                // Our point lights replace the client's 3 per chunk while a mod has them on (step 6a).
+                if (SXC::Lights::StockTerrainOff()) {
+                    draw.terrainVertex &= ~pipelines::terrain::kVertexPointLights;
+                }
+
+                // A chunk that can carry depth (the cover seam's c13.x) is raised through the
+                // tessellation where the device has it, its flat self drawn a little lower first so
+                // a hairline where two chunks' covers don't meet shows ground (step 5c).
+                const float raise = reinterpret_cast<const float*>(this->m_pixelRegs)[13 * 4];
+
+                if (raise > 0.5f && gxvk::vk::cover::Tessellation() && !(v.options & pipelines::terrain::kVertexEnv)) {
+                    draw.terrainVertex |= pipelines::terrain::kVertexTess | ((p.options & pipelines::terrain::kFragmentBigAlpha) ? pipelines::terrain::kVertexBigAlpha : 0u);
+                    draw.terrainUnderlay = true;
+                }
+                // The covers' set for this frame, made now: its textures resolve like the draw's own
+                // stages, before the draw takes the pass (an inline upload may end it).
+                gxvk::vk::cover::FrameSet(gxvk::vk::frame::Slot(), gxvk::vk::frame::Serial());
+                gxvk::vk::lights::FrameSet(gxvk::vk::frame::Slot(), gxvk::vk::frame::Serial());
+
+                if (g_terrainDraws++ == 0) {
+                    SXC::LogOnce("gxvk-terrain-on", "vulkan: our terrain shader draws the terrain (first: %s / %s)", vsShader->m_key.m_str, psShader->m_key.m_str);
+                }
+
+                return pipelines::terrain::SamplerMask(p.options);
+            }
+
+            g_terrainStock++;
+            char key[96];
+            SStrPrintf(key, sizeof(key), "gxvk-terrain|%s|%s", vsShader->m_key.m_str, psShader->m_key.m_str);
+            SXC::LogOnce(key, "vulkan: our terrain shader doesn't cover %s / %s yet; the stock shaders draw it", vsShader->m_key.m_str, psShader->m_key.m_str);
+        }
     }
 
     if (vsTranslated) {

@@ -26,9 +26,11 @@
 // GENERATED MIPS (CGxTexFlags::m_generateMipMaps, D3D9's AUTOGENMIPMAP): such a texture gets its
 // full chain; the protocol's single level is uploaded as level 0 and the rest derived by a blit
 // chain recorded under the same rule. A format that cannot be blitted keeps one level.
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <new>
+#include <vector>
 #include "Engine/Source/Gx/CGxDeviceVulkan/CGxDeviceVulkan.h"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Context.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Frame.hpp"
@@ -50,6 +52,9 @@ namespace {
 
     constexpr uint32_t kCubeFaces  = 6;
     constexpr uint32_t kScratchMax = 64u * 1024u * 1024u;
+
+    // SXC: textures the lights' shadow maps want that no draw has uploaded yet (SxcShadowUploads).
+    std::vector<CGxTex*> s_shadowWanted;
 
     // Regions of one protocol run staged so far, all in one source buffer: 6 faces x 16 levels fit;
     // a fuller run is recorded and restarted.
@@ -564,7 +569,7 @@ void CGxDeviceVulkan::ITexUpload(CGxTex* texId) {
 // Mirrors CGxDeviceD3d::ITexForceRecreation (0x006A2AA0): every texture with an image (every
 // render target, with `all` every texture) loses it -- retired by the last frame that named it --
 // and is marked for creation and a whole update, its callback told the texels were dropped
-// (GxTex_3); the next bind makes it again. Then the engine's texture-recreation callbacks.
+// (GxTex_Recreate); the next bind makes it again. Then the engine's texture-recreation callbacks.
 void CGxDeviceVulkan::ITexForceRecreation(int32_t all) {
     for (CGxTex* texId = this->m_textures.Head(); texId; texId = this->m_textures.Next(texId)) {
         if (!texId->m_apiSpecificData || !(all || texId->m_flags.m_renderTarget)) {
@@ -580,7 +585,7 @@ void CGxDeviceVulkan::ITexForceRecreation(int32_t all) {
         if (texId->m_userFunc) {
             uint32_t texelStrideInBytes;
             const void* texels;
-            texId->m_userFunc(GxTex_3, texId->m_width, texId->m_height, 0, 0, texId->m_userArg, texelStrideInBytes, texels);
+            texId->m_userFunc(GxTex_Recreate, texId->m_width, texId->m_height, 0, 0, texId->m_userArg, texelStrideInBytes, texels);
         }
 
         g_stats.recreated++;
@@ -601,6 +606,7 @@ void CGxDeviceVulkan::DeviceSetBaseMipLevel(uint32_t level) {
 // Mirrors CGxDeviceD3d::TexDestroy (0x006A2BB0): the image retired by serial (the frame that last
 // sampled it may still be on the GPU), then the base unlinks and frees the CGxTex.
 void CGxDeviceVulkan::TexDestroy(CGxTex* texId) {
+    s_shadowWanted.erase(std::remove(s_shadowWanted.begin(), s_shadowWanted.end(), texId), s_shadowWanted.end());  // SXC:
     DropRec(RecOf(texId));
     CGxDevice::TexDestroy(texId);
 }
@@ -630,6 +636,43 @@ int32_t CGxDeviceVulkan::ITexResolve(CGxTex* texId, uint32_t stage, pipelines::D
     t.cube = r->image.cube;
     draw.textureMask |= 1u << stage;
     return 1;
+}
+
+// SXC: a texture's view for the lights' shadow maps (drawn in the pre-pass, ahead of this frame's
+// fills): only one a draw sampled in an earlier frame, so its texels are surely uploaded; kept alive
+// with this frame. Null otherwise (the caller tries again later).
+VkImageView CGxDeviceVulkan::SxcShadowTexture(CGxTex* texId) {
+    TexRec* r = texId ? RecOf(texId) : nullptr;
+
+    if (!r || r->image.handle == VK_NULL_HANDLE || r->image.cube || r->renderTarget || !r->lastUsed || r->lastUsed >= frame::Serial()) {
+        // One no draw has sampled (a doodad the camera never drew): its upload is asked for at the frame's
+        // end (SxcShadowUploads; the caller is inside a draw, no transfer can be recorded now). Without it
+        // the map stayed incomplete and was gathered again and again.
+        if (texId && !(r && (r->image.cube || r->renderTarget))
+            && std::find(s_shadowWanted.begin(), s_shadowWanted.end(), texId) == s_shadowWanted.end()) {
+            s_shadowWanted.push_back(texId);
+        }
+
+        return VK_NULL_HANDLE;
+    }
+
+    r->lastUsed = frame::Serial();
+    return r->image.view;
+}
+
+// SXC: the textures the shadow maps asked for, uploaded as a draw binding them would (the bind-time update),
+// and stamped with this frame: from the next frame on SxcShadowTexture hands them out.
+void CGxDeviceVulkan::SxcShadowUploads() {
+    for (CGxTex* texId : s_shadowWanted) {
+        this->ITexMarkAsUpdated(texId);
+        TexRec* r = RecOf(texId);
+
+        if (r && r->image.handle != VK_NULL_HANDLE) {
+            r->lastUsed = frame::Serial();
+        }
+    }
+
+    s_shadowWanted.clear();
 }
 
 // The texture's image, made now if the texture is pending (CGxDeviceD3d::DeviceSetRenderTarget

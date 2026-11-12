@@ -99,6 +99,9 @@ namespace gxvk::vk::context::detail
             { kCapMemoryBudget, "memory budget" },
             { kCapSpirv13, "SPIR-V 1.3 and subgroups" },
             { kCapSpirv15, "SPIR-V 1.5" },
+            { kCapSampledArrayNonUniform, "non-uniform sampler indexing" },  // SXC:
+            { kCapTessellation, "tessellation" },                            // SXC:
+            { kCapFragmentStores, "pixel shader stores" },                   // SXC:
         };
 
         void SubgroupOps(uint32_t ops, char* out, size_t cap)
@@ -163,6 +166,8 @@ namespace gxvk::vk::context::detail
         if (have.multiDrawIndirect) offered |= kCapMultiDrawIndirect;
         if (have.drawIndirectFirstInstance) offered |= kCapIndirectFirstInstance;
         if (have.multiViewport) offered |= kCapMultiViewport;
+        if (have.tessellationShader) offered |= kCapTessellation;  // SXC:
+        if (have.fragmentStoresAndAtomics) offered |= kCapFragmentStores;  // SXC:
         if (v11) offered |= kCapSpirv13;
         if (v12) offered |= kCapSpirv15;
 
@@ -176,11 +181,14 @@ namespace gxvk::vk::context::detail
             VkPhysicalDevice16BitStorageFeatures      s16 = {};
             VkPhysicalDeviceMultiviewFeatures         mv  = {};
             VkPhysicalDeviceShaderFloat16Int8Features f16 = {};
+            VkPhysicalDeviceDescriptorIndexingFeatures di = {};  // SXC: 1.2 core
             s16.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES;
             mv.sType  = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES;
             f16.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES;
+            di.sType  = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
             s16.pNext = &mv;
             mv.pNext  = f16Known ? &f16 : nullptr;
+            if (v12) f16.pNext = &di;   // f16Known is true on a 1.2 device
             VkPhysicalDeviceFeatures2 all = {};
             all.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
             all.pNext = &s16;
@@ -192,6 +200,7 @@ namespace gxvk::vk::context::detail
             if (mv.multiview) offered |= kCapMultiview;
             if (f16Known && f16.shaderFloat16) offered |= kCapFloat16;
             if (f16Known && f16.shaderInt8) offered |= kCapInt8;
+            if (v12 && di.shaderSampledImageArrayNonUniformIndexing) offered |= kCapSampledArrayNonUniform;
         }
         const auto properties2 = v11 ? InstanceFn<PFN_vkGetPhysicalDeviceProperties2>("vkGetPhysicalDeviceProperties2") : nullptr;
         if (properties2)
@@ -238,6 +247,8 @@ namespace gxvk::vk::context::detail
         core(kCapMultiDrawIndirect, features.multiDrawIndirect);
         core(kCapIndirectFirstInstance, features.drawIndirectFirstInstance);
         core(kCapMultiViewport, features.multiViewport);
+        core(kCapTessellation, features.tessellationShader);  // SXC:
+        core(kCapFragmentStores, features.fragmentStoresAndAtomics);  // SXC:
 
         // The chain, in front of the caller's. Separate structs, never the VkPhysicalDeviceVulkan11/12Features
         // aggregates: those may not stand beside individual feature structs a caller chains.
@@ -274,6 +285,15 @@ namespace gxvk::vk::context::detail
             head = &chain.float16;
             asked |= offered & (kCapFloat16 | kCapInt8);
             if (f16Ext) names[count++] = VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME;
+        }
+        // SXC: non-uniform sampler indexing (1.2 core; the terrain's cover textures).
+        if (offered & kCapSampledArrayNonUniform)
+        {
+            chain.indexing.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+            chain.indexing.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+            chain.indexing.pNext = head;
+            head = &chain.indexing;
+            asked |= kCapSampledArrayNonUniform;
         }
         chain.head = head;
 
