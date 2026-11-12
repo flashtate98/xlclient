@@ -5085,7 +5085,23 @@ static bool IsSpellPrepareAnim(uint32_t anim) {
     return anim < ANIM_COUNT && (AnimNameHas(anim, "Precast") || AnimNameHas(anim, "ReadySpell") || AnimNameHas(anim, "Channel"));
 }
 
+// A precast's start handing over to its loop (LocSummon into LocSpellPrecastBothChannel, any class's precast into its
+// channel) blends a little longer, as the two poses can be far apart.
+static const uint32_t kPrecastLoopBlendMs = 400;
+
+static bool IsPrecastStartAnim(uint32_t anim) {
+    return anim == 1326 || (anim < ANIM_COUNT && AnimNameHas(anim, "Precast") && !AnimNameHas(anim, "Channel"));   // LocSummon
+}
+
 static uint32_t CastBlendTime(const CGUnit_C* unit, uint32_t previous, uint32_t next, const M2BoneSequenceInfo& playing) {
+    if (previous != next && IsPrecastStartAnim(previous) && IsSpellPrepareAnim(next)) {
+        if (unit->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
+            ChargeLog(unit, "blend precast %u %s -> %u %s, %u ms", previous, AnimName(previous), next, AnimName(next), kPrecastLoopBlendMs);
+        }
+
+        return kPrecastLoopBlendMs;
+    }
+
     if (previous == next || !IsSpellReleaseAnim(previous) || !IsSpellPrepareAnim(next)) {
         return 0;
     }
