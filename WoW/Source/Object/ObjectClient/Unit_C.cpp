@@ -5093,7 +5093,18 @@ static bool IsPrecastStartAnim(uint32_t anim) {
     return anim == 1326 || (anim < ANIM_COUNT && AnimNameHas(anim, "Precast") && !AnimNameHas(anim, "Channel"));   // LocSummon
 }
 
+// The last animation PlayBaseAnimation played, per unit: a precast's start that just ended is already gone from the
+// model when its loop is asked for (the model is back on Stand), so the blend asks this instead.
+struct LastBaseAnim { uint32_t anim; uint32_t at; };
+static std::unordered_map<uint64_t, LastBaseAnim> s_lastBaseAnim;
+
 static uint32_t CastBlendTime(const CGUnit_C* unit, uint32_t previous, uint32_t next, const M2BoneSequenceInfo& playing) {
+    auto last = s_lastBaseAnim.find(unit->m_obj->m_guid.m_guid);
+
+    if (!IsPrecastStartAnim(previous) && last != s_lastBaseAnim.end() && OsGetAsyncTimeMs() - last->second.at < 5000) {
+        previous = last->second.anim;
+    }
+
     if (previous != next && IsPrecastStartAnim(previous) && IsSpellPrepareAnim(next)) {
         if (unit->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
             ChargeLog(unit, "blend precast %u %s -> %u %s, %u ms", previous, AnimName(previous), next, AnimName(next), kPrecastLoopBlendMs);
@@ -5482,6 +5493,12 @@ void CGUnit_C::PlayBaseAnimation(uint32_t animId, int32_t flags) {
     }
 
     CM2Model::SetNextBlendTime(CastBlendTime(this, previousAnim, anim, hasTorso ? torso : base));    // Not in the original: FlashWOW
+
+    if (s_lastBaseAnim.size() > 4096) {     // Not in the original: FlashWOW, see CastBlendTime
+        s_lastBaseAnim.clear();
+    }
+
+    s_lastBaseAnim[this->m_obj->m_guid.m_guid] = { anim, OsGetAsyncTimeMs() };
 
     if ((!updateBase || torsoSlot.m_sequenceId != 0xFFFFFFFF || baseSlot.m_sequenceId != torso.m_sequenceId) && updateTorso) {
         int32_t torsoBlend;
