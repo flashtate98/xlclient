@@ -1317,7 +1317,14 @@ void CGWorldFrame::SetScreenEffect(int32_t effect) {
         case 2: {
             CImVector color;
 
-            if (FFX::s_cvarFFX->m_intValue) {
+            // FlashWOW: the white fog is only right when the nether blur post-process actually runs over it (it reads
+            // the fogged scene and turns it into the ghostly view). Without working passes and shaders (or with
+            // ffxNetherWorld off), the white fog alone hides the whole world (Eye of Acherus, Gift of Tharon'ja), so
+            // fall back to the dark fog the non-FFX path uses.
+            bool netherWorks = FFX::s_cvarFFX->m_intValue && CGWorldFrame::ffxEffectNetherWorld
+                && CGWorldFrame::ffxEffectNetherWorld->Valid();
+
+            if (netherWorks) {
                 color.b = 0xFF;
                 color.g = 0xFF;
                 color.r = 0xFF;
