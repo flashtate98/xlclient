@@ -8686,6 +8686,17 @@ static const char* AnimName(uint32_t anim) {
 }
 
 static bool IsOnChargeSpline(const CGUnit_C* unit) {
+    // Players and their pets only: a fast NPC mover (32 yd/s) passed for a charge dozens of times a second, and NPC
+    // models carry no CombatChargeEnd anyway. A pet is summoned or charmed by a player (GUID high part 0).
+    if (!(unit->m_obj->m_type & TYPEMASK_PLAYER)) {
+        uint64_t owner = unit->m_unit->m_unitFieldSummonedby.m_guid ? unit->m_unit->m_unitFieldSummonedby.m_guid
+                                                                     : unit->m_unit->m_unitFieldCharmedby.m_guid;
+
+        if (!owner || (owner >> 48) != 0) {
+            return false;
+        }
+    }
+
     const CMovement_C& move = unit->m_movementData;
 
     if (!move.IsOnSpline() || move.IsOnParabolicSpline() || unit->IsOnFlyingSpline() || unit->m_mountModel) {
