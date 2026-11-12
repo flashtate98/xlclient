@@ -28,6 +28,7 @@
 #include "Engine/Source/Os/System.h"
 #include "Engine/Source/Os/TimeManager.h"
 #include "Engine/Source/Services/Texture.h"
+#include "SXC/Log.h"  // SXC: textures the component can't paste
 #include "Engine/Source/Storm/H/storm.h"
 #include "Engine/Source/Storm/Source/SLock.h"
 #include "Engine/Source/Storm/Source/SThread.h"
@@ -4717,9 +4718,18 @@ void CCharacterComponent::PasteFromSkin(COMPONENT_SECTIONS section, HTEXTURECACH
 
     uint32_t mipLevel = 0;
 
-    while (width != s_textureSize) {
+    // SXC: halving can miss the size (a texture narrower than the target but taller, or not a power of two
+    // of it): the stock loop then never ended and hung the component thread for good, so no unit was
+    // composited after it (kb npc-outfits, 2026-11-12). Such a texture is skipped and logged.
+    while (width > s_textureSize) {
         width >>= 1;
         mipLevel++;
+    }
+
+    if (width != s_textureSize || mipLevel >= info.m_mipCount) {
+        SXC::Log("component: skin %ux%u (%u mips) doesn't fit the %u texture, skipped", static_cast<unsigned>(info.m_width), static_cast<unsigned>(info.m_height),
+                 static_cast<unsigned>(info.m_mipCount), static_cast<unsigned>(s_textureSize));
+        return;
     }
 
     CCharacterComponent::Paste(texture, dstMips, s_sectionInfo[section].m_pos, s_sectionInfo[section].m_pos, s_sectionInfo[section].m_size, info, mipLevel);
@@ -4752,13 +4762,21 @@ void CCharacterComponent::PasteToSection(COMPONENT_SECTIONS section, HTEXTURECAC
 
     uint32_t mipLevel = 0;
 
-    while (width != sectionWidth) {
+    // SXC: as in PasteFromSkin, a size halving can't reach is skipped instead of looping forever.
+    while (width > sectionWidth) {
         width >>= 1;
         mipLevel++;
     }
 
     srcPos.x = 0;
     srcPos.y = 0;
+
+    if (width != sectionWidth || mipLevel >= info.m_mipCount) {
+        SXC::Log("component: layer %ux%u (%u mips) doesn't fit section %d (%d wide), skipped", static_cast<unsigned>(info.m_width), static_cast<unsigned>(info.m_height),
+                 static_cast<unsigned>(info.m_mipCount), static_cast<int>(section), static_cast<int>(s_sectionInfo[section].m_size.x));
+        return;
+    }
+
     CCharacterComponent::Paste(texture, dstMips, s_sectionInfo[section].m_pos, srcPos, s_sectionInfo[section].m_size, info, mipLevel);
 }
 
@@ -5054,7 +5072,11 @@ uint32_t STORMAPI CCharacterComponent::ThreadProc(void* param) {
     s_threadBeginEvent.Wait(0xFFFFFFFF);
 
     while (CCharacterComponent::s_bComponentThread) {
-        while (true) {
+        // SXC: leave at once when the client quits (ThreadDestroy finishes what's left). Before, the
+        // thread worked through every queued request first, and with no free mip bits it waited for the
+        // main thread to free some, while the main thread waited for it: a freeze at quit with many
+        // composited NPCs (kb npc-outfits, 2026-11-12).
+        while (CCharacterComponent::s_bComponentThread) {
             s_requestListCritSect.Enter();
             CComponentRequest* request = s_requestList.Head();
 

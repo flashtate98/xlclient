@@ -346,8 +346,12 @@ namespace {
                 break;
         }
 
-        if (!entry.description.empty()) {
-            ImGui::SetItemTooltip("%s", entry.description.c_str());
+        // Wrapped: long descriptions ran off the screen.
+        if (!entry.description.empty() && ImGui::BeginItemTooltip()) {
+            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+            ImGui::TextUnformatted(entry.description.c_str());
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
         }
 
         if (ImGui::BeginPopupContextItem("##reset")) {

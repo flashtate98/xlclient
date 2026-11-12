@@ -24,6 +24,7 @@
 #include "WoW/Source/ObjectMgrClient/ObjectMgrClient.h"
 #include "WoW/Source/Game/GameClient/CDrawBowString.h"
 #include "WoW/Source/Ui/GameUI.h"
+#include "SXC/Units/NpcLook.h"  // SXC: NPCs without their baked textures
 #include <cstdlib>
 #include <cstring>
 
@@ -610,8 +611,9 @@ void CGDressUpModelFrame::SetModel(CM2Model* model) {
     }
 
     const char* bakeName = extra->m_bakeName;
+    const bool baked = !SXC::Units::IgnoreBakedNpcTextures();  // SXC: else composited like a player (SXC/Units/NpcLook.h)
 
-    if (!bakeName || !*bakeName) {
+    if (baked && (!bakeName || !*bakeName)) {
         return;
     }
 
@@ -621,13 +623,17 @@ void CGDressUpModelFrame::SetModel(CM2Model* model) {
     data.m_preferences.m_faceId = extra->m_faceID;
     data.m_preferences.m_hairColorId = extra->m_hairColorID;
     data.m_preferences.m_raceID = extra->m_displayRaceID;
-    data.m_flags |= 0x1;
     data.m_preferences.m_skinID = extra->m_skinID;
     data.m_preferences.m_classId = 1;
     data.m_preferences.m_hairStyleId = extra->m_hairStyleID;
     data.m_preferences.m_facialHairId = extra->m_facialHairID;
     data.m_model = model;
-    SStrPrintf(data.m_npcSkinTexture, sizeof(data.m_npcSkinTexture), "%s%s", "Textures\\BakedNpcTextures\\", bakeName);
+
+    if (baked) {
+        data.m_flags |= 0x1;
+        SStrPrintf(data.m_npcSkinTexture, sizeof(data.m_npcSkinTexture), "%s%s", "Textures\\BakedNpcTextures\\", bakeName);
+    }
+
     data.m_model->m_refCount++;
     this->m_component->Init(&data, nullptr);
 
