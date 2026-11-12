@@ -2601,6 +2601,7 @@ int32_t CGUnit_C::ChooseSpellVisualKitAnim(uint32_t mask, uint32_t* anim, uint32
 }
 
 static bool ChooseCasterReadyAnim(CGUnit_C* unit, uint32_t* anim, bool attacking = false);    // Not in the original: FlashWOW, defined by ChooseMovementAnim
+static bool ChooseHunterReadyAnim(CGUnit_C* unit, uint32_t* anim);    // Not in the original: FlashWOW, same place
 
 // VERIFY: a6f466cd auto
 // OFFSET: 0x0071E0D0
@@ -2632,7 +2633,7 @@ int32_t CGUnit_C::ChooseCombatAnim(uint32_t mask, uint32_t* anim, uint32_t* anim
 
         uint32_t casterReady;   // Not in the original: FlashWOW Retail animations, a caster who last cast a spell
 
-        meleeAnim = ChooseCasterReadyAnim(this, &casterReady, true) ? casterReady : this->GetCombatReadyAnim();
+        meleeAnim = (ChooseHunterReadyAnim(this, &casterReady) || ChooseCasterReadyAnim(this, &casterReady, true)) ? casterReady : this->GetCombatReadyAnim();
     }
 
     *anim = meleeAnim;
@@ -2769,7 +2770,7 @@ uint32_t CGUnit_C::ChooseAnimation(uint32_t mask, uint32_t* animFlags, int32_t* 
         return this->m_pendingAnimId;
     }
 
-    if (ChooseCasterReadyAnim(this, &anim, false)) {    // Not in the original: FlashWOW Retail animations
+    if (ChooseHunterReadyAnim(this, &anim) || ChooseCasterReadyAnim(this, &anim, false)) {    // Not in the original: FlashWOW Retail animations
         return anim;
     }
 
@@ -4311,6 +4312,16 @@ void CGUnit_C::UpdateHandItemAnimEffects(bool force) {
 
     AnimationDataRec* rec = g_animationDataDB.GetRecord(sequence);
 
+    // Not in the original: FlashWOW Retail animations. A hunter in her ranged stance holds her bow, gun or crossbow.
+    if (sequence == ANIM_READY_BOW || sequence == ANIM_READY_RIFLE || sequence == ANIM_READY_THROWN) {
+        uint32_t hunterReady;
+
+        if (ChooseHunterReadyAnim(this, &hunterReady) && hunterReady == sequence) {
+            this->SetSheatheState(2, 1, 0);
+            return;
+        }
+    }
+
     if (rec && (rec->m_weaponflags & 0x4) && !force) {
         this->SetSheatheState(0, 1, 0);
 
@@ -4535,6 +4546,7 @@ bool SkipTriggeredCastAnim(CGUnit_C* unit, const SpellRec* spell, const SpellVis
 // ordinary shot (AttackBow, AttackRifle) plays it when the target is more than 35 degrees above her (a dragon, a
 // ledge). Wands and thrown weapons have no upward version and keep their shot.
 static const float kUpwardShotSlope = 0.7002f;      // tan(35 degrees)
+static std::unordered_map<uint64_t, uint32_t> s_lastRangedShot;    // a player's last ranged shot, by guid
 
 uint32_t ChooseRangedShotAnim(const CGUnit_C* unit, uint32_t animId) {
     // Our AnimationData rows for the upward shots carry their own behavior, so the client sheathed the bow for them and
@@ -4560,6 +4572,10 @@ uint32_t ChooseRangedShotAnim(const CGUnit_C* unit, uint32_t animId) {
 
     if (!(unit->m_obj->m_type & TYPEMASK_PLAYER)) {
         return animId;
+    }
+
+    if (animId == ANIM_ATTACK_BOW || animId == ANIM_ATTACK_RIFLE) {
+        s_lastRangedShot[unit->m_obj->m_guid.m_guid] = OsGetAsyncTimeMs();
     }
 
     const CGUnitVirtualItem* item = unit->GetVirtualItem(2, false);
@@ -8960,6 +8976,59 @@ static bool ChooseCasterReadyAnim(CGUnit_C* unit, uint32_t* anim, bool attacking
 
     *anim = ready;
     return CasterStanceResult(unit, why, true);
+}
+
+// Not in the original: FlashWOW Retail animations. A hunter with Auto Shot on (her own: the target marked for ranged
+// combat or the shot repeating; others: ranged weapon drawn in combat) stands in her ranged weapon's ready stance,
+// ReadyBow, ReadyRifle (gun, crossbow) or ReadyThrown, bow in hand from the moment she marks the target. A melee swing
+// newer than her last shot (within 5 s) hands over to the melee stance until she shoots again.
+static bool ChooseHunterReadyAnim(CGUnit_C* unit, uint32_t* anim) {
+    if (unit->m_unit->m_unitFieldBytes0[1] != 3 || unit->m_mountModel || !(unit->m_obj->m_type & TYPEMASK_PLAYER)) {
+        return false;
+    }
+
+    const CGUnitVirtualItem* item = unit->GetVirtualItem(2, false);
+
+    if (!item || item->m_classID != 2) {
+        return false;
+    }
+
+    uint32_t ready;
+
+    switch (item->m_subclassID) {
+        case 2:  ready = ANIM_READY_BOW; break;
+        case 3:
+        case 18: ready = ANIM_READY_RIFLE; break;
+        case 16: ready = ANIM_READY_THROWN; break;
+        default: return false;
+    }
+
+    bool ranged = unit->m_obj->m_guid == ClntObjMgrGetActivePlayer()
+        ? (Spell_C_GetAutoRangedCombatSpell() || Spell_C_GetAutoRepeatingSpell())
+        : (unit->m_sheatheState == 2 && (unit->m_unit->m_unitFieldFlags & 0x80000));
+
+    if (!ranged) {
+        return false;
+    }
+
+    const uint64_t guid = unit->m_obj->m_guid.m_guid;
+    const uint32_t now = OsGetAsyncTimeMs();
+    auto swing = s_lastSwing.find(guid);
+    auto shot = s_lastRangedShot.find(guid);
+
+    if (swing != s_lastSwing.end() && now - swing->second <= 5000
+        && (shot == s_lastRangedShot.end() || static_cast<int32_t>(swing->second - shot->second) > 0)) {
+        return CasterStanceResult(unit, "hunter in melee", false);
+    }
+
+    CM2Model* model = unit->GetObjectModel();
+
+    if (!model || !model->IsLoaded(0, 0) || !model->HasSequence(ready)) {
+        return false;
+    }
+
+    *anim = ready;
+    return CasterStanceResult(unit, "hunter ranged stance", true);
 }
 
 static bool HoldForChargeEnd(CGUnit_C* unit, uint32_t* anim) {

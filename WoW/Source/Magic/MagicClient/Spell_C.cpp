@@ -231,6 +231,11 @@ void Spell_C_SetAutoRangedCombatSpell(int32_t spellId) {
     if (s_autoRangedCombatSpell != spellId) {
         s_autoRangedCombatSpell = spellId;
 
+        // Not in the original: FlashWOW Retail animations. A hunter takes or leaves her ranged stance at once.
+        if (CGUnit_C* player = ClntObjMgrGetActivePlayerObj()) {
+            player->UpdateBaseAnimation(false, -1);
+        }
+
         if (!s_autoRepeatingSpell) {
             if (spellId) {
                 FrameScript_SignalEvent(SCRIPT_EVENT_START_AUTOREPEAT_SPELL, nullptr);
@@ -2968,6 +2973,11 @@ void Spell_C_CancelAutoRepeat(bool a1) {
 
     s_autoRepeatingSpell = 0;
 
+    // Not in the original: FlashWOW Retail animations. A hunter leaves her ranged stance at once.
+    if (unit) {
+        unit->UpdateBaseAnimation(false, -1);
+    }
+
     if (s_autoRangedCombatSpell) {
         return;
     }
@@ -4901,6 +4911,11 @@ void Spell_C_SetAutoRepeatingSpell(int32_t spellId) {
     }
 
     s_autoRepeatingSpell = spellId;
+
+    // Not in the original: FlashWOW Retail animations. A hunter takes or leaves her ranged stance at once.
+    if (CGUnit_C* player = ClntObjMgrGetActivePlayerObj()) {
+        player->UpdateBaseAnimation(false, -1);
+    }
 
     if (!s_autoRangedCombatSpell) {
         if (spellId) {
