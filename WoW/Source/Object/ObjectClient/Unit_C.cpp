@@ -1713,6 +1713,10 @@ int32_t IsThrownWeaponAnim(uint32_t animId) {
 // VERIFY: c7728f19 auto
 // OFFSET: 0x0071DA60
 int32_t IsBowAnim(uint32_t animId) {
+    if (animId == 1778) {   // Not in the original: FlashWOW, Retail's upward bow shot (see ChooseRangedShotAnim)
+        return 1;
+    }
+
     AnimationDataRec* rec = g_animationDataDB.GetRecord(animId);
 
     if (rec) {
@@ -1729,6 +1733,10 @@ int32_t IsBowAnim(uint32_t animId) {
 // VERIFY: 2e108049 auto
 // OFFSET: 0x0071DAA0
 int32_t IsRifleAnim(uint32_t animId) {
+    if (animId == 1780) {   // Not in the original: FlashWOW, Retail's upward gun/crossbow shot (see ChooseRangedShotAnim)
+        return 1;
+    }
+
     AnimationDataRec* rec = g_animationDataDB.GetRecord(animId);
 
     if (rec) {
@@ -3939,6 +3947,10 @@ int32_t IsFishingAnim(uint32_t animId) {
 // VERIFY: 5b0ed408 manual
 // OFFSET: 0x0071D2E0
 int32_t IsRangedWeaponAnim(uint32_t animId) {
+    if (animId == 1778 || animId == 1780) {     // Not in the original: FlashWOW, Retail's upward shots: the weapon stays in hand
+        return 1;
+    }
+
     AnimationDataRec* rec = g_animationDataDB.GetRecord(animId);
     int32_t behavior = rec ? rec->m_behaviorID : ANIM_COUNT;
 
@@ -4549,23 +4561,6 @@ static const float kUpwardShotSlope = 0.7002f;      // tan(35 degrees)
 static std::unordered_map<uint64_t, uint32_t> s_lastRangedShot;    // a player's last ranged shot, by guid
 
 uint32_t ChooseRangedShotAnim(const CGUnit_C* unit, uint32_t animId) {
-    // Our AnimationData rows for the upward shots carry their own behavior, so the client sheathed the bow for them and
-    // fired from no bow. They are a bow shot (AttackBow) and a rifle shot (AttackRifle) to everything that asks: weapon
-    // in hand, arrow from the bow, bullet hidden.
-    static bool s_upwardBehaviors = false;
-
-    if (!s_upwardBehaviors) {
-        s_upwardBehaviors = true;
-
-        if (AnimationDataRec* rec = g_animationDataDB.GetRecord(1778)) {
-            rec->m_behaviorID = ANIM_ATTACK_BOW;
-        }
-
-        if (AnimationDataRec* rec = g_animationDataDB.GetRecord(1780)) {
-            rec->m_behaviorID = ANIM_ATTACK_RIFLE;
-        }
-    }
-
     if (animId != ANIM_ATTACK_BOW && animId != ANIM_ATTACK_RIFLE && animId != 1778 && animId != 1780) {
         return animId;
     }
@@ -20333,7 +20328,8 @@ void CGUnit_C::CreateMissile(const WOWGUID* target, PendingSpellCastData* data, 
 
     AnimationDataRec* animation = g_animationDataDB.GetRecord(this->GetCurrentTorsoAnimId());
 
-    if (animation && (animation->m_behaviorID == 49 || animation->m_behaviorID == 106 || animation->m_behaviorID == 110)) {
+    if ((animation && (animation->m_behaviorID == 49 || animation->m_behaviorID == 106 || animation->m_behaviorID == 110))
+        || this->GetCurrentTorsoAnimId() == 1780) {   // Not in the original: FlashWOW, Retail's upward gun shot hides its bullet too
         model->m_fadeAlpha = 0.0f;
     }
 
@@ -20593,7 +20589,8 @@ void CGUnit_C::CreateMissile(const SpellCastTargetPoint* point, PendingSpellCast
 
     AnimationDataRec* animation = g_animationDataDB.GetRecord(this->GetCurrentTorsoAnimId());
 
-    if (animation && (animation->m_behaviorID == 49 || animation->m_behaviorID == 106 || animation->m_behaviorID == 110)) {
+    if ((animation && (animation->m_behaviorID == 49 || animation->m_behaviorID == 106 || animation->m_behaviorID == 110))
+        || this->GetCurrentTorsoAnimId() == 1780) {   // Not in the original: FlashWOW, Retail's upward gun shot hides its bullet too
         model->m_fadeAlpha = 0.0f;
     }
 
@@ -20782,7 +20779,8 @@ void CGUnit_C::CreateMissile(const TSStackArray<SpellCastTargetPoint>* points, P
 
     AnimationDataRec* animation = g_animationDataDB.GetRecord(this->GetCurrentTorsoAnimId());
 
-    if (animation && (animation->m_behaviorID == 49 || animation->m_behaviorID == 106 || animation->m_behaviorID == 110)) {
+    if ((animation && (animation->m_behaviorID == 49 || animation->m_behaviorID == 106 || animation->m_behaviorID == 110))
+        || this->GetCurrentTorsoAnimId() == 1780) {   // Not in the original: FlashWOW, Retail's upward gun shot hides its bullet too
         model->m_fadeAlpha = 0.0f;
     }
 
@@ -22971,6 +22969,10 @@ void CGUnit_C::FootstepAnimEventHit(const C3Vector* position, int32_t left) {
 // VERIFY: 9e04967c manual
 // OFFSET: 0x0071DCC0
 int32_t IsSpecialIdleAnim(uint32_t animId) {
+    if (animId == 1778 || animId == 1780) {     // Not in the original: FlashWOW, Retail's upward shots count as shots
+        return 1;
+    }
+
     if (IsSpellCastAnim(animId)) {
         return 1;
     }
