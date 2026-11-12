@@ -1355,7 +1355,11 @@ void CGWorldFrame::SetScreenEffect(int32_t effect) {
         }
 
         case 3:
-            if (g_theGxDevicePtr->DeviceApi()) {
+            // FlashWOW: the swirling fog seeds its fog texture with a fixed-function draw tinted by the material
+            // diffuse color (the screen effect's color, black for Eye of Acherus). The Vulkan backend doesn't apply
+            // that color yet, so the fog came out pure white and covered the world (Eye of Acherus, Gift of
+            // Tharon'ja). Skip it on Vulkan the way the original skips it on OpenGL, until the effects stage.
+            if (g_theGxDevicePtr->DeviceApi() && g_theGxDevicePtr->DeviceApi() != GxApi_Vulkan) {
                 DayNight::ClearOverrideFog();
                 PassFogSeed::DeviceRestoredCallback();
                 CGWorldFrame::ffxEffectSwirlingFog->SetParameters(3, rec->m_param);
