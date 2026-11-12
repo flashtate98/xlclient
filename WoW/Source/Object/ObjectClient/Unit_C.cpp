@@ -4603,7 +4603,7 @@ uint32_t ChooseRangedShotAnim(const CGUnit_C* unit, uint32_t animId) {
         s_lastRangedShot[unit->m_obj->m_guid.m_guid] = OsGetAsyncTimeMs();
     }
 
-    const CGUnitVirtualItem* item = unit->GetVirtualItem(2, false);
+    const CGUnitVirtualItem* item = unit->GetVirtualItem(VIRTUAL_MONSTER_SLOT_RANGED, false);
 
     if (!item || item->m_classID != 2) {
         return animId;
@@ -4801,7 +4801,7 @@ static const uint32_t s_offHandAnims[][2] = {
 };
 
 static bool IsDualWielding(const CGUnit_C* unit) {
-    const CGUnitVirtualItem* offHand = unit->GetVirtualItem(1, false);
+    const CGUnitVirtualItem* offHand = unit->GetVirtualItem(VIRTUAL_MONSTER_SLOT_OFFHAND, false);
     return offHand && offHand->m_classID == 2;
 }
 
@@ -9207,7 +9207,7 @@ static bool ChooseHunterReadyAnim(CGUnit_C* unit, uint32_t* anim) {
         return false;
     }
 
-    const CGUnitVirtualItem* item = unit->GetVirtualItem(2, false);
+    const CGUnitVirtualItem* item = unit->GetVirtualItem(VIRTUAL_MONSTER_SLOT_RANGED, false);
 
     if (!item || item->m_classID != 2) {
         return false;

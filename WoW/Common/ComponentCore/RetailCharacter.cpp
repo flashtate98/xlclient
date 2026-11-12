@@ -2100,7 +2100,7 @@ void RetailCharacterBody(CCharacterComponent* character) {
         item.section = layer.section;
         item.layer = layer.layer;
         item.displayId = layer.displayId;
-        void* handle = layer.texture;
+        HTEXTURECACHE handle = static_cast<HTEXTURECACHE>(layer.texture);
         // Only dirty sections reload their item textures; the others were released by the last pass.
         const bool reload = !handle;
         // An item's section texture depends on the display, section and the wearer's race and sex
