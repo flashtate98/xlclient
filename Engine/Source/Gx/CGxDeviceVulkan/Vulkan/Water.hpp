@@ -157,6 +157,11 @@ namespace gxvk::vk::water
 
     const char* Status();
 
+    /// The scene copy's depth image (r: the view's w, g: the raw depth), in GENERAL, as the frame's
+    /// copy (or the last frame with one) left it; null before the first copy. For the present pass's
+    /// debug views.
+    VkImageView DepthCopyView();
+
     /// After the device is idle.
     void Shutdown();
 }

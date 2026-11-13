@@ -838,6 +838,17 @@ void main()
         // The surface movement's easing from the depth byte: black still (the shore), white moving fully.
         fogged = vec3(vEase);
     }
+    else if (debugView == 16)
+    {
+        // The scene copy against this surface: green where it lies behind (right), red where it holds the
+        // same depth (the water itself in the copy), blue in front, magenta not a number.
+        float copied = textureLod(sceneW, here, 0.0).r;
+        float gap = copied - vView.w;
+        fogged = isnan(copied) ? vec3(1.0, 0.0, 1.0)
+               : gap > 0.05 ? vec3(0.0, 1.0, 0.0)
+               : gap < -0.05 ? vec3(0.0, 0.0, 1.0)
+                             : vec3(1.0, 0.0, 0.0);
+    }
     else if (debugView == 15)
     {
         // The mirror alone where this water takes it (magenta: another water, or no mirror this frame).

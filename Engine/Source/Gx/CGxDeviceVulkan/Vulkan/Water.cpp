@@ -30,7 +30,7 @@ namespace
 
     constexpr uint32_t kSlots = frame::kFramesInFlight;
     constexpr VkFormat kColourFormat = VK_FORMAT_R8G8B8A8_UNORM;
-    constexpr VkFormat kDepthFormat  = VK_FORMAT_R32_SFLOAT;
+    constexpr VkFormat kDepthFormat  = VK_FORMAT_R32G32_SFLOAT;   // r: the view's w; g: the raw depth (the debug views)
 
     /// Water.frag's WaterScene block (std140): the viewport on the target (x, y, width, height), the
     /// target's size (width, height, 1 / width, 1 / height), the wave cascades' sizes (yd; w 1 when the
@@ -1195,6 +1195,8 @@ namespace gxvk::vk::water
     }
 
     const char* Status() { return s.status; }
+
+    VkImageView DepthCopyView() { return s.ready && s.lastUsed != 0 ? s.depth.view : VK_NULL_HANDLE; }
 
     VkDescriptorSet MoveSet(uint32_t slotIndex, uint64_t serial, float& time, float look[4])
     {

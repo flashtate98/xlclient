@@ -9,9 +9,13 @@
 
 #include "Engine/Source/Gx/CGxDeviceVulkan/Shaders/PresentSpirv.inc"
 
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Water.hpp"
 #include "SXC/Ui/UiVulkan.h"  // SXC: the debug overlay
 
 #include <cstring>
+
+// SXC: the Water panel's full-screen depth view (SXC/Water/Water.h).
+namespace SXC::Water { int DepthView(float* range); }
 
 namespace
 {
@@ -39,6 +43,8 @@ namespace
         VkDescriptorSet set = VK_NULL_HANDLE;
         memory::Buffer  gamma;
         uint32_t        gammaGen = UINT32_MAX;   ///< the ramp generation the buffer holds
+        VkImageView     depthCopy = VK_NULL_HANDLE;   ///< SXC: binding 2 as last written (the scene when no depth view)
+        float           depthParams[2] = { -1.0f, 0.0f };   ///< SXC: the depth view and its range as last written
     };
 
     struct State
@@ -227,24 +233,48 @@ namespace
         s.format   = VK_FORMAT_UNDEFINED;
     }
 
-    /// The sets' scene binding: every slot samples the one scene image.
+    /// The sets' scene binding: every slot samples the one scene image. SXC: binding 2 (the depth
+    /// views' copy) takes the scene too until a depth view asks for the copy: a binding is always valid.
     void WriteSceneBinding()
     {
         VkDescriptorImageInfo image = {};
         image.sampler     = s.sampler;
         image.imageView   = s.scene;
         image.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        VkWriteDescriptorSet writes[kSlots] = {};
-        for (uint32_t i = 0; i < kSlots; ++i)
+        VkWriteDescriptorSet writes[kSlots * 2] = {};
+        for (uint32_t i = 0; i < kSlots * 2; ++i)
         {
             writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[i].dstSet          = s.slots[i].set;
-            writes[i].dstBinding      = 0;
+            writes[i].dstSet          = s.slots[i % kSlots].set;
+            writes[i].dstBinding      = i < kSlots ? 0 : 2;
             writes[i].descriptorCount = 1;
             writes[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             writes[i].pImageInfo      = &image;
         }
-        s.dapi->UpdateDescriptorSets(s.device, kSlots, writes, 0, nullptr);
+        s.dapi->UpdateDescriptorSets(s.device, kSlots * 2, writes, 0, nullptr);
+        for (Slot& slot : s.slots) slot.depthCopy = s.scene;
+    }
+
+    /// SXC: a slot's binding 2 onto `view` (the water's copy, GENERAL; rewritten every frame, as the copy
+    /// is remade with the target's size) or back onto the scene. The slot's previous frame has
+    /// completed, so its set may be written.
+    void WriteDepthBinding(Slot& slot, VkImageView view)
+    {
+        const VkImageView want = view != VK_NULL_HANDLE ? view : s.scene;
+        if (want == VK_NULL_HANDLE || (view == VK_NULL_HANDLE && want == slot.depthCopy)) return;
+        VkDescriptorImageInfo image = {};
+        image.sampler     = s.sampler;
+        image.imageView   = want;
+        image.imageLayout = view != VK_NULL_HANDLE ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkWriteDescriptorSet write = {};
+        write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet          = slot.set;
+        write.dstBinding      = 2;
+        write.descriptorCount = 1;
+        write.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.pImageInfo      = &image;
+        s.dapi->UpdateDescriptorSets(s.device, 1, &write, 0, nullptr);
+        slot.depthCopy = want;
     }
 
     bool Apply(VkFormat format, VkExtent2D extent, const VkImageView* views, uint32_t count, VkImageView scene)
@@ -304,7 +334,7 @@ namespace gxvk::vk::present
             return false;
         }
 
-        VkDescriptorSetLayoutBinding bindings[2] = {};
+        VkDescriptorSetLayoutBinding bindings[3] = {};
         bindings[0].binding         = 0;
         bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[0].descriptorCount = 1;
@@ -313,9 +343,11 @@ namespace gxvk::vk::present
         bindings[1].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         bindings[1].descriptorCount = 1;
         bindings[1].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings[2]                 = bindings[0];   // SXC: the water's depth copy (the depth views)
+        bindings[2].binding         = 2;
         VkDescriptorSetLayoutCreateInfo setLayout = {};
         setLayout.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        setLayout.bindingCount = 2;
+        setLayout.bindingCount = 3;
         setLayout.pBindings    = bindings;
         VkResult r = d.CreateDescriptorSetLayout(s.device, &setLayout, nullptr, &s.setLayout);
         if (r == VK_SUCCESS)
@@ -353,7 +385,7 @@ namespace gxvk::vk::present
 
         VkDescriptorPoolSize sizes[2] = {};
         sizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[0].descriptorCount = kSlots;
+        sizes[0].descriptorCount = kSlots * 2;
         sizes[1].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         sizes[1].descriptorCount = kSlots;
         VkDescriptorPoolCreateInfo pool = {};
@@ -523,16 +555,25 @@ namespace gxvk::vk::present
 
         // The slot's gamma block, rewritten when the ramp changed since this slot last presented;
         // the slot's previous frame has completed (the frame waited its fence), so the write is safe.
-        if (slot.gammaGen != s.gammaGen)
+        // SXC: the Water panel's depth view, with the copy bound while one is on.
+        float      range     = 0.0f;
+        const int  depthView = SXC::Water::DepthView(&range);
+        const VkImageView copy = depthView != 0 ? gxvk::vk::water::DepthCopyView() : VK_NULL_HANDLE;
+        const float mode = copy != VK_NULL_HANDLE ? static_cast<float>(depthView) : 0.0f;
+        WriteDepthBinding(slot, copy);
+
+        if (slot.gammaGen != s.gammaGen || slot.depthParams[0] != mode || slot.depthParams[1] != range)
         {
             float* dst = static_cast<float*>(slot.gamma.block.mapped);
             std::memcpy(dst, s.lut, kLutEntries * 4 * sizeof(float));
             dst[kLutEntries * 4 + 0] = s.applies ? 1.0f : 0.0f;
-            dst[kLutEntries * 4 + 1] = 0.0f;
-            dst[kLutEntries * 4 + 2] = 0.0f;
+            dst[kLutEntries * 4 + 1] = mode;
+            dst[kLutEntries * 4 + 2] = range;
             dst[kLutEntries * 4 + 3] = 0.0f;
             memory::FlushHost(slot.gamma.block);
             slot.gammaGen = s.gammaGen;
+            slot.depthParams[0] = mode;
+            slot.depthParams[1] = range;
         }
 
         VkRenderPassBeginInfo begin = {};

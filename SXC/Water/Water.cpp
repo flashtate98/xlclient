@@ -73,6 +73,8 @@ namespace {
         float windSpeed = 6.0f;       // yd / s
         float windAngle = 0.0f;       // degrees, 0 = +x
         int debugView = 0;
+        int depthView = 0;             // full screen at present: 0 off, 1 the depth buffer, 2 the copy's w
+        float depthRange = 500.0f;     // yd: the copy's w shown white
         int causticDebug = 0;          // the terrain's caustics debug view
         int writeScope = 0;           // SXC::Water::ScopeKind: where "Write" puts the row
         // The shore (one setting for every water for now).
@@ -321,6 +323,14 @@ namespace SXC::Water {
 
     bool Active() {
         return s_available && OurShader().Get();
+    }
+
+    int DepthView(float* range) {
+        if (range) {
+            *range = s_panel.depthRange;
+        }
+
+        return s_panel.depthView;
     }
 
     const SXC::Water::Look& FillWaves(SXC::Water::Waves& waves, const C3Vector& cameraPos);
@@ -894,8 +904,20 @@ namespace SXC::Water {
                                               "Shore field (blue water, red land, green depth)", "Shore waves (red crests, white foam)",
                                               "River flow (colour: speed, blue to red; dots drift with it)",
                                               "Sky fallback (the dome mirrored; magenta: none)",
-                                              "Mirror alone (magenta: not this water)" };
+                                              "Mirror alone (magenta: not this water)",
+                                              "Scene copy against the surface (green behind, red same depth, blue in front, magenta NaN)" };
         ImGui::Combo("Debug view", &s_panel.debugView, kViews, IM_ARRAYSIZE(kViews));
+
+        // The depth over the whole screen, as the scene's copy took it (the last frame with water in view).
+        static const char* const kDepthViews[] = { "Off", "The depth buffer (log scale: black near, white far)",
+                                                   "The copy as distance (grey to the range, blue nothing drawn)" };
+        ImGui::Combo("Full-screen depth", &s_panel.depthView, kDepthViews, IM_ARRAYSIZE(kDepthViews));
+        ImGui::SetItemTooltip("Drawn over the whole screen at present, from the scene copy the water reads: the depth buffer as it is, "
+                              "or turned into distance. Magenta: not a number. Only frames with our water in view refresh it.");
+
+        if (s_panel.depthView == 2) {
+            ImGui::SliderFloat("Depth range (yd)", &s_panel.depthRange, 10.0f, 2000.0f, "%.0f");
+        }
         ImGui::Checkbox("Model cells", &s_panel.modelCells);
         ImGui::SetItemTooltip("Markers on the water under models (WMOs, doodads): why the shore field takes a cell as a model standing in the water "
                               "(it foams like a shore) or not. Hover one for the rays' hits. While this panel is open.");

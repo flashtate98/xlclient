@@ -1,7 +1,8 @@
 // SXC: the scene behind our water (Vulkan/Water.cpp): at the frame's first water draw, the target's colour
 // and depth as the opaque world left them, copied into two images the water's pixels read (Water.frag's
 // set 2): the colour as it is, the depth as the view's w (the clip w Water.vert gives its own points), so
-// the two compare directly. Pixels with nothing drawn (the far plane) get a very large w.
+// the two compare directly. Pixels with nothing drawn (the far plane) get a very large w. The raw depth
+// goes beside it (g), for the debug views that check the conversion and the buffer itself.
 #version 450
 
 layout(local_size_x = 8, local_size_y = 8) in;
@@ -9,7 +10,7 @@ layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = 0, binding = 0) uniform sampler2D targetColour;
 layout(set = 0, binding = 1) uniform sampler2D targetDepth;
 layout(set = 0, binding = 2, rgba8) uniform writeonly image2D outColour;
-layout(set = 0, binding = 3, r32f) uniform writeonly image2D outDepth;
+layout(set = 0, binding = 3, rg32f) uniform writeonly image2D outDepth;
 
 // depthRange: the viewport's min and max depth; proj: the native projection's P22, P32, P23, P33 (row
 // vectors: clip.z = z P22 + P32, clip.w = z P23 + P33); size: the target in pixels.
@@ -41,5 +42,5 @@ void main()
     }
 
     imageStore(outColour, p, vec4(colour.rgb, 1.0));
-    imageStore(outDepth, p, vec4(w));
+    imageStore(outDepth, p, vec4(w, d, 0.0, 0.0));
 }

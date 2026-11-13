@@ -104,6 +104,10 @@ namespace SXC::Water {
     // The setting and the device.
     bool Active();
 
+    // The Water panel's full-screen depth view for the present pass (0 off, 1 the depth buffer, 2 the
+    // copy's distance) and the distance shown white (yd).
+    int DepthView(float* range);
+
     // Liquid::CRenderer::Flush, for each instance: draws it as ours when it is a stock water material
     // and we're active. False: the instance's own material draws it.
     bool Draw(Liquid::CInstance* instance, const C3Vector& cameraPos);
