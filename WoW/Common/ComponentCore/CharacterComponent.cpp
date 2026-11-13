@@ -4,6 +4,8 @@
 #include <cstring>
 #include <emmintrin.h>
 #include <new>
+#include <string>
+#include <unordered_set>
 #include <typeinfo>
 #if defined(_MSC_VER)
 #include <malloc.h>
@@ -4694,6 +4696,12 @@ bool CCharacterComponent::SetPrevHairStyle(COMPONENT_CONTEXT context) {
     return true;
 }
 
+// SXC: a texture the pastes below can't place, logged once per file (only the component thread pastes).
+static bool FirstMisfit(HTEXTURECACHE texture) {
+    static std::unordered_set<std::string> s_logged;
+    return s_logged.insert(texture->m_fileName).second;
+}
+
 // VERIFY: f3be180c auto
 // OFFSET: 0x004F07D0
 void CCharacterComponent::PasteFromSkin(COMPONENT_SECTIONS section, HTEXTURECACHE texture, MipBits* dstMips) {
@@ -4727,8 +4735,11 @@ void CCharacterComponent::PasteFromSkin(COMPONENT_SECTIONS section, HTEXTURECACH
     }
 
     if (width != s_textureSize || mipLevel >= info.m_mipCount) {
-        SXC::Log("component: skin %ux%u (%u mips) doesn't fit the %u texture, skipped", static_cast<unsigned>(info.m_width), static_cast<unsigned>(info.m_height),
-                 static_cast<unsigned>(info.m_mipCount), static_cast<unsigned>(s_textureSize));
+        if (FirstMisfit(texture)) {
+            SXC::Log("component: skin %s is %ux%u (%u mips), doesn't fit the %u texture, skipped", texture->m_fileName, static_cast<unsigned>(info.m_width),
+                     static_cast<unsigned>(info.m_height), static_cast<unsigned>(info.m_mipCount), static_cast<unsigned>(s_textureSize));
+        }
+
         return;
     }
 
@@ -4772,8 +4783,12 @@ void CCharacterComponent::PasteToSection(COMPONENT_SECTIONS section, HTEXTURECAC
     srcPos.y = 0;
 
     if (width != sectionWidth || mipLevel >= info.m_mipCount) {
-        SXC::Log("component: layer %ux%u (%u mips) doesn't fit section %d (%d wide), skipped", static_cast<unsigned>(info.m_width), static_cast<unsigned>(info.m_height),
-                 static_cast<unsigned>(info.m_mipCount), static_cast<int>(section), static_cast<int>(s_sectionInfo[section].m_size.x));
+        if (FirstMisfit(texture)) {
+            SXC::Log("component: layer %s is %ux%u (%u mips), doesn't fit section %d (%dx%d), skipped", texture->m_fileName, static_cast<unsigned>(info.m_width),
+                     static_cast<unsigned>(info.m_height), static_cast<unsigned>(info.m_mipCount), static_cast<int>(section),
+                     static_cast<int>(s_sectionInfo[section].m_size.x), static_cast<int>(s_sectionInfo[section].m_size.y));
+        }
+
         return;
     }
 
