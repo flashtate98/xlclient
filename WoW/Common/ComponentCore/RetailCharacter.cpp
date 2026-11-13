@@ -644,6 +644,18 @@ std::shared_ptr<Look> RequestLook(uint32_t retailRace, uint32_t sex, uint32_t ch
 std::unordered_map<const CCharacterComponent*, std::shared_ptr<Look>> s_shownLooks;
 std::unordered_map<CCharacterComponent*, std::string> s_waitingLooks;
 
+// FlashWOW: puts the shown look's hair, eye, horn and other single-layer textures back on the body. The geometry
+// pass sets them, but a stock section pass that runs after it (the body sheet finishing, a choice changing on the
+// glue screens) puts the 3.3.5 CharSections picks back, white on a Retail body. Called before a character is
+// revealed and before its collections take the body's textures by type (horns and the like matching the skin).
+void ApplyShownLookTextures(CCharacterComponent* character) {
+    CM2Model* model = character ? character->m_data.m_model : nullptr;
+    const auto shown = s_shownLooks.find(character);
+    if (!model || shown == s_shownLooks.end() || !shown->second || shown->second->placeholder) return;
+    for (const auto& texture : shown->second->textures)
+        if (texture.second && texture.second->texture) model->ReplaceTexture(texture.first, texture.second->texture);
+}
+
 // A character stops waiting for a look (it wants another, or none): the look's job is dropped if it has not
 // started and nobody else waits for it. Right away, not at the next pump: clicks that pile up during a slow
 // frame are all handled in one frame, and each would otherwise be built.
@@ -708,6 +720,7 @@ void HideCharacter(CCharacterComponent* character, uint32_t retailRace, uint32_t
 void RevealCharacter(CCharacterComponent* character, const char* why) {
     const auto hidden = s_hiddenCharacters.find(character);
     if (hidden == s_hiddenCharacters.end()) return;
+    ApplyShownLookTextures(character);
     if (CM2Model* model = character->m_data.m_model) model->m_baseAlpha = 1.0f;
     const double waited = Since(hidden->second.since);
     ++s_shownCount;
@@ -1919,6 +1932,7 @@ void FinishBody(BodyJob& job) {
         s_bodyWaiting.erase(character);
         if (texture && character->m_data.m_model) {
             character->m_data.m_model->ReplaceTexture(1, texture);
+            ApplyShownLookTextures(character);
             ApplyCollections(character->m_data.m_model);
         }
         RevealCharacter(character, texture ? "look ready" : "body sheet failed");
@@ -2092,6 +2106,7 @@ void RetailCharacterBody(CCharacterComponent* character) {
     if (cached != s_bodies.end()) {
         StopWaitingBody(character);
         character->m_data.m_model->ReplaceTexture(1, cached->second);
+        ApplyShownLookTextures(character);
         ApplyCollections(character->m_data.m_model);
         RevealCharacter(character, "look ready");
         return;
