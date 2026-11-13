@@ -4864,7 +4864,12 @@ void CCharacterComponent::PasteFromSkin(COMPONENT_SECTIONS section, HTEXTURECACH
     // past its mip's rows, which are laid out for a square skin; so did one whose mips stop before the needed level.
     // Such a skin is not pasted. On a Retail body the stock skin is not what is drawn anyway (RetailCharacterBody).
     // SXC: nor is one whose halving never lands on the section's size.
-    if (info.m_height != info.m_width || width != s_textureSize || (info.m_mipCount && mipLevel >= info.m_mipCount)) {
+    // The Retail-sized skins are expected (every Retail body has one) and skipped quietly; only the others are logged.
+    if (info.m_height != info.m_width || (info.m_mipCount && mipLevel >= info.m_mipCount)) {
+        return;
+    }
+
+    if (width != s_textureSize || mipLevel >= info.m_mipCount) {
         SXC::Log("component: skin %ux%u (%u mips) doesn't fit the %u texture, skipped", static_cast<unsigned>(info.m_width), static_cast<unsigned>(info.m_height),
                  static_cast<unsigned>(info.m_mipCount), static_cast<unsigned>(s_textureSize));
         return;
