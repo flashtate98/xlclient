@@ -377,7 +377,12 @@ bool CGxDeviceVulkan::SxcGrassDraw(CGxTex* texture, const SXC::Grass::Run* runs,
 
     d.vertexRecord = instanced;
     d.lightsSurface = gxvk::vk::lights::kSurfaceOutdoor;   // step 7c: grass grows outside (our lights' inside / outside test)
-    d.vertexRows = instanced->vconst == gxvk::vk::pipelines::kVertexRowsLarge ? gxvk::vk::pipelines::kVertexRowsLarge : gxvk::vk::pipelines::kVertexRowsSmall;
+    // FlashWOW: the instanced variant is a 256-row module (GRASS_VCONST); with Retail models the large slice is 1024
+    // rows and a 256-row module reads its front. Matching 256 against 1024 fell back to the 64-row slice, so the
+    // motion's rows from c64 on were never uploaded and the plants flashed and stretched. The rows-used limit
+    // IDrawState took from the stock record (64) would cut them off the same way.
+    d.vertexRows = instanced->vconst > gxvk::vk::pipelines::kVertexRowsSmall ? gxvk::vk::pipelines::kVertexRowsLarge : gxvk::vk::pipelines::kVertexRowsSmall;
+    d.vertexRowsUsed = 0;
     static_assert(sizeof(SXC::Grass::Run) == sizeof(gxvk::vk::pipelines::Run), "SXC::Grass::Run is the pipelines' Run");
     d.runs = reinterpret_cast<const gxvk::vk::pipelines::Run*>(runs);
     d.runCount = count;
