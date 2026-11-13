@@ -718,6 +718,20 @@ void RevealCharacter(CCharacterComponent* character, const char* why) {
         static_cast<unsigned>(hidden->second.sex), waited, why, s_hiddenCharacters.size() - 1, s_shownCount,
         s_shownTotal / s_shownCount, s_shownWorst);
     s_hiddenCharacters.erase(hidden);
+
+    // FlashWOW: what each replaceable texture slot holds as the character appears (white beards and eyes, green
+    // bodies on the glue screens): its name, and whether it is still loading.
+    if (CM2Model* model = character->m_data.m_model; model && model->m_shared && model->m_shared->m_data && model->m_textures) {
+        std::string slots;
+        const auto& types = model->m_shared->m_data->m_textures;
+        for (uint32_t i = 0; i < types.m_count; ++i) {
+            if (!types[i].m_type) continue;
+            CTexture* texture = model->m_textures[i];
+            slots += " " + std::to_string(types[i].m_type) + "(" + (texture ? texture->m_filename : "none") +
+                (texture && !TextureIsLoaded(texture) ? ", loading" : "") + ")";
+        }
+        Blizzard::Log::Printf(1, kLog, "Shown with textures %s:%s\n", model->m_shared->m_fileName, slots.c_str());
+    }
 }
 
 // Choices of the options the 3.3.5 selectors do not drive, per character component, by option ID:
