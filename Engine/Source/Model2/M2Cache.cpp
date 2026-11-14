@@ -321,8 +321,40 @@ CM2Shared* CM2Cache::CreateShared(const char* name, uint32_t flags) {
     SFileImpl* file;
 
     if (!SFile::OpenEx(nullptr, path, (flags >> 2) & 1, &file)) {
-        M2Log("Model2: File not found: %s\n", path);
-        return nullptr;
+        // FlashWOW: the High Elf NPC rows of CreatureModelData name Character\HighElf\Male\BloodElfMale.mdx,
+        // a file that is in no archive. They only ever drew because the cache above is keyed by the bare
+        // file name: with a Blood Elf of that sex already loaded they got its model, without one the
+        // error cube (Dalaran's Silver Covenant, a different NPC each login). A character model that is
+        // not found is now looked for in the folder its own name gives: Character\BloodElf\Male\.
+        char moved[260];
+        moved[0] = '\0';
+
+        if (!fullPath && !strncmp(path, "character\\", 10)) {
+            const char* fileName = key;                                  // "bloodelfmale.m2"
+            const char* sexEnd = fileName > path ? fileName - 1 : path;  // the separator before it
+            const char* sex = sexEnd;
+
+            while (sex > path && sex[-1] != '\\' && sex[-1] != '/') {
+                sex--;
+            }
+
+            const size_t sexLength = sexEnd - sex;                       // "male"
+            const char* dot = strrchr(fileName, '.');
+            const size_t stemLength = dot ? dot - fileName : strlen(fileName);
+
+            if (sexLength && stemLength > sexLength && !strncmp(fileName + stemLength - sexLength, sex, sexLength)) {
+                SStrPrintf(moved, sizeof(moved), "character\\%.*s\\%.*s\\%s", static_cast<int>(stemLength - sexLength), fileName,
+                    static_cast<int>(sexLength), sex, fileName);
+            }
+        }
+
+        if (!moved[0] || !strcmp(moved, path) || !SFile::OpenEx(nullptr, moved, (flags >> 2) & 1, &file)) {
+            M2Log("Model2: File not found: %s\n", path);
+            return nullptr;
+        }
+
+        M2Log("Model2: %s not found; loading %s for it\n", path, moved);
+        strcpy(path, moved);    // its .skin and .anim files are found from this name; the hash is by file name
     }
 
     CM2Shared* shared = new (SMemAlloc(sizeof(CM2Shared), __FILE__, __LINE__, 0)) CM2Shared(this);
