@@ -24,6 +24,9 @@
 #include "WoW/Source/Object/ObjectClient/Unit_C.h"
 #include "WoW/Source/Object/Types.h"
 #include "WoW/Source/ObjectMgrClient/ObjectMgrClient.h"
+#include "WoW/Source/Object/WGUID.h"
+
+void UpdateModelForUI(const WOWGUID& guid, uint32_t flags);    // GameUI.h
 #include <deque>
 #include <list>
 #include <cstdio>
@@ -717,6 +720,11 @@ void HideCharacter(CCharacterComponent* character, uint32_t retailRace, uint32_t
     if (!s_hiddenCharacters.count(character)) s_hiddenCharacters[character] = {Clock::now(), retailRace, sex};
 }
 
+// FlashWOW: a UI model of a unit (a 3D portrait, the inspect or dressing frame) is a copy of the unit's
+// model taken when the frame asks: taken before the look arrived, it kept white geosets and the wrong
+// textures for good. The unit's frames are told to take a new copy when its look or body sheet lands.
+void RefreshUiModels(const CCharacterComponent* character);
+
 void RevealCharacter(CCharacterComponent* character, const char* why) {
     const auto hidden = s_hiddenCharacters.find(character);
     if (hidden == s_hiddenCharacters.end()) return;
@@ -745,6 +753,8 @@ void RevealCharacter(CCharacterComponent* character, const char* why) {
         }
         Blizzard::Log::Printf(1, kLog, "Shown with textures %s:%s\n", model->m_shared->m_fileName, slots.c_str());
     }
+
+    RefreshUiModels(character);
 }
 
 // Choices of the options the 3.3.5 selectors do not drive, per character component, by option ID:
@@ -757,6 +767,14 @@ std::unordered_map<const CCharacterComponent*, std::map<uint32_t, uint32_t>> s_e
 std::unordered_map<uint64_t, std::map<uint32_t, uint32_t>> s_storedChoices;
 std::unordered_map<const CCharacterComponent*, uint64_t> s_boundGuids;
 std::set<uint64_t> s_askedGuids;
+
+void RefreshUiModels(const CCharacterComponent* character) {
+    const auto bound = s_boundGuids.find(character);
+    if (bound == s_boundGuids.end() || !ClntObjMgrGetActivePlayer()) return;    // in the world only
+    WOWGUID guid;
+    guid.m_guid = bound->second;
+    UpdateModelForUI(guid, 3);    // UNIT_PORTRAIT_UPDATE and UNIT_MODEL_CHANGED
+}
 
 // The choices a component takes for options the 3.3.5 selectors do not drive: the create screen's,
 // else those stored for the character it is bound to; null when there are none.
@@ -1934,6 +1952,7 @@ void FinishBody(BodyJob& job) {
             character->m_data.m_model->ReplaceTexture(1, texture);
             ApplyShownLookTextures(character);
             ApplyCollections(character->m_data.m_model);
+            if (!s_hiddenCharacters.count(character)) RefreshUiModels(character);   // else the reveal below does
         }
         RevealCharacter(character, texture ? "look ready" : "body sheet failed");
     }
