@@ -985,6 +985,39 @@ void CCharacterComponent::PasteCrappyGreen(MipBits* dstMips, C2iVector& dstPos, 
     }
 }
 
+// FlashWOW: the end of a mip's data in the cached file. A BLP's smallest mips can store less alpha
+// than a whole byte per row needs (Mail_Blood_01Green_Chest_TL_F.blp's 1x1 mip has no 4-bit alpha byte
+// at all), and the pastes below read it anyway: one byte past the end of the file (page heap,
+// 2026-11-14). Alpha past this end reads as 0 (the pixel keeps what is under it). Some files store
+// less color too: a paste stops a row at the end of the data (PastePastEnd logs the file).
+static const uint8_t* MipDataEnd(HTEXTURECACHE texture, uint32_t mip) {
+    const CACHEENTRY* entry = texture;
+    const uint8_t* base = reinterpret_cast<const uint8_t*>(entry->m_data);
+    const uint8_t* fileEnd = base + entry->m_size;
+    const uint32_t size = entry->m_data->m_mipSizes[mip];
+    const uint8_t* end = base + entry->m_data->m_mipOffsets[mip] + size;
+    return size && end < fileEnd ? end : fileEnd;   // a size the file left at 0: its end
+}
+
+static inline uint8_t AlphaAt(const uint8_t* alpha, uint32_t index, const uint8_t* limit) {
+    return alpha + index < limit ? alpha[index] : 0;
+}
+
+static bool PastePastEnd(HTEXTURECACHE texture, uint32_t mip, const uint8_t* at, const uint8_t* limit) {
+    if (at < limit) {
+        return false;
+    }
+
+    static int32_t s_logged = 0;
+
+    if (s_logged < 16) {
+        s_logged++;
+        DebugLog("Paste read past the data of mip %u of %s\n", mip, texture->m_fileName);
+    }
+
+    return true;
+}
+
 // VERIFY: 6c996c19 manual
 // OFFSET: 0x004E83A0
 void CCharacterComponent::PasteOpaque(HTEXTURECACHE texture, const BlpPalPixel* pal, MipBits* dstMips, C2iVector& dstPos, uint32_t dstStride, C2iVector& srcPos, C2iVector& srcSize, TCTEXTUREINFO& srcInfo, uint32_t srcMipLevel, int32_t dstMipOffset) {
@@ -999,11 +1032,16 @@ void CCharacterComponent::PasteOpaque(HTEXTURECACHE texture, const BlpPalPixel* 
     for (uint32_t mip = srcMipLevel; mip < srcInfo.m_mipCount; mip++) {
         const uint8_t* src = static_cast<const uint8_t*>(TextureCacheGetMip(texture, mip)) + srcPos.x + srcWidth * srcPos.y;
         uint8_t* dst = reinterpret_cast<uint8_t*>(dstMips->m_mip[mip + dstMipOffset]) + dstStride * dstPos.y + 4 * dstPos.x;
+        const uint8_t* limit = MipDataEnd(texture, mip);
 
         for (const uint8_t* end = src + srcWidth * height; src < end; src += srcWidth, dst += dstStride) {
             uint32_t* pixel = reinterpret_cast<uint32_t*>(dst);
 
             for (uint32_t x = 0; x < width; x++) {
+                if (PastePastEnd(texture, mip, src + x, limit)) {
+                    break;
+                }
+
                 const BlpPalPixel& color = pal[src[x]];
                 pixel[x] = color.m_b | ((color.m_g | ((color.m_r | 0xFFFFFF00) << 8)) << 8);
             }
@@ -1018,23 +1056,6 @@ void CCharacterComponent::PasteOpaque(HTEXTURECACHE texture, const BlpPalPixel* 
         srcWidth >>= 1;
         dstStride >>= 1;
     }
-}
-
-// FlashWOW: the end of a mip's data in the cached file. A BLP's smallest mips can store less alpha
-// than a whole byte per row needs (Mail_Blood_01Green_Chest_TL_F.blp's 1x1 mip has no 4-bit alpha byte
-// at all), and the pastes below read it anyway: one byte past the end of the file (page heap,
-// 2026-11-14). Alpha past this end reads as 0 (the pixel keeps what is under it).
-static const uint8_t* MipDataEnd(HTEXTURECACHE texture, uint32_t mip) {
-    const CACHEENTRY* entry = texture;
-    const uint8_t* base = reinterpret_cast<const uint8_t*>(entry->m_data);
-    const uint8_t* fileEnd = base + entry->m_size;
-    const uint32_t size = entry->m_data->m_mipSizes[mip];
-    const uint8_t* end = base + entry->m_data->m_mipOffsets[mip] + size;
-    return size && end < fileEnd ? end : fileEnd;   // a size the file left at 0: its end
-}
-
-static inline uint8_t AlphaAt(const uint8_t* alpha, uint32_t index, const uint8_t* limit) {
-    return alpha + index < limit ? alpha[index] : 0;
 }
 
 // VERIFY: 212be31e manual
@@ -1059,6 +1080,10 @@ void CCharacterComponent::PasteTransparent1Bit(HTEXTURECACHE texture, const BlpP
             uint32_t* pixel = reinterpret_cast<uint32_t*>(dst);
 
             for (uint32_t x = 0; x < width; x++) {
+                if (PastePastEnd(texture, mip, src + x, limit)) {
+                    break;
+                }
+
                 if ((1 << (x & 7)) & AlphaAt(alpha, x >> 3, limit)) {
                     const BlpPalPixel& color = pal[src[x]];
                     pixel[x] = color.m_b | ((color.m_g | ((color.m_r | 0xFFFFFF00) << 8)) << 8);
@@ -1099,6 +1124,10 @@ void CCharacterComponent::PasteTransparent4Bit(HTEXTURECACHE texture, const BlpP
             uint8_t* pixel = dst;
 
             for (uint32_t x = 0; x < width; x++, pixel += 4) {
+                if (PastePastEnd(texture, mip, src + x, limit)) {
+                    break;
+                }
+
                 const BlpPalPixel& color = pal[src[x]];
                 uint32_t shift = 4 * (x & 1);
                 // FlashWOW: two pixels share an alpha byte (as PasteTransparent4BitScale reads it); alpha[x]
@@ -1145,6 +1174,10 @@ void CCharacterComponent::PasteTransparent8Bit(HTEXTURECACHE texture, const BlpP
             uint8_t* pixel = dst;
 
             for (uint32_t x = 0; x < width; x++, pixel += 4) {
+                if (PastePastEnd(texture, mip, src + x, limit)) {
+                    break;
+                }
+
                 const BlpPalPixel& color = pal[src[x]];
                 uint32_t a = AlphaAt(alpha, x, limit);
                 pixel[3] = 0xFF;
