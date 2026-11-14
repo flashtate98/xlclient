@@ -1876,6 +1876,22 @@ int32_t PumpBlpTextureAsync(CTexture* texture, void* data) {
     return 1;
 }
 
+// FlashWOW: CBLPFile::Source copies a whole BLPHeader (palette included, 0x494 bytes) from the file's
+// start, so a file shorter than that was read past its end (page heap caught it on a UI texture,
+// 2026-11-14). Such a file is copied into a zeroed buffer of at least a header's size first.
+static int32_t PumpBlpTextureSized(CTexture* texture, void* data, size_t size) {
+    if (!data || size >= sizeof(BLPHeader)) {
+        return PumpBlpTextureAsync(texture, data);
+    }
+
+    DebugLog("BLP shorter than its header (%u bytes): %s\n", static_cast<uint32_t>(size), texture->m_filename);
+    void* padded = SMemAlloc(sizeof(BLPHeader) + size, __FILE__, __LINE__, SMEM_FLAG_ZEROMEMORY);
+    memcpy(padded, data, size);
+    const int32_t result = PumpBlpTextureAsync(texture, padded);
+    SMemFree(padded, __FILE__, __LINE__, 0);
+    return result;
+}
+
 // VERIFY: 85a7ce70 manual
 // OFFSET: 0x004B7E80
 void AsyncTextureSuccessCallback(CTexture* texture) {
@@ -1883,7 +1899,7 @@ void AsyncTextureSuccessCallback(CTexture* texture) {
         wxl::seam::Texture::AsyncTextureSuccessCallback::Before(texture);
     }
 
-    if (!PumpBlpTextureAsync(texture, texture->m_asyncObject->m_buffer)) {
+    if (!PumpBlpTextureSized(texture, texture->m_asyncObject->m_buffer, texture->m_asyncObject->m_size)) {
         if (!texture->m_status.IsEmpty()) {
             SysMsgAdd(&texture->m_status);
         }
@@ -2202,7 +2218,7 @@ CTexture* CreateBlpSync(const char* fileName, char* extension, uint32_t flags, C
         DebugLog("CreateBlpTexture() failed read: %s.\n", fileName);
     }
 
-    if (!PumpBlpTextureAsync(texture, data)) {
+    if (!PumpBlpTextureSized(texture, data, size)) {
         FillInSolidTexture(*reinterpret_cast<const CImVector*>(&s_defaultColor), texture);
     }
 
