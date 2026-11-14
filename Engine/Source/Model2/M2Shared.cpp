@@ -2,8 +2,10 @@
 #include <cstdio>
 #include <cstring>
 #include <malloc.h>
+#include <limits>
 #include <new>
 #include <typeinfo>
+#include "Engine/Source/Model2/M2Log.h"
 #include "Engine/Source/Model2/M2Shared.h"
 #include "Engine/Source/Base/Handle.h"
 #include "Engine/Source/Base/SIMD.h"
@@ -25,6 +27,10 @@
 #include "Engine/Source/Tempest/CImVector.h"
 #include "Engine/Source/Os/OsMemory.h"
 #include "SXC/Log.h"  // SXC:
+#if defined(WOWDECOMP_RETAIL_MODELS)
+#include "Engine/Source/Retail/LocalSource.h"
+#include "Engine/Source/Retail/RetailModel.h"
+#endif
 #include "WarcraftXL/Seams.h"
 #include "WarcraftXL/Points.h"
 
@@ -45,6 +51,26 @@ static uint8_t* s_sequenceData;
 
 // STATIC: 0x00D4125C
 static uint32_t s_sequenceSize;
+
+#if defined(WOWDECOMP_RETAIL_MODELS)
+// Not in the original: a chunked Retail .anim keeps bone and attachment keyframes in their own
+// payloads (AFSB / AFSA), each with its own offsets. These point at them while one is relocated.
+static uint8_t* s_sequenceBoneData;
+static uint8_t* s_sequenceAttachmentData;
+
+class SequenceDataScope {
+    uint8_t* saved;
+public:
+    explicit SequenceDataScope(uint8_t* payload) : saved(s_sequenceData) {
+        if (payload) s_sequenceData = payload;
+    }
+    ~SequenceDataScope() { s_sequenceData = saved; }
+};
+
+static bool IsRetailModel(const char* fileName) {
+    return Retail::Source().Handles(fileName);
+}
+#endif
 
 // VERIFY: eb5cb8e9 auto
 // OFFSET: 0x00835950
@@ -340,8 +366,35 @@ static void ConvertTextureComboEntry(TextureComboList* list, int32_t adjust, uin
 // OFFSET: 0x008360A0
 int32_t CM2Shared::SetIndices() {
     if (!this->m_indexPool) {
+#if defined(WOWDECOMP_RETAIL_MODELS)
+        // Not in the original: size the packed buffer from the sections, which may index past 65535
+        // (M2WideIndexStart) or share triangles, instead of from the raw index count.
+        uint64_t indexCount = 0;
+
+        for (uint32_t i = 0; i < this->m_skinData->m_skinSections.m_count; ++i) {
+            const M2SkinSection& section = this->m_skinData->m_skinSections[i];
+            const uint32_t start = M2WideIndexStart(&section, this->m_skinData->m_indices.m_count);
+
+            if (start > this->m_skinData->m_indices.m_count || section.m_indexCount > this->m_skinData->m_indices.m_count - start) {
+                return 0;
+            }
+
+            indexCount += section.m_indexCount;
+        }
+
+        const uint32_t maxIndexCount = std::numeric_limits<uint32_t>::max() / sizeof(uint16_t);
+
+        if (!indexCount || !this->m_instances || indexCount > maxIndexCount / this->m_instances) {
+            return 0;
+        }
+
+        const uint32_t packedCount = static_cast<uint32_t>(indexCount * this->m_instances);
+        this->m_indexPool = g_theGxDevicePtr->PoolCreate(GxPoolTarget_Index, GxPoolUsage_Dynamic, sizeof(uint16_t) * packedCount, GxPoolHintBit_Unk1, this->m_fileNameWithoutPath);
+        this->m_indexBuf = g_theGxDevicePtr->BufCreate(this->m_indexPool, sizeof(uint16_t), packedCount, 0);
+#else
         this->m_indexPool = g_theGxDevicePtr->PoolCreate(GxPoolTarget_Index, GxPoolUsage_Dynamic, sizeof(uint16_t) * this->m_instances * this->m_skinData->m_indices.m_count, GxPoolHintBit_Unk1, this->m_fileNameWithoutPath);
         this->m_indexBuf = g_theGxDevicePtr->BufCreate(this->m_indexPool, sizeof(uint16_t), this->m_instances * this->m_skinData->m_indices.m_count, 0);
+#endif
 
         if (!this->m_indexPool || !this->m_indexBuf) {
             return 0;
@@ -478,6 +531,14 @@ CShaderEffect* CM2Shared::GetEffect(uint32_t textureCount, uint16_t shader, uint
         } else {
             vertexShader = "Diffuse_T2";
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+            // Retail batches carry no coordinate combo (0xFFFF); their 0x4000 bit selects the second UV set.
+            if (IsRetailModel(this->m_fileName)) {
+                if (!(shader & 0x4000)) {
+                    vertexShader = "Diffuse_T1";
+                }
+            } else
+#endif
             if (!this->m_data->m_textureCoordCombos[textureCoordComboIndex]) {
                 vertexShader = "Diffuse_T1";
             }
@@ -714,6 +775,22 @@ int32_t M2Init<M2Texture>(uint8_t* base, uint32_t size, const M2Data& data, M2Ar
 CShaderEffect* CM2Shared::GetEffect(M2Batch* batch) {
     CShaderEffect* effect;
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: two-texture Retail combiners the adapter maps to stock shader pairs.
+    if ((batch->m_shader == 0x8011 || batch->m_shader == 0x8012) && IsRetailModel(this->m_fileName)) {
+        const bool mod2x = batch->m_shader == 0x8011;
+        const char* name = mod2x ? "Retail_Mod_Mod2x_T1_T2" : "Retail_Mod_Mod_T1_T2";
+
+        if (CShaderEffect* existing = CShaderEffectManager::GetEffect(name)) {
+            return existing;
+        }
+
+        effect = CShaderEffectManager::CreateEffect(name);
+        effect->InitEffect("Diffuse_T1_T2", mod2x ? "Combiners_Mod_Mod2x" : "Combiners_Mod_Mod");
+        return effect;
+    }
+#endif
+
     if (!(batch->m_shader & 0x8000)) {
         effect = this->GetEffect(batch->m_textureCount, batch->m_shader, batch->m_textureCoordComboIndex);
     } else {
@@ -948,7 +1025,7 @@ void CM2Shared::AssignBatchTextureComboIndices() {
             if (j < combos.m_count - 1) {
                 comboIndex = static_cast<uint16_t>(j);
             } else {
-                DebugLog("Failed to fix up texture combo!\n");
+                M2Log("Failed to fix up texture combo!\n");
             }
 
             batch->m_textureComboIndex = comboIndex;
@@ -968,7 +1045,7 @@ void CM2Shared::AssignBatchTextureComboIndices() {
             if (j < transforms.m_count - 1) {
                 transformIndex = static_cast<uint16_t>(j);
             } else {
-                DebugLog("Failed to fix up texture combo!\n");
+                M2Log("Failed to fix up texture combo!\n");
             }
         } else {
             uint16_t* combo = this->m_data->m_textureCombos.Data();
@@ -1184,8 +1261,15 @@ int32_t CM2Shared::InitializeSkinProfile() {
         memset(this->m_effects, 0, sizeof(CShaderEffect*) * this->m_skinData->m_batches.m_count);
     }
 
-    this->SubstituteSimpleShaders();
-    this->SubstituteSpecializedShaders();
+    // Not in the original: the Retail adapter has already resolved shader IDs and texture runs, and
+    // the legacy specialisation would misread its batches (and their 0xFFFF coordinate combos).
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    if (!IsRetailModel(this->m_fileName))
+#endif
+    {
+        this->SubstituteSimpleShaders();
+        this->SubstituteSpecializedShaders();
+    }
 
     if (this->m_skinData->m_indices.m_count) {
         for (uint32_t i = 0; i < this->m_skinData->m_batches.m_count; i++) {
@@ -1324,12 +1408,12 @@ int32_t CM2Shared::FinishLoadingSkinProfile(uint32_t size) {
     uint8_t* base = reinterpret_cast<uint8_t*>(skinData);
 
     if (!M2Init(base, size, *data, skinData->m_vertices) || !M2Init(base, size, *data, skinData->m_indices) || !M2Init(base, size, *data, skinData->m_bones) || !M2Init(base, size, *data, skinData->m_skinSections) || !M2Init(base, size, *data, skinData->m_batches)) {
-        DebugLog("Corrupt skin profile data: %s", this->m_fileName);
+        M2Log("Corrupt skin profile data: %s", this->m_fileName);
         return 0;
     }
 
     if (!this->InitializeSkinProfile()) {
-        DebugLog("Failed to initialize model skin profile: %s", this->m_fileName);
+        M2Log("Failed to initialize model skin profile: %s", this->m_fileName);
         return 0;
     }
 
@@ -1348,6 +1432,9 @@ int32_t CM2Shared::FinishLoadingSkinProfile(uint32_t size) {
 // OFFSET: 0x008385A0
 template <>
 int32_t M2Init<M2CompBone>(uint8_t* base, uint32_t size, const M2Data& data, M2Array<M2CompBone>& array) {
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    SequenceDataScope source(s_sequenceBoneData);
+#endif
     if (s_sequenceIndex == 0xFFFFFFFF) {
         if (array.m_offset > size || array.m_offset + sizeof(M2CompBone) * array.m_count > size) {
             return 0;
@@ -1394,6 +1481,9 @@ int32_t M2Init<M2TextureTransform>(uint8_t* base, uint32_t size, const M2Data& d
 // OFFSET: 0x00839080
 template <>
 int32_t M2Init<M2Attachment>(uint8_t* base, uint32_t size, const M2Data& data, M2Array<M2Attachment>& array) {
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    SequenceDataScope source(s_sequenceAttachmentData);
+#endif
     if (s_sequenceIndex == 0xFFFFFFFF) {
         if (array.m_offset > size || array.m_offset + sizeof(M2Attachment) * array.m_count > size) {
             return 0;
@@ -1562,12 +1652,32 @@ int32_t M2Init(uint8_t* base, uint32_t size, M2Data& data) {
 // VERIFY: 8000b812 manual
 // OFFSET: 0x0083C6E0
 int32_t CM2Shared::FinishLoadingLowPrioritySequence(uint32_t sequenceIndex, uint8_t* buffer, uint32_t size) {
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    Retail::AnimationLayout layout;
+    const bool retail = IsRetailModel(this->m_fileName);
+
+    if (retail) {
+        std::string error;
+
+        if (!Retail::InspectAnimation(buffer, size, layout, error)) {
+            M2Log("Invalid Retail sequence chunks: %s (%d): %s", this->m_fileName, sequenceIndex, error.c_str());
+            return 0;
+        }
+    }
+#endif
     if (wxl::seam::Listening(WXL_EV_ModelSequenceLoad)) {
         wxl::seam::M2Shared::FinishLoadingLowPrioritySequence::Before(this, sequenceIndex, buffer, size);
     }
 
     s_sequenceIndex = sequenceIndex;
     s_sequenceData = buffer;
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    if (retail && layout.chunked) {
+        if (layout.model.present) s_sequenceData = buffer + layout.model.offset;
+        if (layout.bones.present) s_sequenceBoneData = buffer + layout.bones.offset;
+        if (layout.attachments.present) s_sequenceAttachmentData = buffer + layout.attachments.offset;
+    }
+#endif
 
     int32_t result = M2Init(reinterpret_cast<uint8_t*>(this->m_data), this->m_fileSize, *this->m_data);
     M2Sequence* sequence = &this->m_data->m_sequences[sequenceIndex];
@@ -1575,9 +1685,13 @@ int32_t CM2Shared::FinishLoadingLowPrioritySequence(uint32_t sequenceIndex, uint
     s_sequenceIndex = 0xFFFFFFFF;
     s_sequenceData = nullptr;
     s_sequenceSize = 0;
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    s_sequenceBoneData = nullptr;
+    s_sequenceAttachmentData = nullptr;
+#endif
 
     if (!result) {
-        DebugLog("Corrupt model sequence data: %s (%d)", this->m_fileName, sequenceIndex);
+        M2Log("Corrupt model sequence data: %s (%d)", this->m_fileName, sequenceIndex);
         return 0;
     }
 
@@ -1595,7 +1709,13 @@ int32_t CM2Shared::FinishLoadingLowPrioritySequence(uint32_t sequenceIndex, CAsy
         return 0;
     }
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    uint32_t aliasSteps = 0;    // Not in the original: bounded as in LoadLowPrioritySequence.
+    for (uint16_t* alias = &sequence->m_aliasNext; *alias != sequenceIndex && *alias < this->m_data->m_sequences.m_count &&
+         aliasSteps++ < this->m_data->m_sequences.m_count; alias = &this->m_data->m_sequences[*alias].m_aliasNext) {
+#else
     for (uint16_t* alias = &sequence->m_aliasNext; *alias != sequenceIndex; alias = &this->m_data->m_sequences[*alias].m_aliasNext) {
+#endif
         if (!this->FinishLoadingLowPrioritySequence(*alias, static_cast<uint8_t*>(object->m_buffer), object->m_size)) {
             return 0;
         }
@@ -1622,7 +1742,7 @@ int32_t CM2Shared::LoadSkinProfile(uint32_t profile) {
     SFileImpl* file;
 
     if (!SFile::OpenEx(nullptr, fileName, (this->m_flags & 4) >> 2, &file)) {
-        DebugLog("Model2: File not found: %s\n", fileName);
+        M2Log("Model2: File not found: %s\n", fileName);
         return 0;
     }
 
@@ -1704,19 +1824,19 @@ int32_t CM2Shared::Initialize() {
     uint32_t profile = this->GetSkinProfileIndex(maxBones);
 
     if (profile == 0xFFFFFFFF) {
-        DebugLog("Failed to choose skin profile: %s", this->m_fileName);
+        M2Log("Failed to choose skin profile: %s", this->m_fileName);
         return 0;
     }
 
     if (!this->LoadSkinProfile(profile)) {
-        DebugLog("Failed to load skin profile: %s", this->m_fileName);
+        M2Log("Failed to load skin profile: %s", this->m_fileName);
         return 0;
     }
 
     this->m_textures = static_cast<CTexture**>(SMemAlloc(sizeof(CTexture*) * this->m_data->m_textures.m_count, __FILE__, __LINE__, 8));
 
     if (!this->m_textures) {
-        DebugLog("Failed to allocate texture array: %s", this->m_fileName);
+        M2Log("Failed to allocate texture array: %s", this->m_fileName);
         return 0;
     }
 
@@ -1767,14 +1887,14 @@ int32_t CM2Shared::FinishLoading() {
     }
 
     if (!M2Init(reinterpret_cast<uint8_t*>(this->m_data), this->m_fileSize, *this->m_data)) {
-        DebugLog("Corrupt model data: %s", this->m_fileName);
+        M2Log("Corrupt model data: %s", this->m_fileName);
         return 0;
     }
 
     this->m_data->m_flags &= ~0x60u;
 
     if (!this->Initialize()) {
-        DebugLog("Failed to initialize model: %s", this->m_fileName);
+        M2Log("Failed to initialize model: %s", this->m_fileName);
         return 0;
     }
 
@@ -1969,6 +2089,11 @@ CM2Shared::~CM2Shared() {
     if (!pending) {
         SIMD::FreeA16(this->m_data);
     }
+
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: unpublish a Retail model's skin/anim names once the last user is gone.
+    Retail::Source().ReleaseModel(this->m_fileName);
+#endif
 }
 
 // VERIFY: aeff737a manual
@@ -2057,7 +2182,7 @@ CM2SequenceLoad* CM2Shared::LoadLowPrioritySequence(uint16_t sequenceIndex) {
     SFileImpl* file;
 
     if (!SFile::OpenEx(nullptr, fileName, (this->m_flags & 4) >> 2, &file)) {
-        DebugLog("Model2: File not found: %s\n", fileName);
+        M2Log("Model2: File not found: %s\n", fileName);
         this->m_sequenceLoads.DeleteNode(load);
         return nullptr;
     }
@@ -2093,7 +2218,15 @@ CM2SequenceLoad* CM2Shared::LoadLowPrioritySequence(uint16_t sequenceIndex) {
 
     sequence->m_flags |= 0x10;
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: an alias ring that never returns to the sequence (a malformed or mis-merged
+    // model) would spin forever; one pass over the sequences is the most a ring can hold.
+    uint32_t ringSteps = 0;
+    for (uint16_t i = sequence->m_aliasNext; i != sequenceIndex && i < this->m_data->m_sequences.m_count &&
+         ringSteps++ < this->m_data->m_sequences.m_count; i = this->m_data->m_sequences[i].m_aliasNext) {
+#else
     for (uint16_t i = sequence->m_aliasNext; i != sequenceIndex; i = this->m_data->m_sequences[i].m_aliasNext) {
+#endif
         this->m_data->m_sequences[i].m_flags |= 0x10;
     }
 

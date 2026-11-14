@@ -83,7 +83,9 @@ namespace gxvk::vk::pipelines::detail
         if (slot >= frame::kFramesInFlight || !draw.vertexRegs || !draw.pixelRegs) return false;
         SlotSets& ss = s.slots[slot];
         const uint32_t rows  = draw.vertexRows == kVertexRowsLarge ? kVertexRowsLarge : kVertexRowsSmall;
-        const uint32_t bytes = kSliceHeadBytes + rows * 16;
+        // Rows past the highest register ever written are never read with meaning; leave them out.
+        const uint32_t used  = draw.vertexRowsUsed && draw.vertexRowsUsed < rows ? draw.vertexRowsUsed : rows;
+        const uint32_t bytes = kSliceHeadBytes + used * 16;
 
         if (ss.regsSerial != serial)
         {
@@ -97,7 +99,7 @@ namespace gxvk::vk::pipelines::detail
         uint8_t slice[kSliceBytesLarge];
         std::memcpy(slice, draw.pixelRegs, kPixelRows * 16);
         std::memcpy(slice + kPixelRows * 16, draw.misc, 16);
-        std::memcpy(slice + kSliceHeadBytes, draw.vertexRegs, rows * 16);
+        std::memcpy(slice + kSliceHeadBytes, draw.vertexRegs, used * 16);
 
         if (ss.lastSliceSet != VK_NULL_HANDLE && ss.lastSliceBytes == bytes && std::memcmp(ss.lastSlice, slice, bytes) == 0)
         {

@@ -143,7 +143,7 @@ void CM2SceneRender::SetupTextures() {
                 CShaderEffect::SetTexMtx_SphereMap(stage);
             }
 
-            shift -= 4;
+            if (shift >= 4) shift -= 4;
             i++;
         } while (i < count);
 

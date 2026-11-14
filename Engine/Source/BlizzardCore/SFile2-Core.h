@@ -27,6 +27,8 @@ enum SFILE_TYPE : uint32_t {
     SFILE_OLD_SFILE = 3,
     SFILE_ZIP_FILE = 4,
     SFILE_MEMORY = 5,
+    // Not in the original: a Retail model file prepared in memory (WOWDECOMP_RETAIL_MODELS).
+    SFILE_RETAIL = 6,
 };
 
 namespace System_SFile {

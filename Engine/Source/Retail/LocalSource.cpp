@@ -1,0 +1,632 @@
+#include "Engine/Source/Retail/LocalSource.h"
+#include "Engine/Source/Retail/RetailModel.h"
+#include "Engine/Source/BlizzardCore/SFile2-Core.h"
+#include "Engine/Source/BlizzardCore/Source/System/Log/Log.h"
+#include <algorithm>
+#include <charconv>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <map>
+#include <mutex>
+#include <set>
+#include <unordered_map>
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+namespace Retail {
+namespace {
+
+constexpr uint32_t kMaxFileSize = 128 * 1024 * 1024;
+constexpr const char* kLog = "Logs/RetailModels.log";
+
+// Set while this source reads the archives itself, so the SFile hooks treat those reads as
+// ordinary files instead of calling back in here.
+thread_local int t_bypass = 0;
+
+struct Bypass {
+    Bypass() { ++t_bypass; }
+    ~Bypass() { --t_bypass; }
+};
+
+std::string Normalize(const char* name) {
+    std::string key(name ? name : "");
+    for (auto& c : key) {
+        if (c == '\\') c = '/';
+        if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+    }
+    return key;
+}
+
+std::string ArchivePath(std::string path) {
+    for (auto& c : path) if (c == '/') c = '\\';
+    return path;
+}
+
+std::string Extension(const std::string& key) {
+    const auto slash = key.find_last_of('/');
+    const auto dot = key.find_last_of('.');
+    return dot == std::string::npos || (slash != std::string::npos && dot < slash) ? "" : key.substr(dot);
+}
+
+std::string Stem(const std::string& key) {
+    const auto ext = Extension(key);
+    return key.substr(0, key.size() - ext.size());
+}
+
+bool Number(const std::string& text, uint32_t& value) {
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+    return !text.empty() && parsed.ec == std::errc() && parsed.ptr == text.data() + text.size() && value;
+}
+
+bool Fail(std::string& error, const std::string& message) {
+    error = message;
+    return false;
+}
+
+// Reads a whole file through the client's normal lookup order (loose files, then patch MPQs).
+bool RawRead(const std::string& path, std::vector<uint8_t>& bytes, std::string& error) {
+    bytes.clear();
+    Bypass bypass;
+    SFileImpl* file = nullptr;
+    if (!SFile::OpenEx(nullptr, ArchivePath(path).c_str(), 0, &file) || !file)
+        return Fail(error, "cannot open " + path);
+    uint32_t high = 0;
+    const uint32_t size = SFileGetFileSize(file, &high);
+    if (high || size > kMaxFileSize) {
+        SFileCloseFile(file);
+        return Fail(error, path + " is larger than 128 MiB");
+    }
+    bytes.resize(size);
+    uint32_t read = 0;
+    const bool ok = !size || (SFileReadFile(file, bytes.data(), size, &read, nullptr, 0) && read == size);
+    SFileCloseFile(file);
+    if (!ok) {
+        bytes.clear();
+        return Fail(error, "cannot read " + path);
+    }
+    return true;
+}
+
+// Reads only the first four bytes, without pulling the whole file into memory.
+bool RawMagic(const std::string& path, uint32_t& magic, uint32_t& size) {
+    Bypass bypass;
+    SFileImpl* file = nullptr;
+    if (!SFile::OpenEx(nullptr, ArchivePath(path).c_str(), 0, &file) || !file) return false;
+    uint32_t high = 0;
+    size = SFileGetFileSize(file, &high);
+    uint32_t read = 0;
+    magic = 0;
+    const bool ok = !high && size >= 4 && SFileReadFile(file, &magic, 4, &read, nullptr, 0) && read == 4;
+    SFileCloseFile(file);
+    return ok;
+}
+
+bool RawExists(const std::string& path) {
+    Bypass bypass;
+    return SFile::FileExistsEx(ArchivePath(path).c_str(), 0) != 0;
+}
+
+// FileDataID -> path tables shipped as DB2 (TextureFilePath.db2 / ModelFilePath.db2, the ones
+// WarcraftXL's wxl-db2 reads). WDC1 layout with one ID and one string field. The whole file stays
+// in memory and is searched in place; only the looked-up path becomes a std::string.
+struct PathTable {
+    std::vector<uint8_t> bytes;
+    size_t records = 0, recordSize = 0, idOffset = 0, pathOffset = 0, strings = 0, stringSize = 0, idList = 0;
+    uint32_t count = 0;
+    bool useIdList = false;
+    std::vector<std::pair<uint32_t, uint32_t>> sorted; // (id, record), only when the file is unsorted
+
+    uint32_t U32(size_t at) const {
+        uint32_t v;
+        std::memcpy(&v, bytes.data() + at, 4);
+        return v;
+    }
+
+    uint32_t IdAt(uint32_t i) const {
+        return useIdList ? U32(idList + size_t(i) * 4) : U32(records + size_t(i) * recordSize + idOffset);
+    }
+
+    bool Parse(std::string& error) {
+        const size_t header = 84;
+        if (bytes.size() < header || std::memcmp(bytes.data(), "WDC1", 4) != 0)
+            return Fail(error, "not a WDC1 table");
+        count = U32(4);
+        const uint32_t fields = U32(8), size = U32(12), stringTable = U32(16), copyTable = U32(40);
+        uint16_t flags, idIndex;
+        std::memcpy(&flags, bytes.data() + 44, 2);
+        std::memcpy(&idIndex, bytes.data() + 46, 2);
+        const uint32_t idListSize = U32(64);
+        if (fields < 1 || fields > 2 || size < 4 || (flags & 1) || copyTable)
+            return Fail(error, "unsupported layout (expected an ID and a path, no offset map or copy table)");
+        const size_t structures = header;
+        records = structures + size_t(fields) * 4;
+        recordSize = size;
+        strings = records + size_t(count) * size;
+        stringSize = stringTable;
+        if (strings + stringSize > bytes.size()) return Fail(error, "truncated");
+        useIdList = idListSize != 0;
+        if (useIdList) {
+            // IDs live in a list after the string table; the record holds only the path.
+            idList = strings + stringSize;
+            if (idListSize != count * 4 || idList + idListSize > bytes.size()) return Fail(error, "bad ID list");
+            pathOffset = 0;
+        } else {
+            if (fields != 2 || idIndex > 1) return Fail(error, "expected an inline ID field");
+            uint16_t offsets[2];
+            std::memcpy(&offsets[0], bytes.data() + structures + 2, 2);
+            std::memcpy(&offsets[1], bytes.data() + structures + 6, 2);
+            idOffset = offsets[idIndex];
+            pathOffset = offsets[idIndex ? 0 : 1];
+            if (idOffset + 4 > size || pathOffset + 4 > size) return Fail(error, "bad field offsets");
+        }
+        bool ordered = true;
+        for (uint32_t i = 1; i < count && ordered; ++i) ordered = IdAt(i - 1) < IdAt(i);
+        if (!ordered) {
+            sorted.reserve(count);
+            for (uint32_t i = 0; i < count; ++i) sorted.emplace_back(IdAt(i), i);
+            std::sort(sorted.begin(), sorted.end());
+        }
+        return true;
+    }
+
+    bool Find(uint32_t id, std::string& out) const {
+        if (!count) return false;
+        uint32_t record = 0;
+        if (sorted.empty()) {
+            uint32_t lo = 0, hi = count;
+            while (lo < hi) {
+                const uint32_t mid = lo + (hi - lo) / 2;
+                if (IdAt(mid) < id) lo = mid + 1; else hi = mid;
+            }
+            if (lo == count || IdAt(lo) != id) return false;
+            record = lo;
+        } else {
+            const auto it = std::lower_bound(sorted.begin(), sorted.end(), std::make_pair(id, 0u));
+            if (it == sorted.end() || it->first != id) return false;
+            record = it->second;
+        }
+        const uint32_t offset = U32(records + size_t(record) * recordSize + pathOffset);
+        if (offset >= stringSize) return false;
+        const char* text = reinterpret_cast<const char*>(bytes.data() + strings + offset);
+        const size_t length = strnlen(text, stringSize - offset);
+        if (!length || length == stringSize - offset) return false;
+        out = Normalize(std::string(text, length).c_str());
+        return true;
+    }
+};
+
+struct Model {
+    std::vector<uint8_t> bytes;
+    ModelFiles files;
+};
+
+// What a handled name points at: a FileDataID (resolved through the listfile), a fallback path
+// in the archives, or both. Skins and animations also remember the model they belong to.
+struct Reference {
+    uint32_t id = 0;
+    std::string path;
+    std::shared_ptr<Model> owner;
+    uint16_t animation = 0;
+    uint16_t variation = 0;
+};
+
+}
+
+struct LocalSource::Impl {
+    std::mutex mutex;
+    std::once_flag tablesLoaded;
+    std::unordered_map<uint32_t, std::string> listfile;      // optional CSV, wins over the DB2 tables
+    PathTable texturePaths, modelPaths;
+    std::unordered_map<std::string, bool> modelKinds;        // .m2 name -> header is MD21
+    std::map<std::string, Reference> dependencies;           // published skin/anim names
+    std::map<std::string, std::pair<std::shared_ptr<Model>, size_t>> models;
+    std::map<std::string, uint32_t> preparedSizes;
+    std::set<std::string> reportedMissing;                   // logged once each
+
+    static std::filesystem::path ListfilePath() {
+        if (const char* env = std::getenv("WOW_RETAIL_LISTFILE"); env && *env) return env;
+#ifdef _WIN32
+        char exe[MAX_PATH];
+        const DWORD length = GetModuleFileNameA(nullptr, exe, sizeof(exe));
+        if (length && length < sizeof(exe)) {
+            const auto beside = std::filesystem::path(exe).parent_path() / "Data" / "Retail" / "listfile.csv";
+            std::error_code code;
+            if (std::filesystem::exists(beside, code)) return beside;
+        }
+#endif
+        return std::filesystem::path("Data") / "Retail" / "listfile.csv";
+    }
+
+    // Loads the FileDataID tables once, without the mutex (the DB2s come from the archives).
+    void EnsureTables() {
+        std::call_once(tablesLoaded, [this] {
+            LoadListfile();
+            size_t rows = 0;
+            for (auto* table : {&texturePaths, &modelPaths}) {
+                const char* name = table == &texturePaths ? "DBFilesClient/TextureFilePath.db2" : "DBFilesClient/ModelFilePath.db2";
+                std::string error;
+                if (!RawRead(name, table->bytes, error)) continue;
+                if (!table->Parse(error)) {
+                    Blizzard::Log::Printf(1, kLog, "%s: %s; ignored\n", name, error.c_str());
+                    table->bytes.clear();
+                    table->count = 0;
+                    continue;
+                }
+                Blizzard::Log::Printf(1, kLog, "%s: %u paths\n", name, table->count);
+                rows += table->count;
+            }
+            if (listfile.empty() && !rows)
+                Blizzard::Log::Printf(1, kLog, "No listfile.csv and no TextureFilePath/ModelFilePath.db2: textures and parent skeletons cannot be resolved\n");
+        });
+    }
+
+    void LoadListfile() {
+        const auto path = ListfilePath();
+        std::ifstream input(path);
+        if (!input) return;
+        std::string line;
+        size_t rows = 0;
+        while (std::getline(input, line)) {
+            const auto separator = line.find(';');
+            if (separator == std::string::npos) continue;
+            uint32_t id = 0;
+            if (!Number(line.substr(0, separator), id)) continue;
+            auto name = line.substr(separator + 1);
+            while (!name.empty() && (name.back() == '\r' || name.back() == ' ' || name.back() == '\t')) name.pop_back();
+            if (name.empty()) continue;
+            listfile[id] = Normalize(name.c_str());
+            ++rows;
+        }
+        Blizzard::Log::Printf(1, kLog, "Listfile %s: %u entries\n", path.string().c_str(), static_cast<unsigned>(rows));
+    }
+
+    // Called with the mutex held.
+    bool Resolve(const std::string& key, Reference& ref, std::string& error) {
+        const auto dep = dependencies.find(key);
+        if (dep != dependencies.end()) {
+            ref = dep->second;
+            return true;
+        }
+        if (IsVirtualPath(key.c_str())) {
+            const auto internal = key.substr(std::strlen(SourcePrefix()));
+            const auto stem = internal.substr(0, internal.find('.'));
+            if (Number(stem, ref.id)) return true;
+            if (stem.find_first_not_of("0123456789") == std::string::npos) return Fail(error, "invalid FileDataID in " + key);
+            ref.path = internal; // An embedded filename from an older model: read it as is.
+            return true;
+        }
+        ref.path = key; // A Retail model opened by its normal path.
+        return true;
+    }
+
+    // Called with the mutex held; only looks up paths.
+    std::vector<std::string> Candidates(const Reference& ref) {
+        std::vector<std::string> paths;
+        if (ref.id) {
+            const auto found = listfile.find(ref.id);
+            std::string path;
+            if (found != listfile.end()) paths.push_back(found->second);
+            else if (texturePaths.Find(ref.id, path) || modelPaths.Find(ref.id, path)) paths.push_back(path);
+        }
+        if (!ref.path.empty() && std::find(paths.begin(), paths.end(), ref.path) == paths.end()) paths.push_back(ref.path);
+        return paths;
+    }
+
+    std::vector<std::string> CandidatesLocked(const Reference& ref) {
+        std::lock_guard<std::mutex> lock(mutex);
+        return Candidates(ref);
+    }
+
+    // Called without the mutex: reads the archives.
+    bool Fetch(const Reference& ref, std::vector<uint8_t>& bytes, std::string& error) {
+        EnsureTables();
+        const auto paths = CandidatesLocked(ref);
+        if (paths.empty()) return Fail(error, "FileDataID " + std::to_string(ref.id) + " has no path in listfile.csv or the FilePath DB2s");
+        std::string last;
+        for (const auto& path : paths) {
+            if (RawRead(path, bytes, last)) return true;
+        }
+        return Fail(error, ref.id ? "FileDataID " + std::to_string(ref.id) + ": " + last : last);
+    }
+
+    // The parent FileDataID of a skeleton (its SKPD chunk), 0 for none.
+    static uint32_t SkeletonParent(const std::vector<uint8_t>& bytes) {
+        const auto word = [&](size_t at) {
+            return uint32_t(bytes[at]) | (uint32_t(bytes[at + 1]) << 8) | (uint32_t(bytes[at + 2]) << 16) | (uint32_t(bytes[at + 3]) << 24);
+        };
+        for (size_t p = 0; p + 8 <= bytes.size();) {
+            const uint32_t tag = word(p), size = word(p + 4);
+            p += 8;
+            if (size > bytes.size() - p) return 0;
+            if (tag == 0x44504b53 && size >= 12) return word(p + 8);
+            p += size;
+        }
+        return 0;
+    }
+
+    // Called without the mutex. Gives a model whose skeleton has a parent the parent model's event times for
+    // the sequences it inherits (Retail::InheritEvents). The parent model is the parent skeleton's file with
+    // .m2 for .skel. Logged once per model; nothing changes when anything is missing.
+    void InheritParentEvents(const std::string& key, uint32_t skeletonId, std::vector<uint8_t>& prepared) {
+        Reference skel;
+        skel.id = skeletonId;
+        std::vector<uint8_t> raw, parentSkeleton, parentModel;
+        std::string error;
+        if (!Fetch(skel, raw, error)) return;
+        const uint32_t parent = SkeletonParent(raw);
+        if (!parent) return;
+        Reference up;
+        up.id = parent;
+        const auto paths = CandidatesLocked(up);
+        std::vector<uint32_t> chain;
+        uint32_t filled = 0;
+        std::string modelPath;
+        if (!paths.empty() && paths.front().size() > 5) modelPath = paths.front().substr(0, paths.front().size() - 5) + ".m2";
+        Reference parentRef;
+        parentRef.path = modelPath;
+        const bool ok = !modelPath.empty() && LoadSkeleton(up, parentSkeleton, error, chain) &&
+            Fetch(parentRef, parentModel, error) && InheritEvents(prepared, parentModel, parentSkeleton, filled, error);
+        if (ok) Blizzard::Log::Printf(1, kLog, "%s: %u inherited event timelines from %s\n", key.c_str(), filled, modelPath.c_str());
+        else Blizzard::Log::Printf(1, kLog, "%s: inherited events not added (%s): %s\n", key.c_str(),
+            modelPath.empty() ? "parent skeleton has no path" : modelPath.c_str(), error.c_str());
+    }
+
+    // Called without the mutex. Follows SKPD parents (by FileDataID) and merges them in.
+    bool LoadSkeleton(const Reference& ref, std::vector<uint8_t>& bytes, std::string& error, std::vector<uint32_t>& chain) {
+        if (chain.size() >= 8 || (ref.id && std::find(chain.begin(), chain.end(), ref.id) != chain.end()))
+            return Fail(error, "skeleton parent cycle or depth limit");
+        chain.push_back(ref.id);
+        if (!Fetch(ref, bytes, error)) return false;
+        const auto word = [&](size_t at) {
+            return uint32_t(bytes[at]) | (uint32_t(bytes[at + 1]) << 8) | (uint32_t(bytes[at + 2]) << 16) | (uint32_t(bytes[at + 3]) << 24);
+        };
+        uint32_t parent = 0;
+        bool found = false;
+        for (size_t p = 0; p < bytes.size();) {
+            if (bytes.size() - p < 8) return Fail(error, "truncated skeleton chunk header");
+            const uint32_t tag = word(p), size = word(p + 4);
+            p += 8;
+            if (size > bytes.size() - p) return Fail(error, "skeleton chunk exceeds file size");
+            if (tag == 0x44504b53) { // SKPD: the parent FileDataID is payload word 2.
+                if (found || size < 12) return Fail(error, "invalid or duplicate skeleton parent chunk");
+                parent = word(p + 8);
+                found = true;
+            }
+            p += size;
+        }
+        if (parent) {
+            std::vector<uint8_t> ancestor, merged;
+            Reference up;
+            up.id = parent;
+            if (!LoadSkeleton(up, ancestor, error, chain) || !MergeSkeleton(bytes, ancestor, merged, error)) return false;
+            bytes.swap(merged);
+        }
+        chain.pop_back();
+        return true;
+    }
+};
+
+bool ReadArchiveFile(const char* path, std::vector<uint8_t>& bytes, std::string& error) {
+    return RawRead(path ? path : "", bytes, error);
+}
+
+LocalSource::LocalSource() : m_impl(new Impl) {}
+LocalSource::~LocalSource() = default;
+
+bool LocalSource::Handles(const char* name) {
+    if (t_bypass || !name || !*name) return false;
+    const auto key = Normalize(name);
+    if (IsVirtualPath(key.c_str())) return true;
+    {
+        std::lock_guard<std::mutex> lock(m_impl->mutex);
+        if (m_impl->dependencies.count(key) || m_impl->models.count(key)) return true;
+        if (Extension(key) != ".m2") return false;
+        const auto kind = m_impl->modelKinds.find(key);
+        if (kind != m_impl->modelKinds.end()) return kind->second;
+    }
+    // First sight of this model name: look at its header outside the lock (this reads the archives).
+    uint32_t magic = 0, size = 0;
+    const bool retail = RawMagic(key, magic, size) && magic == 0x3132444d; // "MD21"
+    std::lock_guard<std::mutex> lock(m_impl->mutex);
+    m_impl->modelKinds[key] = retail;
+    return retail;
+}
+
+bool LocalSource::Exists(const char* name, std::string& error) {
+    error.clear();
+    m_impl->EnsureTables();
+    const auto key = Normalize(name);
+    Reference ref;
+    std::vector<std::string> paths;
+    {
+        std::lock_guard<std::mutex> lock(m_impl->mutex);
+        if (m_impl->preparedSizes.count(key)) return true;
+        if (!m_impl->Resolve(key, ref, error)) return false;
+        paths = m_impl->Candidates(ref);
+    }
+    for (const auto& path : paths) if (RawExists(path)) return true;
+
+    // The engine checks existence before it opens, so a missing reference would otherwise fail
+    // silently (a missing texture draws green). Name it in the log once.
+    if (ref.id && paths.size() <= 1 && (paths.empty() || paths[0] == ref.path)) {
+        error = "FileDataID " + std::to_string(ref.id) + " has no path in listfile.csv or the FilePath DB2s";
+    } else {
+        error = "not found in the archives";
+        for (const auto& path : paths) error += " | " + path;
+    }
+
+    std::lock_guard<std::mutex> lock(m_impl->mutex);
+    if (m_impl->reportedMissing.insert(key).second) {
+        Blizzard::Log::Printf(1, kLog, "%s: %s\n", key.c_str(), error.c_str());
+    }
+    return false;
+}
+
+bool LocalSource::Size(const char* name, uint32_t& size) {
+    m_impl->EnsureTables();
+    const auto key = Normalize(name);
+    Reference ref;
+    std::vector<std::string> paths;
+    std::string error;
+    {
+        std::lock_guard<std::mutex> lock(m_impl->mutex);
+        const auto prepared = m_impl->preparedSizes.find(key);
+        if (prepared != m_impl->preparedSizes.end()) {
+            size = prepared->second;
+            return true;
+        }
+        if (!m_impl->Resolve(key, ref, error)) return false;
+        paths = m_impl->Candidates(ref);
+    }
+    for (const auto& path : paths) {
+        uint32_t magic = 0;
+        if (RawMagic(path, magic, size)) return true;
+    }
+    return false;
+}
+
+bool LocalSource::Read(const char* name, std::vector<uint8_t>& bytes, std::string& error) {
+    error.clear();
+    bytes.clear();
+    const auto key = Normalize(name);
+    auto& s = *m_impl;
+    Reference ref;
+    {
+        std::lock_guard<std::mutex> lock(s.mutex);
+        if (!s.Resolve(key, ref, error)) return false;
+    }
+    if (!s.Fetch(ref, bytes, error)) return false;
+
+    const auto ext = Extension(key);
+    bool success = true;
+    if (ext == ".m2" || ext == ".mdx") {
+        auto model = std::make_shared<Model>();
+        const auto base = Stem(key);
+        // A shared skeleton lives in its own file; fetch it (and its parents) before preparing.
+        ModelFiles inspected;
+        std::vector<uint8_t> skeleton;
+        if (InspectModel(bytes, inspected, error) && inspected.skeleton) {
+            Reference skel;
+            skel.id = inspected.skeleton;
+            if (!IsVirtualPath(key.c_str())) skel.path = base + ".skel";
+            std::vector<uint32_t> chain;
+            success = s.LoadSkeleton(skel, skeleton, error, chain);
+        }
+        success = success && PrepareModel(bytes, model->bytes, model->files, error, skeleton.empty() ? nullptr : &skeleton);
+        // A skeleton with a parent (Void Elf on Blood Elf) inherits sequences whose events (sheathe, footsteps)
+        // only the parent model lists; borrow them, or weapons never move to their sheaths.
+        if (success && inspected.skeleton) s.InheritParentEvents(key, inspected.skeleton, model->bytes);
+
+        std::map<std::string, Reference> pending;
+        const bool normalPath = !IsVirtualPath(key.c_str());
+        // Check every advertised profile before exposing the model to the renderer.
+        for (size_t i = 0; success && i < model->files.skins.size(); ++i) {
+            if (i >= 4 || i >= (model->bytes.size() > 0x44 ? model->bytes[0x44] : 0)) break;
+            char suffix[16];
+            std::snprintf(suffix, sizeof(suffix), "%02u.skin", static_cast<unsigned>(i));
+            Reference skin;
+            skin.id = model->files.skins[i];
+            skin.owner = model;
+            if (normalPath) skin.path = base + suffix;
+            std::vector<uint8_t> raw;
+            // Lenient materials: a multi-texture Retail shader the legacy renderer lacks is drawn with its
+            // first texture instead of refusing the whole model (see PrepareSkin).
+            success = s.Fetch(skin, raw, error) && PrepareSkin(raw, model->bytes, error, true);
+            pending.emplace(base + suffix, std::move(skin));
+        }
+        for (const auto& anim : model->files.animations) {
+            if (!anim.fileId) continue;
+            char suffix[32];
+            std::snprintf(suffix, sizeof(suffix), "%04u-%02u.anim", anim.id, anim.variation);
+            Reference file;
+            file.id = anim.fileId;
+            file.owner = model;
+            file.animation = anim.id;
+            file.variation = anim.variation;
+            if (normalPath) file.path = base + suffix;
+            const auto added = pending.emplace(base + suffix, file);
+            if (!added.second && added.first->second.id != anim.fileId) success = Fail(error, "conflicting AFID entries");
+        }
+        if (success) {
+            std::lock_guard<std::mutex> lock(s.mutex);
+            // The same name always denotes the same file; keep the first prepared copy.
+            auto& owner = s.models[key];
+            if (!owner.first) owner.first = model;
+            ++owner.second;
+            for (auto& dep : pending) {
+                dep.second.owner = owner.first;
+                s.dependencies[dep.first] = dep.second;
+            }
+            bytes = owner.first->bytes;
+        }
+    } else if (ext == ".skin") {
+        success = ref.owner != nullptr;
+        if (!success) error = "open the Retail model before its skin";
+        success = success && PrepareSkin(bytes, ref.owner->bytes, error, true);
+    } else if (ext == ".anim") {
+        success = ref.owner ? (StripAnimationChunk(bytes, error) &&
+            ValidateAnimation(bytes, ref.owner->bytes, ref.animation, ref.variation, error)) :
+            Fail(error, "open the Retail model before its animation");
+    } else if (ext == ".blp") {
+        // BLP2 format version 1 is the client's native texture format.
+        success = bytes.size() >= 148 && std::memcmp(bytes.data(), "BLP2\1\0\0\0", 8) == 0;
+        if (!success) error = "texture is not a supported BLP2 file";
+    } else {
+        success = Fail(error, "Retail models reference only M2, SKIN, ANIM and BLP files");
+    }
+
+    if (!success) {
+        bytes.clear();
+        Blizzard::Log::Printf(1, kLog, "%s: %s\n", key.c_str(), error.c_str());
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(s.mutex);
+    s.preparedSizes[key] = static_cast<uint32_t>(bytes.size());
+    return true;
+}
+
+bool LocalSource::ReadFileDataId(uint32_t id, std::vector<uint8_t>& bytes, std::string& error) {
+    Reference ref;
+    ref.id = id;
+    return id && m_impl->Fetch(ref, bytes, error);
+}
+
+bool LocalSource::PathOf(uint32_t id, std::string& path) {
+    path.clear();
+    if (!id) return false;
+    m_impl->EnsureTables();
+    Reference ref;
+    ref.id = id;
+    const auto paths = m_impl->CandidatesLocked(ref);
+    if (paths.empty()) return false;
+    path = paths.front();
+    return true;
+}
+
+void LocalSource::ReleaseModel(const char* name) {
+    const auto key = Normalize(name);
+    std::lock_guard<std::mutex> lock(m_impl->mutex);
+    const auto model = m_impl->models.find(key);
+    if (model == m_impl->models.end() || --model->second.second) return;
+    for (auto it = m_impl->dependencies.begin(); it != m_impl->dependencies.end();) {
+        if (it->second.owner == model->second.first) {
+            m_impl->preparedSizes.erase(it->first);
+            it = m_impl->dependencies.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    m_impl->preparedSizes.erase(key);
+    m_impl->models.erase(model);
+}
+
+LocalSource& Source() {
+    static LocalSource source;
+    return source;
+}
+
+}

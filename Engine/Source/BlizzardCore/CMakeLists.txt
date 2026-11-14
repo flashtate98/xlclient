@@ -4,6 +4,14 @@ add_library(BlizzardCore STATIC
     ${PRIVATE_SOURCES}
 )
 
+# The Retail model loader lives in Engine/Source/Retail; SFile and Model2 call into it.
+if (WOWDECOMP_RETAIL_MODELS)
+    target_sources(BlizzardCore PRIVATE
+        ${CMAKE_SOURCE_DIR}/Engine/Source/Retail/LocalSource.cpp
+        ${CMAKE_SOURCE_DIR}/Engine/Source/Retail/RetailModel.cpp
+    )
+endif()
+
 target_include_directories(BlizzardCore
     PUBLIC
         ${CMAKE_SOURCE_DIR}

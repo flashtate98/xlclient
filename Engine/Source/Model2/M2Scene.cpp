@@ -4,6 +4,7 @@
 #include <cstring>
 #include <new>
 #include <xmmintrin.h>
+#include "Engine/Source/Model2/M2Log.h"
 #include "Engine/Source/Model2/M2Scene.h"
 #include "Engine/Source/Base/ObjectAlloc.h"
 #include "Engine/Source/Gx/CGxDevice/CGxDevice.h"
@@ -1586,6 +1587,7 @@ CM2Model* CM2Scene::CreateModel(const char* fileName, uint32_t flags) {
     CM2Shared* shared = this->m_cache->CreateShared(fileName, flags);
 
     if (!shared) {
+        M2Log("Model2: %s could not be loaded; drawing the error cube", fileName);
         shared = this->m_cache->CreateShared("Spells\\ErrorCube.mdx", 0);
     }
 
@@ -1924,9 +1926,20 @@ int32_t CM2Scene::Animate(const C3Vector& cameraPos) {
                 continue;
             }
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+            // Not in the original: some Retail batches name a material past the end, or a layer deeper
+            // than their material index; the subtraction below would read before the array.
+            if (batch->m_materialIndex >= data->m_materials.m_count) {
+                continue;
+            }
+#endif
             M2Material* material = &data->m_materials[batch->m_materialIndex];
             int32_t projected = (batch->m_flags & 4) && this->m_projectTextureCallback;
+#if defined(WOWDECOMP_RETAIL_MODELS)
+            M2Material* baseMaterial = (batch->m_materialLayer && batch->m_materialLayer <= batch->m_materialIndex) ? &data->m_materials[batch->m_materialIndex - batch->m_materialLayer] : material;
+#else
             M2Material* baseMaterial = batch->m_materialLayer ? &data->m_materials[batch->m_materialIndex - batch->m_materialLayer] : material;
+#endif
             int32_t transparent = baseMaterial->m_blendMode > M2BLEND_ALPHA_KEY || alpha < 0.99998999f;
             CShaderEffect* effect = optimized ? model->m_optGeo->m_effects[i] : model->m_shared->m_effects[i];
 

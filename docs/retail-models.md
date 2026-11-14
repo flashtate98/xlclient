@@ -1,0 +1,157 @@
+# Retail (MD21) models from local files
+
+Build option `WOWDECOMP_RETAIL_MODELS` (off by default) lets the client load models authored for
+newer versions of the game, the chunked **MD21** format (M2 versions 272 to 274), together with
+their external **.anim** files and shared **.skel** skeletons. Everything is read from the client's
+own data: loose files and patch MPQs, in the usual priority order. Nothing is downloaded and
+nothing is converted on disk: each file is prepared for the 3.3.5 engine in memory when it opens.
+
+The model adapter (`Engine/Source/Retail/RetailModel.cpp`) is taken from the Esteria fork of
+wowdecomp (STRHercules, `Esteria` branch, commits 24cd913, 003789a, 1f8a3e2, 3611992). Its CASC/CDN
+source is replaced by `Engine/Source/Retail/LocalSource.cpp`; character customization, body
+sliders, the CDN downloader and the item importers are not included.
+
+## Build
+
+1. In CMake, tick `WOWDECOMP_RETAIL_MODELS`, Configure, Generate, and rebuild.
+2. Re-translate the Vulkan shaders with the larger vertex constant file and deploy them:
+
+   ```
+   python Tools/VulkanShaders/translate_shaders.py --client <client folder> --retail-palette --deploy
+   ```
+
+   Retail rigs draw with bigger bone palettes than 3.3.5 models. With this option the Vulkan device
+   offers 1024 vertex constant rows instead of 256 (a Retail skin can share one palette of about 250 bones; the Dracthyr dragon's is 246). Stock models pick the same skin profiles either
+   way, so old content is unaffected; Retail models with large palettes need the re-translated set.
+   D3D9 and OpenGL keep the old limit, so run with Vulkan.
+
+## Adding a Retail model
+
+1. Export the model with wow.export (or similar) **with its original files**: the `.m2`, its
+   `00.skin` (and other skins), its `.skel` if it has one, its `.anim` files and its `.blp`
+   textures. Keep them at their listfile paths.
+2. Put them in a patch MPQ or loose in `Data`. Point a CreatureModelData row (or any other model
+   reference) at the `.m2` path as usual (`Creature\Foo\Foo.mdx` style works, as for stock models).
+3. Give the client a FileDataID -> path table. Either works, and both can be present:
+   - **`TextureFilePath.db2` and `ModelFilePath.db2`** in `DBFilesClient` (loose or in an MPQ), the
+     tables WarcraftXL's wxl-db2 uses. If your client already has them, nothing else is needed. They
+     are read once at the first Retail reference and searched in place (WDC1 layout).
+   - **`Data\Retail\listfile.csv`** beside the executable, rows `FileDataID;path`. Its rows win
+     over the DB2 tables. The community listfile works; a trimmed one loads faster:
+
+     ```
+     python Tools/RetailModels/make_listfile.py --listfile community-listfile.csv --export <export folder> --out <client>\Data\Retail\listfile.csv
+     ```
+
+     `WOW_RETAIL_LISTFILE` overrides the location.
+
+### What needs a path table
+
+Inside an MD21 model every dependency is a FileDataID.
+
+| Reference | Without a path table entry |
+|---|---|
+| Skins (`00.skin` ...) | Falls back to `<model name>00.skin` next to the model |
+| External animations | Falls back to `<model name><id>-<variation>.anim` next to the model |
+| The model's skeleton | Falls back to `<model name>.skel` next to the model |
+| Parent skeletons (SKPD) | **Needs an entry** |
+| Textures | **Needs an entry** (they are opened as `retail/<FileDataID>.blp`); a missing one draws green |
+
+A model is recognised by its header (`MD21`), whatever its path, so a stock 3.3.5 model with the
+same name keeps loading as before.
+
+## What is supported
+
+- MD21 models, versions 272 to 274, including models without bones of their own (`SKID`): the
+  `.skel` is spliced in, and parent skeletons (`SKPD`) are merged.
+- External animations, both the flat format and the chunked `AFM2` / `AFSB` / `AFSA` format.
+- Skins with more than 65535 indices (the high bits of the index start in the level field).
+- Retail blend modes 7 to 14, mapped to the closest legacy mode.
+- Flying creatures: FlyStand / FlyFly are swapped into the slots the 3.3.5 engine plays in flight.
+
+## Limitations
+
+- **Particle emitters are omitted.** Retail emitters use a layout the legacy emitter cannot read;
+  the mesh, ribbons and animation are unaffected.
+- **Glow layers are dropped.** Retail shader 0x8003 (a base layer plus an additive glow texture)
+  draws only its base layers; the glow needs its own pixel shader, which is not ported.
+- **Other multi-texture Retail shaders** draw with their first texture.
+- Textures must be BLP2 version 1, the client's native format.
+- No character customization: Retail player bodies load as models, but the customization system,
+  equipment on Retail bodies and the race tables are not part of this.
+
+## Troubleshooting
+
+`Logs\RetailModels.log` names every file that failed and why ("FileDataID 123: cannot open ...",
+"Model needs its SKEL skeleton file", "Supported Retail M2 versions are 272-274", ...). The first
+lines say how many paths were loaded from listfile.csv and the FilePath DB2s. A reference that
+cannot be found is logged once with the FileDataID or the paths that were tried.
+
+## Retail customization tables
+
+The same build option adds a reader for the Retail customization DB2s (WDC5, from the Esteria fork,
+itself derived from WarcraftXL wxl-db2). Put these in `DBFilesClient` (loose or in a patch MPQ),
+named as in Retail:
+
+`chrracexchrmodel.db2`, `chrmodel.db2`, `chrcustomizationoption.db2`, `chrcustomizationchoice.db2`,
+`chrcustomizationelement.db2`, `chrcustomizationgeoset.db2`, `chrcustomizationskinnedmodel.db2`,
+`chrcustomizationmaterial.db2`, `chrcustomizationcondmodel.db2`, `charcomponenttexturelayouts.db2`,
+`charcomponenttexturesections.db2`, `chrmodeltexturelayer.db2`, `creaturedisplayinfo.db2`,
+`creaturemodeldata.db2`, `creaturedisplayinfogeosetdata.db2`, `texturefiledata.db2`, and
+`chrcustomizationreq.db2` and `chrcustomizationreqchoice.db2` (choice requirements).
+
+They must come from Retail 12.1.5 (`WOWSTATIC_12_1_5_70077`): each table's layout hash is checked,
+and a table from another build is refused rather than misread. They load on first use; the console
+command `retailTables` loads them on demand and lists the row counts. `Logs\RetailTables.log` has
+each table's rows, load time, or error.
+
+## Retail character bodies (geosets)
+
+When a character's body model is a Retail model (for example `character\human\male\humanmale_hd.m2`
+placed over the model a ChrRaces display points at), `CCharacterComponent::GeosRenderPrep` takes its
+geosets from the customization tables instead of the 3.3.5 hair and facial-hair rules:
+
+1. The client race is mapped to a Retail ChrRaces ID. Races 1-11 are the same in both; other races
+   need a row in `Data\Retail\races.csv` (`clientRace;retailRace`, one per line; a retail ID of 0
+   removes a mapping).
+2. ChrRaceXChrModel gives the ChrModel for the character's sex.
+3. Five options follow the character's 3.3.5 values, so the character creation and barbershop
+   selectors work on Retail bodies: skin colour, face, hair style, hair colour, and beard (men) or
+   makeup/earrings (women). Value N picks the Nth choice, wrapping when the 3.3.5 range is longer.
+   Every other option uses its default choice (the first by OrderIndex that a new character may
+   take) until the full Retail choices are stored per character. A character only gets choices its
+   class may take (ChrCustomizationReq): NPC-only looks are left out, and Death Knight skins and eye
+   glows are kept for Death Knights, whose eye colour defaults to the glow. Achievement, quest and
+   item unlocks are not checked.
+4. The choices' ChrCustomizationElement rows give the geosets (an element tied to a related choice
+   applies only when that choice is taken too). Feet, torso, hands, head, eyes and eye overlays get
+   their base geoset when no choice names them.
+
+Everything above geoset 2000 is hidden first, as the 3.3.5 reset only reaches 2000.
+`Logs\RetailCharacter.log` lists, per Retail race and sex, the ChrModel, the default choices and the
+resulting geosets.
+
+## Retail character textures
+
+The same characters get their textures from the Retail tables too. Each chosen
+ChrCustomizationMaterial is matched to the model layout's ChrModelTextureLayer rows; TextureFileData
+gives the BLP, read by FileDataID through the path tables. The layers are composed (the compositor is
+Esteria's `Compose.cpp`): the body skin sheet at the layout's size (2048x1024 for Retail Humans, its
+left half being the 3.3.5 body sections at twice the size and its right half the face), and hair,
+eyes and the other types at the size of their first layer. Equipped items keep their 3.3.5 section
+textures, stretched over the matching Retail sections. `Logs\RetailCharacter.log` lists the
+textures each look composed and any file that could not be read.
+
+## Retail customization rows
+
+The Retail options the 3.3.5 selectors do not drive (Eyebrows, Ears, Eye Color, Mustache, Piercings,
+...) can be set on the character being created, from Lua in GlueXML:
+
+- `GetRetailCustomizationCount()` -> the number of rows (0 when the body is not a Retail model)
+- `GetRetailCustomizationInfo(index)` -> name, current choice, number of choices (1-based)
+- `CycleRetailCustomization(index, delta)` -> steps the row, wrapping
+- `RandomizeCharCustomization()` also randomizes the rows.
+
+The rows follow the character's race, sex and class, and a row only offers choices the other choices
+allow. The console command `retailCustomize` lists them; `retailCustomize <row> <delta>` steps one.
+The choices are kept on the client only for now; they are not yet sent to the server.
