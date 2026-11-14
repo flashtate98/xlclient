@@ -39,6 +39,27 @@ const uint32_t s_fogModes[M2BLEND_COUNT] = { 1, 1, 1, 2, 2, 3, 4, 2 };
 // STATIC: 0x00AF58A8
 static C44Matrix s_identity;
 
+// FlashWOW: a skin section's bone combos are trusted to name bones the model has; one that didn't
+// read past m_boneMatrices (page heap, a sky model in DayNight::DrawSky, 2026-11-14). Such a combo or
+// bone now reads an identity matrix instead, and the model is logged (the first few times).
+static const C44Matrix& BoneForCombo(const CM2Model* model, const M2Data* data, uint32_t combo) {
+    static C44Matrix s_fallback;
+    static int32_t s_logged = 0;
+    const uint32_t bone = combo < data->m_boneCombos.m_count ? data->m_boneCombos[combo] : UINT32_MAX;
+
+    if (bone < data->m_bones.m_count && model->m_boneMatrices) {
+        return model->m_boneMatrices[bone];
+    }
+
+    if (s_logged < 16) {
+        s_logged++;
+        DebugLog("Bone combo %u (bone %u) out of range (%u combos, %u bones): %s\n", combo, bone, data->m_boneCombos.m_count, data->m_bones.m_count, model->m_shared ? model->m_shared->m_fileNameWithoutPath : "?");
+    }
+
+    s_fallback.Identity();
+    return s_fallback;
+}
+
 // VERIFY: 6a3520ef manual
 // OFFSET: 0x0081F330
 CM2SceneRender::CM2SceneRender(CM2Scene* scene) {
@@ -346,7 +367,7 @@ void CM2SceneRender::SetupMaterial() {
         } else if (this->m_curSkinSection->m_boneCount != 1) {
             GxRsSet(GxRs_NormalizeNormals, 1);
         } else {
-            const C44Matrix& bone = this->m_curModel->m_boneMatrices[this->m_data->m_boneCombos[this->m_curSkinSection->m_boneComboIndex]];
+            const C44Matrix& bone = BoneForCombo(this->m_curModel, this->m_data, this->m_curSkinSection->m_boneComboIndex);
             normalize = fabsf(bone.a2 * bone.a2 + bone.a1 * bone.a1 + bone.a0 * bone.a0 - 1.0f) > 0.001f;
             GxRsSet(GxRs_NormalizeNormals, normalize);
         }
@@ -453,7 +474,7 @@ void CM2SceneRender::DrawBatch() {
         float* constants = g_theGxDevicePtr->ShaderConstantsLock(GxSh_Vertex) + 31 * 4;
 
         for (uint32_t i = 0; i < this->m_curSkinSection->m_boneCount; i++) {
-            const C44Matrix& bone = this->m_curModel->m_boneMatrices[this->m_data->m_boneCombos[i + this->m_curSkinSection->m_boneComboIndex]];
+            const C44Matrix& bone = BoneForCombo(this->m_curModel, this->m_data, i + this->m_curSkinSection->m_boneComboIndex);
             constants[0] = bone.a0;
             constants[1] = bone.b0;
             constants[2] = bone.c0;
@@ -669,7 +690,7 @@ void CM2SceneRender::DrawBatchDoodad(M2Element* elements, uint32_t* indices) {
                 CM2Model* model = elements[indices[done + n]].m_model;
 
                 for (uint32_t i = 0; i < this->m_curSkinSection->m_boneCount; i++) {
-                    const C44Matrix& bone = model->m_boneMatrices[this->m_data->m_boneCombos[i + this->m_curSkinSection->m_boneComboIndex]];
+                    const C44Matrix& bone = BoneForCombo(model, this->m_data, i + this->m_curSkinSection->m_boneComboIndex);
                     constants[0] = bone.a0;
                     constants[1] = bone.b0;
                     constants[2] = bone.c0;
@@ -717,7 +738,7 @@ void CM2SceneRender::DrawBatchDoodad(M2Element* elements, uint32_t* indices) {
                 vertices += 32 * section->m_vertexCount;
 
                 if (!normalize) {
-                    const C44Matrix& bone = model->m_boneMatrices[this->m_data->m_boneCombos[section->m_boneComboIndex]];
+                    const C44Matrix& bone = BoneForCombo(model, this->m_data, section->m_boneComboIndex);
                     normalize = fabsf(bone.a2 * bone.a2 + bone.a1 * bone.a1 + bone.a0 * bone.a0 - 1.0f) > 0.001f;
                 }
             }
