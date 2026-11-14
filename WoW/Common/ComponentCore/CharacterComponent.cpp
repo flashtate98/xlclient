@@ -1020,6 +1020,23 @@ void CCharacterComponent::PasteOpaque(HTEXTURECACHE texture, const BlpPalPixel* 
     }
 }
 
+// FlashWOW: the end of a mip's data in the cached file. A BLP's smallest mips can store less alpha
+// than a whole byte per row needs (Mail_Blood_01Green_Chest_TL_F.blp's 1x1 mip has no 4-bit alpha byte
+// at all), and the pastes below read it anyway: one byte past the end of the file (page heap,
+// 2026-11-14). Alpha past this end reads as 0 (the pixel keeps what is under it).
+static const uint8_t* MipDataEnd(HTEXTURECACHE texture, uint32_t mip) {
+    const CACHEENTRY* entry = texture;
+    const uint8_t* base = reinterpret_cast<const uint8_t*>(entry->m_data);
+    const uint8_t* fileEnd = base + entry->m_size;
+    const uint32_t size = entry->m_data->m_mipSizes[mip];
+    const uint8_t* end = base + entry->m_data->m_mipOffsets[mip] + size;
+    return size && end < fileEnd ? end : fileEnd;   // a size the file left at 0: its end
+}
+
+static inline uint8_t AlphaAt(const uint8_t* alpha, uint32_t index, const uint8_t* limit) {
+    return alpha + index < limit ? alpha[index] : 0;
+}
+
 // VERIFY: 212be31e manual
 // OFFSET: 0x004E84F0
 void CCharacterComponent::PasteTransparent1Bit(HTEXTURECACHE texture, const BlpPalPixel* pal, MipBits* dstMips, C2iVector& dstPos, uint32_t dstStride, C2iVector& srcPos, C2iVector& srcSize, TCTEXTUREINFO& srcInfo, uint32_t srcMipLevel, int32_t dstMipOffset) {
@@ -1036,12 +1053,13 @@ void CCharacterComponent::PasteTransparent1Bit(HTEXTURECACHE texture, const BlpP
         uint8_t* dst = reinterpret_cast<uint8_t*>(dstMips->m_mip[mip + dstMipOffset]) + dstStride * dstPos.y + 4 * dstPos.x;
         const uint8_t* end = src + srcWidth * height;
         const uint8_t* alpha = end;
+        const uint8_t* limit = MipDataEnd(texture, mip);
 
         for (; src < end; src += srcWidth, dst += dstStride, alpha += srcWidth >> 3) {
             uint32_t* pixel = reinterpret_cast<uint32_t*>(dst);
 
             for (uint32_t x = 0; x < width; x++) {
-                if ((1 << (x & 7)) & alpha[x >> 3]) {
+                if ((1 << (x & 7)) & AlphaAt(alpha, x >> 3, limit)) {
                     const BlpPalPixel& color = pal[src[x]];
                     pixel[x] = color.m_b | ((color.m_g | ((color.m_r | 0xFFFFFF00) << 8)) << 8);
                 }
@@ -1074,6 +1092,7 @@ void CCharacterComponent::PasteTransparent4Bit(HTEXTURECACHE texture, const BlpP
         const uint8_t* src = static_cast<const uint8_t*>(TextureCacheGetMip(texture, mip));
         const uint8_t* end = src + srcWidth * height;
         const uint8_t* alpha = end;
+        const uint8_t* limit = MipDataEnd(texture, mip);
         uint8_t* dst = reinterpret_cast<uint8_t*>(dstMips->m_mip[mip + dstMipOffset]) + dstStride * dstPos.y + 4 * dstPos.x;
 
         for (; src < end; src += srcWidth, dst += dstStride, alpha += srcWidth >> 1) {
@@ -1084,7 +1103,7 @@ void CCharacterComponent::PasteTransparent4Bit(HTEXTURECACHE texture, const BlpP
                 uint32_t shift = 4 * (x & 1);
                 // FlashWOW: two pixels share an alpha byte (as PasteTransparent4BitScale reads it); alpha[x]
                 // read past the end of the texture (page heap, 2026-11-14) and gave the wrong pixel's alpha.
-                uint32_t a = (alpha[x >> 1] & (0xF << shift)) >> shift;
+                uint32_t a = (AlphaAt(alpha, x >> 1, limit) & (0xF << shift)) >> shift;
                 a |= a << 4;
                 pixel[3] = 0xFF;
                 pixel[2] = ((255 - a) * pixel[2] + a * color.m_r) >> 8;
@@ -1119,6 +1138,7 @@ void CCharacterComponent::PasteTransparent8Bit(HTEXTURECACHE texture, const BlpP
         const uint8_t* src = static_cast<const uint8_t*>(TextureCacheGetMip(texture, mip));
         const uint8_t* end = src + srcWidth * height;
         const uint8_t* alpha = end;
+        const uint8_t* limit = MipDataEnd(texture, mip);
         uint8_t* dst = reinterpret_cast<uint8_t*>(dstMips->m_mip[mip + dstMipOffset]) + dstStride * dstPos.y + 4 * dstPos.x;
 
         for (; src < end; src += srcWidth, alpha += srcWidth, dst += dstStride) {
@@ -1126,7 +1146,7 @@ void CCharacterComponent::PasteTransparent8Bit(HTEXTURECACHE texture, const BlpP
 
             for (uint32_t x = 0; x < width; x++, pixel += 4) {
                 const BlpPalPixel& color = pal[src[x]];
-                uint32_t a = alpha[x];
+                uint32_t a = AlphaAt(alpha, x, limit);
                 pixel[3] = 0xFF;
                 pixel[2] = ((255 - a) * pixel[2] + a * color.m_r) >> 8;
                 pixel[1] = ((255 - a) * pixel[1] + a * color.m_g) >> 8;
