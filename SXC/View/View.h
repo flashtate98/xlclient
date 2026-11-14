@@ -53,8 +53,9 @@ namespace SXC::View {
     // as the camera rose: Seyri, 2026-11-05).
     void Sky(bool on);
 
-    // The mirror this frame: drawn, at this plane (world z).
-    bool Mirror(float& planeZ);
+    // The mirror this frame: drawn, at this plane (world z), its share (1 full, less while the water is far
+    // enough off that it fades in).
+    bool Mirror(float& planeZ, float& fade);
 
     // The Water panel's part: the switch, the size, what was copied.
     void DrawPanel();

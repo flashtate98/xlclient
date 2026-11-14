@@ -655,7 +655,7 @@ namespace SXC::Water {
         }
 
         DomeOf(waves);
-        waves.mirror = SXC::View::Mirror(waves.mirrorZ);   // the world mirrored at the water (drawn once the world's opaque part is)
+        waves.mirror = SXC::View::Mirror(waves.mirrorZ, waves.mirrorFade);   // the world mirrored at the water (drawn once the world's opaque part is)
 
         // The looks of terrain water by place (none while the panel tests its values over every water).
         const SXC::Water::LookGrid& grid = SXC::Water::SurfaceGrid();

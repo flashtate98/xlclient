@@ -454,7 +454,21 @@ namespace SXC::Water {
             const auto now = std::chrono::steady_clock::now();
             const bool moved = s_chunkX != s_gridChunkX || s_chunkY != s_gridChunkY;
 
-            if (!moved && s_gridGeneration == s_generation && now - s_gridBuilt < std::chrono::milliseconds(500)) {
+            // A chunk that has loaded since rebuilds it at once: its water drew with the defaults until then,
+            // then switched to its place's look (a still lake seen from afar popped from waves to a mirror,
+            // Seyri 2026-11-13).
+            bool arrived = false;
+
+            if (!moved && s_grid.valid) {
+                for (int32_t k = 0; k < kGridSize * kGridSize; k++) {
+                    if (!s_cells[k].known && ChunkAt(s_grid.originX + k % kGridSize, s_grid.originY + k / kGridSize)) {
+                        arrived = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!moved && !arrived && s_gridGeneration == s_generation && now - s_gridBuilt < std::chrono::milliseconds(500)) {
                 return;
             }
 

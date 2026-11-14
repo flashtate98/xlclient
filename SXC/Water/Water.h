@@ -38,9 +38,11 @@ namespace SXC::Water {
         float domeRows[8] = {};
         float domeColours[122][4] = {};
         // The mirror (SXC/View: the world drawn mirrored at the water's height, kb: second-camera): drawn
-        // this frame at `mirrorZ` (world z); the water reads it where it lies at that height.
+        // this frame at `mirrorZ` (world z); the water reads it where it lies at that height, `mirrorFade` of
+        // it (fading in while the water is far off).
         bool mirror = false;
         float mirrorZ = 0.0f;
+        float mirrorFade = 1.0f;
         // The look grid (SXC/Water/Surface.h's LookGrid): 64 x 64 chunk indices into up to 64 packed looks of
         // 20 floats; null when there is none (the draws then take their own look).
         const uint8_t* lookIndex = nullptr;

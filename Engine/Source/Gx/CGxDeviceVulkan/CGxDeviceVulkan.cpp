@@ -713,6 +713,7 @@ bool CGxDeviceVulkan::SxcWaterCapture(const SXC::Water::Waves& waves, bool* firs
     std::memcpy(in.waves.domeColours, waves.domeColours, sizeof in.waves.domeColours);
     in.waves.mirror = waves.mirror;
     in.waves.mirrorZ = waves.mirrorZ;
+    in.waves.mirrorFade = waves.mirrorFade;
     in.looks.index = waves.lookIndex;
     in.looks.palette = waves.lookPalette;
     in.looks.count = waves.lookCount;

@@ -56,7 +56,7 @@ namespace
         float rippleLook[4];   ///< its current layer, 1 when stepped this frame, the strength, how far it shows (yd)
         float domeRows[8];     ///< the sky's dome: its seven rows' elevation (sine), [7] 1 when drawn
         float domeColours[122][4];   ///< its vertices' colours: the zenith, four rings of 24, the fog ring, the nadir
-        float mirror[4];       ///< the mirror (Vulkan/View.cpp): 1 when drawn this frame, the plane's height (world z), 0, 0
+        float mirror[4];       ///< the mirror (Vulkan/View.cpp): 1 when drawn this frame, the plane's height (world z), its share (fading in), 0
     };
 
     // The waves (Shaders/WaterWaves.glsl): N x N per cascade, three cascades.
@@ -975,6 +975,7 @@ namespace
         {
             p.mirror[0] = 1.0f;
             p.mirror[1] = in.waves.mirrorZ;
+            p.mirror[2] = in.waves.mirrorFade;
         }
         gxvk::vk::ripples::Look(p.rippleGrid, p.rippleLook);
         p.rippleLook[2] = in.rippleStrength;
