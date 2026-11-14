@@ -134,6 +134,10 @@ namespace gxvk::vk::frame
 
         // Larger than a chunk, or the ring is full: a buffer for this request alone, retired with
         // the frame.
+        // FlashWOW: kMaxDedicated was 256. A frame that brings in a zone's worth of large textures
+        // (flying into Zul'Drak with HD texture patches) went past it, the uploads after were refused
+        // and never asked for again: 1285 of them in one session (gx.log, 2026-11-14), each a model
+        // drawn flat red or black from then on. 4096 now; the buffers go back with the frame.
         if (slot.dedicatedCount == kMaxDedicated)
         {
             if (!s.loggedStagingFail)

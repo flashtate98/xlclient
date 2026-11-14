@@ -49,7 +49,7 @@ namespace gxvk::vk::frame::detail
     /// past them, or larger than a chunk, gets a buffer of its own for the frame.
     constexpr VkDeviceSize kStagingChunk     = 8u * 1024u * 1024u;
     constexpr uint32_t     kMaxStagingChunks = 64;
-    constexpr uint32_t     kMaxDedicated     = 256;
+    constexpr uint32_t     kMaxDedicated     = 4096;   // FlashWOW: was 256; see Stage()
     constexpr VkDeviceSize kStagingAlign     = 16;
 
     /// A ring chunk kept past the frame's need for this many frames is given back.
