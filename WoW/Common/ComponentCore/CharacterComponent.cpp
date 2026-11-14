@@ -3620,8 +3620,35 @@ void CCharacterComponent::GeosRenderPrep() {
     // The later character models' groups 20-29 show their first variant; a Retail body already picked its
     // own from the customization tables.
     if (!retailBody) {
+        // FlashWOW: a group that has no first variant shows whole, as it did before these groups were
+        // hidden above (the 3.3.5 client never hid them). The retroported Dwarf NPC models keep their
+        // feet in 2002 with no 2001, and lost them.
+        bool hasFirst[10];
+        bool known = false;
+
+        for (bool& first : hasFirst) {
+            first = false;
+        }
+
+        if ((model->m_fFlags & 1) && model->m_shared && model->m_shared->m_skinData) {
+            known = true;
+            const auto& sections = model->m_shared->m_skinData->m_skinSections;
+
+            for (uint32_t i = 0; i < sections.m_count; i++) {
+                const uint32_t id = sections[i].m_skinSectionId & 0xFFFF;
+
+                if (id >= 2000 && id <= 2999 && id % 100 == 1) {
+                    hasFirst[id / 100 - 20] = true;
+                }
+            }
+        }
+
         for (uint32_t group = 20; group <= 29; group++) {
-            this->m_data.m_model->SetGeometryVisible(group * 100 + 1, group * 100 + 1, 1);
+            if (!known || hasFirst[group - 20]) {
+                this->m_data.m_model->SetGeometryVisible(group * 100 + 1, group * 100 + 1, 1);
+            } else {
+                this->m_data.m_model->SetGeometryVisible(group * 100 + 1, group * 100 + 99, 1);
+            }
         }
     }
 
