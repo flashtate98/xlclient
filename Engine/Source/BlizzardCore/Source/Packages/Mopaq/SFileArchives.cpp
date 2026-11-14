@@ -1,9 +1,15 @@
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include "Engine/Source/BlizzardCore/Source/Packages/iounit/IOAlignUnit.h"
 #include "Engine/Source/BlizzardCore/Source/Packages/iounit/IOChecksumUnit.h"
@@ -1579,6 +1585,91 @@ bool Blizzard::Mopaq::SFileCreateArchive(const char* path, int32_t priority, uin
     return false;
 }
 
+// FlashWOW: a folder patch (Data\Patch-B.MPQ\ and the like, opened as a directory) answered every lookup it
+// had no file for with a disk check, so a name that is in none of them cost one check per folder (11 of
+// them): up to 4.8 s at a time in hangs.log (2026-11-12). Each folder is now listed once, at its first
+// lookup, and a name it does not list fails without touching the disk. Folder patches don't change while
+// the game runs; restart after adding files to one.
+namespace {
+    std::string FolderKey(const char* name) {
+        std::string key;
+        for (const char* c = name; *c; ++c) {
+            const char lower = *c == '/' ? '\\' : static_cast<char>(tolower(static_cast<unsigned char>(*c)));
+            if (lower != '\\' || (!key.empty() && key.back() != '\\')) {
+                key += lower;   // separators doubled or leading dropped
+            }
+        }
+        return key;
+    }
+
+    struct FolderIndex {
+        std::once_flag built;
+        std::unordered_set<std::string> files;   // relative to the folder, lowercase, backslashes
+        bool usable = false;
+    };
+
+    // Whether the folder archive may hold `name` (relative to it); true when it could not be listed.
+    bool FolderMayHold(const std::string& directory, const char* name) {
+        static std::mutex lock;
+        static std::unordered_map<std::string, std::unique_ptr<FolderIndex>> indexes;
+
+        if (Blizzard::File::GetRootChars(name)) {
+            return true;
+        }
+
+        FolderIndex* index;
+        {
+            std::lock_guard<std::mutex> guard(lock);
+            std::unique_ptr<FolderIndex>& slot = indexes[directory];
+
+            if (!slot) {
+                slot.reset(new FolderIndex());
+            }
+
+            index = slot.get();
+        }
+
+        std::call_once(index->built, [&]() {
+            char root[260];
+
+            if (Blizzard::File::GetRootChars(directory.c_str())) {
+                Blizzard::String::Copy(root, directory.c_str(), sizeof(root));
+            } else {
+                System_SFile::ConvertRelativePathName(directory.c_str(), root);
+            }
+
+            std::error_code error;
+            size_t length = strlen(root);
+
+            while (length > 1 && (root[length - 1] == '\\' || root[length - 1] == '/')) {
+                root[--length] = '\0';
+            }
+
+            const std::filesystem::path base(root);
+
+            if (!std::filesystem::is_directory(base, error)) {
+                return;
+            }
+
+            try {   // a name the code page can't hold throws from string(): then the folder isn't indexed
+                std::filesystem::recursive_directory_iterator it(base, std::filesystem::directory_options::skip_permission_denied, error);
+
+                for (; !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error)) {
+                    if (it->is_regular_file(error)) {
+                        index->files.insert(FolderKey(it->path().lexically_relative(base).string().c_str()));
+                    }
+                }
+
+                index->usable = !error;
+            } catch (...) {
+                index->files.clear();
+            }
+        });
+
+        return !index->usable || index->files.count(FolderKey(name)) != 0;
+    }
+}
+
 // VERIFY: 962c3879 manual
 // OFFSET: 0x0045F7D0
 int32_t FindFileInOneArchive(System_SFile::ARCHIVEREC* archive, const char* name, const uint64_t& hash, const Blizzard::Util::Digest<16>& md5, uint32_t flags, System_SFile::FileLookup* lookup) {
@@ -1607,6 +1698,10 @@ int32_t FindFileInOneArchive(System_SFile::ARCHIVEREC* archive, const char* name
         }
 
         if (!archive->m_file) {
+            if (prefix && !FolderMayHold(archive->m_directPath, &path[prefix])) {
+                return 0;
+            }
+
             if (!lookup->m_checkedDisk || prefix) {
                 if (System_SFile::CheckFileExistsOnDisk(name, 1, lookup->m_path)) {
                     lookup->m_archive = archive;
