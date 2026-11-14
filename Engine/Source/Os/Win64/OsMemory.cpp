@@ -1,5 +1,6 @@
 #if defined(WOWDECOMP_ARCH_64)
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <iterator>
@@ -20,8 +21,12 @@ namespace {
     const uintptr_t kArenaSize = 64u * 1024u * 1024u;
     const uintptr_t kAlign = 16;
 
+    // Where no 64 MB gap is left near an anchor, smaller arenas, before a reservation per block.
+    const uintptr_t kArenaSizes[] = { kArenaSize, 16u * 1024u * 1024u, 4u * 1024u * 1024u };
+
     struct Arena {
         uintptr_t base = 0;
+        uintptr_t size = 0;
         uintptr_t committed = 0;               // bytes committed from base
         std::map<uintptr_t, uintptr_t> free;   // offset -> size, neighbours merged
         std::map<uintptr_t, uintptr_t> used;   // offset -> size
@@ -30,12 +35,15 @@ namespace {
     std::vector<Arena*> s_arenas;
     SRWLOCK s_lock = SRWLOCK_INIT;
 
-    // The address space walked from the anchor for `bytes` (granularity-rounded) of free space within
-    // the near range, reserved (and committed when `commit`). The original OsAllocNear's search.
+    // `bytes` (granularity-rounded) of free space within the near range of the anchor, as near to it as
+    // the free gaps allow, reserved (and committed when `commit`). One pass upward through the whole range:
+    // VirtualQuery describes a region from the queried page upward, so the walk down from the anchor it
+    // replaces moved a page per call and never saw a gap bigger than a page - ~390,000 calls for nothing on
+    // every new arena once the space above the anchor was full (freezes of 30 s and more, 2026-11-13).
     uintptr_t FindNear(uintptr_t center, uintptr_t bytes, bool commit) {
         SYSTEM_INFO info;
         GetSystemInfo(&info);
-        uintptr_t granularity = info.dwAllocationGranularity;
+        const uintptr_t granularity = info.dwAllocationGranularity;
         bytes = (bytes + granularity - 1) & ~(granularity - 1);
         uintptr_t minimum = reinterpret_cast<uintptr_t>(info.lpMinimumApplicationAddress);
         uintptr_t maximum = reinterpret_cast<uintptr_t>(info.lpMaximumApplicationAddress);
@@ -50,47 +58,40 @@ namespace {
             maximum = center + s_nearRange;
         }
 
+        // Each free gap's place nearest the anchor, tried nearest first (another thread may take one first).
+        std::vector<std::pair<uintptr_t, uintptr_t>> candidates;   // distance, address
         MEMORY_BASIC_INFORMATION region;
-        uintptr_t address = center;
+        uintptr_t address = minimum;
 
         while (address < maximum && VirtualQuery(reinterpret_cast<void*>(address), &region, sizeof(region))) {
-            uintptr_t base = reinterpret_cast<uintptr_t>(region.BaseAddress);
-            uintptr_t end = base + region.RegionSize;
+            const uintptr_t base = reinterpret_cast<uintptr_t>(region.BaseAddress);
+            const uintptr_t end = base + region.RegionSize;
+
+            if (end <= address) {
+                break;
+            }
 
             if (region.State == MEM_FREE) {
-                uintptr_t candidate = ((base > address ? base : address) + granularity - 1) & ~(granularity - 1);
+                const uintptr_t low = ((base > minimum ? base : minimum) + granularity - 1) & ~(granularity - 1);
+                const uintptr_t high = end < maximum ? end : maximum;
 
-                if (candidate + bytes <= end && candidate + bytes <= maximum) {
-                    if (void* ptr = VirtualAlloc(reinterpret_cast<void*>(candidate), bytes, type, protect)) {
-                        return reinterpret_cast<uintptr_t>(ptr);
-                    }
+                if (low + bytes <= high) {
+                    const uintptr_t last = (high - bytes) & ~(granularity - 1);
+                    uintptr_t at = center & ~(granularity - 1);
+                    at = at < low ? low : at > last ? last : at;
+                    candidates.emplace_back(at > center ? at - center : center - at, at);
                 }
             }
 
             address = end;
         }
 
-        address = center;
+        std::sort(candidates.begin(), candidates.end());
 
-        while (address > minimum && VirtualQuery(reinterpret_cast<void*>(address - 1), &region, sizeof(region))) {
-            uintptr_t base = reinterpret_cast<uintptr_t>(region.BaseAddress);
-            uintptr_t end = base + region.RegionSize;
-
-            if (end > address) {
-                end = address;
+        for (const auto& c : candidates) {
+            if (void* ptr = VirtualAlloc(reinterpret_cast<void*>(c.second), bytes, type, protect)) {
+                return reinterpret_cast<uintptr_t>(ptr);
             }
-
-            if (region.State == MEM_FREE && end - base >= bytes) {
-                uintptr_t candidate = (end - bytes) & ~(granularity - 1);
-
-                if (candidate >= base && candidate >= minimum) {
-                    if (void* ptr = VirtualAlloc(reinterpret_cast<void*>(candidate), bytes, type, protect)) {
-                        return reinterpret_cast<uintptr_t>(ptr);
-                    }
-                }
-            }
-
-            address = base;
         }
 
         return 0;
@@ -175,7 +176,7 @@ void* OsAllocNear(const void* anchor, size_t size) {
     AcquireSRWLockExclusive(&s_lock);
 
     for (Arena* a : s_arenas) {
-        if (Near(center, a->base, kArenaSize)) {
+        if (Near(center, a->base, a->size)) {
             if (uintptr_t p = Take(*a, bytes)) {
                 ReleaseSRWLockExclusive(&s_lock);
                 return reinterpret_cast<void*>(p);
@@ -185,12 +186,20 @@ void* OsAllocNear(const void* anchor, size_t size) {
 
     uintptr_t p = 0;
 
-    if (uintptr_t base = FindNear(center, kArenaSize, false)) {
-        Arena* a = new Arena();
-        a->base = base;
-        a->free.emplace(0, kArenaSize);
-        s_arenas.push_back(a);
-        p = Take(*a, bytes);
+    for (uintptr_t size : kArenaSizes) {
+        if (bytes > size / 4) {
+            break;
+        }
+
+        if (uintptr_t base = FindNear(center, size, false)) {
+            Arena* a = new Arena();
+            a->base = base;
+            a->size = size;
+            a->free.emplace(0, size);
+            s_arenas.push_back(a);
+            p = Take(*a, bytes);
+            break;
+        }
     }
 
     ReleaseSRWLockExclusive(&s_lock);
@@ -208,7 +217,7 @@ void OsFreeNear(void* ptr) {
     AcquireSRWLockExclusive(&s_lock);
 
     for (Arena* a : s_arenas) {
-        if (p >= a->base && p < a->base + kArenaSize) {
+        if (p >= a->base && p < a->base + a->size) {
             auto it = a->used.find(p - a->base);
 
             if (it != a->used.end()) {
