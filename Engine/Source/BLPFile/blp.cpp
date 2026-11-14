@@ -953,8 +953,12 @@ int32_t CBLPFile::LockChain2(const char* fileName, PIXEL_FORMAT format, MipBits*
         }
 
         if (!setImages) {
-            for (uint32_t i = 0; this->m_header.m_mipSizes[i]; i++) {
-                images[i].m_mip[0] = reinterpret_cast<C4Pixel*>(static_cast<uint8_t*>(this->m_inMemoryImage) + this->m_header.m_mipOffsets[i]);
+            // FlashWOW: start at the mip asked for. This handed out the file's mips from its first whatever
+            // mipLevel was, so a file larger than the 2048 the client loads (Project Reforged's 4096x2048
+            // wide loading screens for Kalimdor and the Eastern Kingdoms) put its 4096 mip in a 2048
+            // texture: every other row came from the image's other half.
+            for (uint32_t i = 0; i + mipLevel < 16 && this->m_header.m_mipSizes[i + mipLevel]; i++) {
+                images[i].m_mip[0] = reinterpret_cast<C4Pixel*>(static_cast<uint8_t*>(this->m_inMemoryImage) + this->m_header.m_mipOffsets[i + mipLevel]);
             }
 
             this->m_inMemoryImage = nullptr;
