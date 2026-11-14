@@ -1082,7 +1082,9 @@ void CCharacterComponent::PasteTransparent4Bit(HTEXTURECACHE texture, const BlpP
             for (uint32_t x = 0; x < width; x++, pixel += 4) {
                 const BlpPalPixel& color = pal[src[x]];
                 uint32_t shift = 4 * (x & 1);
-                uint32_t a = (alpha[x] & (0xF << shift)) >> shift;
+                // FlashWOW: two pixels share an alpha byte (as PasteTransparent4BitScale reads it); alpha[x]
+                // read past the end of the texture (page heap, 2026-11-14) and gave the wrong pixel's alpha.
+                uint32_t a = (alpha[x >> 1] & (0xF << shift)) >> shift;
                 a |= a << 4;
                 pixel[3] = 0xFF;
                 pixel[2] = ((255 - a) * pixel[2] + a * color.m_r) >> 8;
