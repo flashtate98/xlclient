@@ -23,6 +23,7 @@
 #include "SXC/Settings/Settings.h"
 #include "SXC/World/World.h"
 #include "WoW/Source/DB/DBClient/DBClient.h"
+#include "WoW/Source/DB/Rec/GroundEffectDoodadRec.h"
 #include "WoW/Source/DB/Rec/GroundEffectTextureRec.h"
 #include "WoW/Source/Object/ObjectClient/Player_C.h"
 #include "WoW/Source/ObjectMgrClient/ObjectMgrClient.h"
@@ -108,6 +109,14 @@ namespace {
     };
     std::vector<TextureRuns> s_frame;
     bool s_collecting = false;
+
+    // The grass editor's highlight (sxc.grass set_highlight): one plant model's runs drawn apart, in a colour
+    // (Shaders/GrassMarks.glsl's c162).
+    constexpr uint32_t kHighlightRow = 162;
+    uint32_t s_highlight = 0;
+    float s_highlightColour[4] = {};
+    std::chrono::steady_clock::time_point s_highlightSet;   // it lapses half a second after the last call
+    std::vector<TextureRuns> s_highlighted;
 
     struct Stats {
         uint32_t chunks = 0, plants = 0, runs = 0, draws = 0, built = 0, refused = 0, beyond = 0, copies = 0, copyRuns = 0, spilled = 0, deferred = 0;
@@ -888,15 +897,15 @@ namespace {
         return false;
     }
 
-    TextureRuns& RunsFor(CTexture* texture) {
-        for (TextureRuns& t : s_frame) {
+    TextureRuns& RunsFor(CTexture* texture, std::vector<TextureRuns>& frame) {
+        for (TextureRuns& t : frame) {
             if (t.texture == texture) {
                 return t;
             }
         }
 
-        s_frame.push_back(TextureRuns{ texture, {} });
-        return s_frame.back();
+        frame.push_back(TextureRuns{ texture, {} });
+        return frame.back();
     }
 }
 
@@ -911,6 +920,7 @@ namespace SXC::Grass {
         s_models.clear();
         s_chunks.clear();
         s_frame.clear();
+        s_highlighted.clear();
     }
 
     bool Enabled() {
@@ -962,11 +972,19 @@ namespace SXC::Grass {
             t.runs.clear();
         }
 
+        for (TextureRuns& t : s_highlighted) {
+            t.runs.clear();
+        }
+
         s_stats = Stats{};
         s_playerKnown = false;
         s_frameNumber++;
         s_frameStart = std::chrono::steady_clock::now();
         s_refusedAt = kNoReach;
+
+        if (s_highlight && s_frameStart - s_highlightSet > std::chrono::milliseconds(500)) {
+            s_highlight = 0;   // the editor stopped asking (its panel closed)
+        }
 
         if (CGPlayer_C* player = s_collecting && s_limits.on ? ClntObjMgrGetActivePlayerObj() : nullptr) {
             const C3Vector p = player->GetPosition();
@@ -1036,7 +1054,7 @@ namespace SXC::Grass {
                 continue;
             }
 
-            std::vector<Run>& runs = RunsFor(g.texture).runs;
+            std::vector<Run>& runs = RunsFor(g.texture, s_highlight && g.doodadId == s_highlight ? s_highlighted : s_frame).runs;
             runs.push_back(Run{ m.firstIndex, m.indexCount, m.vertexOffset, c.first + g.offset, g.count, 0, distance });
             s_stats.plants += g.count;
             s_stats.runs++;
@@ -1127,19 +1145,32 @@ namespace SXC::Grass {
 
         g_theGxDevicePtr->ShaderConstantsSet(GxSh_Vertex, kMarksFirstRow, &marks[0][0], kMarksRows);
 
-        for (TextureRuns& t : s_frame) {
-            if (t.runs.empty()) {
-                continue;
+        auto draw = [](std::vector<TextureRuns>& frame) {
+            for (TextureRuns& t : frame) {
+                if (t.runs.empty()) {
+                    continue;
+                }
+
+                // The copies after the plants, by copy number (each number binds its entry once).
+                std::stable_sort(t.runs.begin(), t.runs.end(), [](const Run& a, const Run& b) { return a.copy < b.copy; });
+
+                CGxTex* gxTex = TextureGetGxTex(t.texture, 0, nullptr);
+
+                if (gxTex && s_device->draw(gxTex, t.runs.data(), static_cast<uint32_t>(t.runs.size()))) {
+                    s_stats.draws++;
+                }
             }
+        };
 
-            // The copies after the plants, by copy number (each number binds its entry once).
-            std::stable_sort(t.runs.begin(), t.runs.end(), [](const Run& a, const Run& b) { return a.copy < b.copy; });
+        // The highlighted model after the rest, with its colour in c162 (0 for everything else).
+        const float none[4] = {};
+        g_theGxDevicePtr->ShaderConstantsSet(GxSh_Vertex, kHighlightRow, none, 1);
+        draw(s_frame);
 
-            CGxTex* gxTex = TextureGetGxTex(t.texture, 0, nullptr);
-
-            if (gxTex && s_device->draw(gxTex, t.runs.data(), static_cast<uint32_t>(t.runs.size()))) {
-                s_stats.draws++;
-            }
+        if (s_highlight) {
+            g_theGxDevicePtr->ShaderConstantsSet(GxSh_Vertex, kHighlightRow, s_highlightColour, 1);
+            draw(s_highlighted);
+            g_theGxDevicePtr->ShaderConstantsSet(GxSh_Vertex, kHighlightRow, none, 1);
         }
 
         s_last = s_stats;
@@ -1250,6 +1281,93 @@ namespace {
 
     const char* WXL_CALL ApiStatus() {
         return SXC::Grass::Status();
+    }
+
+    uint32_t WXL_CALL ApiEffectsNear(sxc_grass_effect* out, uint32_t capacity) {
+        CGPlayer_C* player = ClntObjMgrGetActivePlayerObj();
+
+        if (!player) {
+            return 0;
+        }
+
+        // The player's tile (x along -y from the map's corner, as CMap counts) and the 8 around it.
+        const C3Vector p = player->GetPosition();
+        constexpr float kTile = 16.0f * kChunkSize;
+        const int32_t tx = static_cast<int32_t>(std::floor((kMapCorner - p.y) / kTile));
+        const int32_t ty = static_cast<int32_t>(std::floor((kMapCorner - p.x) / kTile));
+        std::unordered_map<uint32_t, uint32_t> chunks;
+
+        for (int32_t j = ty - 1; j <= ty + 1; j++) {
+            for (int32_t i = tx - 1; i <= tx + 1; i++) {
+                CMapArea* area = i >= 0 && j >= 0 && i < 64 && j < 64 ? CMap::m_areaTable[64 * j + i] : nullptr;
+
+                if (!area || area->m_asyncObject) {
+                    continue;
+                }
+
+                for (CMapChunk* chunk : area->m_mapChunks) {
+                    if (!chunk || !chunk->m_header || !chunk->m_layers) {
+                        continue;
+                    }
+
+                    for (uint32_t l = 0; l < chunk->m_header->m_nLayers && l < 4; l++) {
+                        const uint32_t effect = chunk->m_layers[l].m_offectId;
+
+                        // A chunk once per effect (two layers may share one).
+                        if (effect && (l == 0 || std::none_of(chunk->m_layers, chunk->m_layers + l, [&](const auto& e) { return e.m_offectId == effect; }))) {
+                            chunks[effect]++;
+                        }
+                    }
+                }
+            }
+        }
+
+        std::vector<uint32_t> ids;
+
+        for (const auto& c : chunks) {
+            ids.push_back(c.first);
+        }
+
+        std::sort(ids.begin(), ids.end());
+
+        for (uint32_t k = 0; out && k < ids.size() && k < capacity; k++) {
+            sxc_grass_effect& e = out[k];
+            e = sxc_grass_effect{};
+            e.effect = ids[k];
+            e.chunks = chunks[ids[k]];
+
+            if (const GroundEffectTextureRec* rec = g_groundEffectTextureDB.GetRecord(static_cast<int32_t>(ids[k]))) {
+                for (int d = 0; d < 4; d++) {
+                    e.doodads[d] = rec->m_doodadID[d] > 0 ? static_cast<uint32_t>(rec->m_doodadID[d]) : 0;
+                    e.weights[d] = rec->m_doodadWeight[d] > 0 ? static_cast<uint32_t>(rec->m_doodadWeight[d]) : 0;
+                }
+
+                e.density = rec->m_density > 0 ? static_cast<uint32_t>(rec->m_density) : 0;
+            }
+        }
+
+        return static_cast<uint32_t>(ids.size());
+    }
+
+    const char* WXL_CALL ApiDoodadPath(uint32_t id) {
+        const GroundEffectDoodadRec* rec = g_groundEffectDoodadDB.GetRecord(static_cast<int32_t>(id));
+
+        if (!rec || !rec->m_doodadpath || !rec->m_doodadpath[0]) {
+            return nullptr;
+        }
+
+        static std::string path;
+        path = std::string("World\\NoDXT\\Detail\\") + rec->m_doodadpath;
+        return path.c_str();
+    }
+
+    void WXL_CALL ApiSetHighlight(uint32_t doodadId, const float* rgba) {
+        s_highlight = rgba && rgba[3] > 0.0f ? doodadId : 0;
+        s_highlightSet = std::chrono::steady_clock::now();
+
+        for (int k = 0; k < 4; k++) {
+            s_highlightColour[k] = rgba ? std::min(std::max(rgba[k], 0.0f), 1.0f) : 0.0f;
+        }
     }
 
     void WXL_CALL ApiSetEdges(const sxc_grass_edges* edges) {
@@ -1418,7 +1536,8 @@ namespace {
     const sxc_grass_api s_api = { sizeof(sxc_grass_api), ApiAvailable,          ApiSetMotion,          ApiSetDoodads,
                                   ApiDoodadInfo,         ApiStatus,             ApiSetDensityProvider, ApiSetDensityLimits,
                                   ApiSetEdges,           ApiSetPlacement,       ApiPlacement,          ApiSetSlopes,
-                                  ApiSlopes,             ApiInspect,            ApiSetMarks };
+                                  ApiSlopes,             ApiInspect,            ApiSetMarks,           ApiEffectsNear,
+                                  ApiDoodadPath,         ApiSetHighlight };
 }
 
 namespace SXC::Grass {
