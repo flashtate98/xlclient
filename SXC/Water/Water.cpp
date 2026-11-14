@@ -600,6 +600,47 @@ namespace SXC::Water {
         }
     }
 
+    // The LiquidType of the water nearest (x, y) within `reach` yd in the shore field (lava and slime passed
+    // by), 0 where none is: the water a player on its bank belongs to.
+    uint32_t NearestWaterType(float x, float y, float reach) {
+        const SXC::Water::ShoreMap& m = SXC::Water::ShoreField();
+
+        if (!m.valid) {
+            return 0;
+        }
+
+        constexpr float kHalfWorld = 17066.666f;
+        const int32_t cx = static_cast<int32_t>(std::floor((kHalfWorld - y) / SXC::Water::kShoreCell));
+        const int32_t cy = static_cast<int32_t>(std::floor((kHalfWorld - x) / SXC::Water::kShoreCell));
+        const int32_t r = static_cast<int32_t>(reach / SXC::Water::kShoreCell) + 1;
+        int32_t best = INT32_MAX;
+        uint32_t type = 0;
+
+        for (int32_t gy = std::max(cy - r, m.originY); gy <= std::min(cy + r, m.originY + SXC::Water::kShoreSize - 1); gy++) {
+            for (int32_t gx = std::max(cx - r, m.originX); gx <= std::min(cx + r, m.originX + SXC::Water::kShoreSize - 1); gx++) {
+                const int32_t d = (gx - cx) * (gx - cx) + (gy - cy) * (gy - cy);
+
+                if (d >= best || d > r * r) {
+                    continue;
+                }
+
+                const size_t k = static_cast<size_t>(gy & (SXC::Water::kShoreSize - 1)) * SXC::Water::kShoreSize +
+                                 static_cast<size_t>(gx & (SXC::Water::kShoreSize - 1));
+                const uint16_t distance = m.texels[k * 4];   // a half: positive out on the water
+                const float t = m.cells[k * 4 + 2];          // the LiquidType, + 0.25 for lava and slime
+
+                if ((distance & 0x8000u) || !(distance & 0x7FFFu) || t < 1.0f || t != std::floor(t)) {
+                    continue;
+                }
+
+                best = d;
+                type = static_cast<uint32_t>(t);
+            }
+        }
+
+        return type;
+    }
+
     // The frame's water as the device takes it (the waves, the looks, the shore, the caustics, the swimmers),
     // from any water draw and from the liquid pass's start (Frame); the sea's look (the water the player is in).
     const SXC::Water::Look& FillWaves(SXC::Water::Waves& waves, const C3Vector& cameraPos) {
@@ -610,18 +651,23 @@ namespace SXC::Water {
         dt = dt < 0.0f ? 0.0f : (dt > 0.5f ? 0.5f : dt);
         s_lastTime = waves.time;
         WindForWaves(waves, dt);
-        // The shared sea's spectrum from the water the player is in (looked up four times a second).
+        // The shared sea's spectrum and shore from the water the player is in, else the nearest within 60 yd
+        // (looked up four times a second). On the bank the query finds none, and the every-water row's (or the
+        // defaults') shore waves ran on a lake whose own row said otherwise (Seyri, 2026-11-14).
         static uint32_t s_typeHere = 0;
         static auto s_typeChecked = std::chrono::steady_clock::time_point();
         const auto now = std::chrono::steady_clock::now();
+        float playerX = 0.0f, playerY = 0.0f;
+        SXC::Water::PlayerPosition(playerX, playerY);
 
         if (now - s_typeChecked > std::chrono::milliseconds(250)) {
             s_typeChecked = now;
             s_typeHere = SXC::Water::LiquidTypeHere();
-        }
 
-        float playerX = 0.0f, playerY = 0.0f;
-        SXC::Water::PlayerPosition(playerX, playerY);
+            if (!s_typeHere) {
+                s_typeHere = NearestWaterType(playerX, playerY, 60.0f);
+            }
+        }
         const SXC::Water::Look& sea = LookFor(s_typeHere, playerX, playerY);
         waves.amplitude = sea.amplitude;
         waves.chop = sea.chop;
