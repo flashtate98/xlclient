@@ -299,7 +299,8 @@ void CGxDeviceVulkan::ICreateDrawPath() {
         SXC::View::SetDevice(&s_view);
         // SXC: the instanced grass.
         static const SXC::Grass::Device s_grass = { gxvk::vk::grass::Mesh, gxvk::vk::grass::Allocate, gxvk::vk::grass::Write, gxvk::vk::grass::Release,
-                                                    &CGxDeviceVulkan::SxcGrassDraw, gxvk::vk::grass::PlantsInUse };
+                                                    &CGxDeviceVulkan::SxcGrassDraw, gxvk::vk::grass::PlantsInUse,
+                                                    []() { return gxvk::vk::grass::kMaxPlants; } };
         SXC::Grass::SetDevice(gxvk::vk::grass::Init() ? &s_grass : nullptr);
 
         // SXC: the frame profiler's GPU times (the pre-pass kinds into the profiler's pre-pass rows).

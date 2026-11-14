@@ -110,9 +110,35 @@ namespace {
     bool s_collecting = false;
 
     struct Stats {
-        uint32_t chunks = 0, plants = 0, runs = 0, draws = 0, built = 0, stock = 0, copies = 0, copyRuns = 0, spilled = 0, deferred = 0;
+        uint32_t chunks = 0, plants = 0, runs = 0, draws = 0, built = 0, refused = 0, beyond = 0, copies = 0, copyRuns = 0, spilled = 0, deferred = 0;
     } s_stats, s_last;
-    char s_status[320] = "";
+
+    // The pool's reach (SXC::Grass::Reach). A chunk the full pool refuses is drawn nowhere: the stock bake
+    // as a fallback cost 240 ms a frame flying over Elwynn (Seyri, 2026-11-14), and it retried its build
+    // every frame.
+    constexpr float kNoReach = 1e30f;
+    constexpr float kLeastReach = 60.0f;
+    constexpr float kRoomToGrow = 0.8f;    // the pool's share in use below which the reach grows
+    constexpr float kGrowth = 0.25f;       // its share a second
+    float s_reach = kNoReach;
+    float s_refusedAt = kNoReach;          // this frame: the eye's distance to the nearest refused chunk
+    std::chrono::steady_clock::time_point s_lastEnd;
+
+    // The eye's distance to a chunk's box (as CMapChunk::RenderPrep measures it).
+    float EyeDistance(const CDetailDoodadInst* inst) {
+        const CMapChunk* m = inst->m_chunk;
+
+        if (!m) {
+            return 0.0f;
+        }
+
+        const C3Vector& eye = CWorldScene::s_activeWorldView;
+        const float nx = std::max(std::max(m->m_bbox.b.x - eye.x, eye.x - m->m_bbox.t.x), 0.0f);
+        const float ny = std::max(std::max(m->m_bbox.b.y - eye.y, eye.y - m->m_bbox.t.y), 0.0f);
+        const float nz = std::max(std::max(m->m_bbox.b.z - eye.z, eye.z - m->m_bbox.t.z), 0.0f);
+        return std::sqrt(nx * nx + ny * ny + nz * nz);
+    }
+    char s_status[448] = "";
 
     // --- the motion (step 7b; WXL's features/GrassDoodads and GrassMotion) ------------------------
     // Per plant model: the bend from its root to its tip in texture V, found from its geometry (the mean
@@ -940,6 +966,7 @@ namespace SXC::Grass {
         s_playerKnown = false;
         s_frameNumber++;
         s_frameStart = std::chrono::steady_clock::now();
+        s_refusedAt = kNoReach;
 
         if (CGPlayer_C* player = s_collecting && s_limits.on ? ClntObjMgrGetActivePlayerObj() : nullptr) {
             const C3Vector p = player->GetPosition();
@@ -955,6 +982,14 @@ namespace SXC::Grass {
         }
 
         Chunk& c = s_chunks[inst];
+        const float eye = EyeDistance(inst);
+
+        // Past the pool's reach: no plants (they would be faded out), what it held back to the pool.
+        if (eye > s_reach) {
+            Release(c);
+            s_stats.beyond++;
+            return true;
+        }
 
         // Step 7d: a chunk whose edges waited for a neighbour is placed again once that one has loaded.
         const bool arrived = !c.missing.empty() && ((s_frameNumber + static_cast<uint32_t>(c.first)) & 31) == 0 && NeighboursArrived(c);
@@ -974,9 +1009,11 @@ namespace SXC::Grass {
                 Release(c);
 
                 if (!Build(inst, c)) {
+                    // The pool is full: drawn nowhere, and the reach shrinks below it at the frame's end.
                     Release(c);
-                    s_stats.stock++;
-                    return false;
+                    s_stats.refused++;
+                    s_refusedAt = std::min(s_refusedAt, eye);
+                    return true;
                 }
             }
         }
@@ -1027,7 +1064,34 @@ namespace SXC::Grass {
         // One world matrix for all: the plants are in world space, the view is the scene's.
         C44Matrix world;
         world.Translate(C3Vector(0.0f, 0.0f, 0.0f) - CWorldScene::s_activeWorldView);
+
+        // The pool's reach: shrunk below the nearest refused chunk, else grown back while there's room.
+        const auto now = std::chrono::steady_clock::now();
+        const float seconds = std::min(std::chrono::duration<float>(now - s_lastEnd).count(), 0.25f);
+        s_lastEnd = now;
+
+        if (s_refusedAt < kNoReach) {
+            s_reach = std::max(std::min(s_reach, s_refusedAt * 0.98f), kLeastReach);
+        } else if (s_reach < kNoReach && s_device->plantsInUse() < kRoomToGrow * static_cast<float>(s_device->capacity())) {
+            s_reach += s_reach * kGrowth * seconds;
+
+            if (s_reach >= CWorld::detailDoodadDist) {
+                s_reach = kNoReach;
+            }
+        }
+
+        // Inside the reach the plants fade out over its last 15%, as the stock fade does at the grass distance.
+        CDetailDoodad::SShaderConstants& constants = CDetailDoodad::s_shaderConstants;
+        const C4Vector fade = constants.m_fade;
+
+        if (s_reach < CWorld::detailDoodadDist) {
+            const float f = 1.0f / (s_reach * 0.15f);
+            constants.m_fade.x = -f;
+            constants.m_fade.y = s_reach * f;
+        }
+
         CDetailDoodad::SetupVertexShader(world, 0);
+        constants.m_fade = fade;
 
         // Step 7b: the motion's rows (after the client's c0..c22), every frame: other shaders use them too.
         g_theGxDevicePtr->ShaderConstantsSet(GxSh_Vertex, kMotionFirstRow, &s_motionRows[0][0], kMotionRows);
@@ -1081,6 +1145,10 @@ namespace SXC::Grass {
         s_last = s_stats;
     }
 
+    float Reach() {
+        return Active() ? s_reach : kNoReach;
+    }
+
     void Forget(CDetailDoodadInst* inst) {
         const auto it = s_chunks.find(inst);
 
@@ -1099,12 +1167,18 @@ namespace SXC::Grass {
             return CDetailDoodad::s_bUseShaders ? "off ([Grass] Instanced)" : "off: the client's grass shaders are off";
         }
 
+        char reach[32] = "the grass distance";
+
+        if (s_reach < kNoReach) {
+            std::snprintf(reach, sizeof(reach), "%.0f yd", s_reach);
+        }
+
         std::snprintf(s_status, sizeof(s_status),
                       "%u chunks, %u plants in %u runs, %u draws; %u copies in %u runs (density %s); %u chunks built this frame (%u plants spilled, %u "
-                      "waiting), %u drawn the stock way; pool %u plants",
+                      "waiting), %u refused by the full pool, %u past its reach (%s); pool %u of %u plants",
                       s_last.chunks, s_last.plants, s_last.runs, s_last.draws, s_last.copies, s_last.copyRuns,
-                      !s_densityFn ? "no provider" : (s_limits.on ? "on" : "off"), s_last.built, s_last.spilled, s_last.deferred, s_last.stock,
-                      s_device->plantsInUse());
+                      !s_densityFn ? "no provider" : (s_limits.on ? "on" : "off"), s_last.built, s_last.spilled, s_last.deferred, s_last.refused,
+                      s_last.beyond, reach, s_device->plantsInUse(), s_device->capacity());
         return s_status;
     }
 }
