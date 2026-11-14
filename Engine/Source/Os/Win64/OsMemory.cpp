@@ -43,7 +43,7 @@ namespace {
     };
     FailedWalk s_failed;
     SRWLOCK s_failedLock = SRWLOCK_INIT;    // FindNear also runs outside s_lock (blocks bigger than an arena)
-    volatile LONG s_frees = 0;      // blocks given back since start (OsFreeNear), to retry after a free
+    volatile LONG s_frees = 0;      // reservations released since start (OsFreeNear), to retry after one
 
     bool RecentlyFailed(uintptr_t center, uintptr_t bytes) {
         AcquireSRWLockShared(&s_failedLock);
@@ -51,15 +51,49 @@ namespace {
         ReleaseSRWLockShared(&s_failedLock);
         if (!failed.valid || bytes < failed.bytes) return false;
         const uintptr_t distance = center > failed.center ? center - failed.center : failed.center - center;
-        return distance < 256u * 1024u * 1024u && GetTickCount() - failed.tick < 5000 &&
+        return distance < 64u * 1024u * 1024u && GetTickCount() - failed.tick < 5000 &&
             static_cast<uint32_t>(s_frees) == failed.frees;
     }
 
     // The address space walked from the anchor for `bytes` (granularity-rounded) of free space within
     // the near range, reserved (and committed when `commit`). The original OsAllocNear's search.
     uintptr_t FindNearWalk(uintptr_t center, uintptr_t bytes, bool commit);
+    bool Near(uintptr_t anchor, uintptr_t base, uintptr_t size);
+
+    // FlashWOW: the walk still froze the game for 6 and 7 s at a time after 0211 (hangs.log, 2026-11-14:
+    // logging in at Shattrath and Dalaran), one walk crossing a heap of very many small regions. Space is
+    // now asked for directly: at addresses on a 64 MB grid around the anchor, nearest first, then on an
+    // 8 MB grid, each try one VirtualAlloc that fails at once where something is. 400-odd tries at most.
+    uintptr_t ProbeNear(uintptr_t center, uintptr_t bytes, bool commit) {
+        const uintptr_t granularity = 64u * 1024u;
+        bytes = (bytes + granularity - 1) & ~(granularity - 1);
+        const DWORD type = commit ? (MEM_RESERVE | MEM_COMMIT) : MEM_RESERVE;
+        const DWORD protect = commit ? PAGE_READWRITE : PAGE_NOACCESS;
+        const uintptr_t steps[2] = { 64u * 1024u * 1024u, 8u * 1024u * 1024u };
+
+        for (uintptr_t step : steps) {
+            const uintptr_t origin = center & ~(step - 1);
+
+            for (uintptr_t k = 0; k * step <= s_nearRange; ++k) {
+                const uintptr_t around[2] = { origin + k * step, origin > k * step ? origin - k * step : 0 };
+
+                for (int side = 0; side < (k ? 2 : 1); ++side) {
+                    const uintptr_t at = around[side];
+
+                    if (at >= granularity && Near(center, at, bytes)) {
+                        if (void* ptr = VirtualAlloc(reinterpret_cast<void*>(at), bytes, type, protect)) {
+                            return reinterpret_cast<uintptr_t>(ptr);
+                        }
+                    }
+                }
+            }
+        }
+
+        return 0;
+    }
 
     uintptr_t FindNear(uintptr_t center, uintptr_t bytes, bool commit) {
+        if (const uintptr_t probed = ProbeNear(center, bytes, commit)) return probed;
         if (RecentlyFailed(center, bytes)) return 0;
         const uintptr_t found = FindNearWalk(center, bytes, commit);
         if (!found) {
@@ -227,17 +261,9 @@ void* OsAllocNear(const void* anchor, size_t size) {
 
     uintptr_t p = 0;
 
-    // FlashWOW: arenas cluster, so the space right after (or before) one already near the anchor is
-    // the likeliest free spot: one VirtualAlloc each instead of a walk.
-    uintptr_t base = 0;
-    for (size_t i = 0, count = s_arenas.size(); i < count && !base; ++i) {
-        const uintptr_t around[2] = { s_arenas[i]->base + kArenaSize, s_arenas[i]->base - kArenaSize };
-        for (uintptr_t at : around)
-            if (!base && Near(center, at, kArenaSize))
-                if (void* ptr = VirtualAlloc(reinterpret_cast<void*>(at), kArenaSize, MEM_RESERVE, PAGE_NOACCESS))
-                    base = reinterpret_cast<uintptr_t>(ptr);
-    }
-    if (!base) base = FindNear(center, kArenaSize, false);
+    // FlashWOW: a new arena is only probed for, never walked for: without one the block below still
+    // gets a reservation of its own.
+    const uintptr_t base = ProbeNear(center, kArenaSize, false);
 
     if (base) {
         Arena* a = new Arena();
@@ -268,7 +294,6 @@ void OsFreeNear(void* ptr) {
             if (it != a->used.end()) {
                 Give(*a, it->first, it->second);
                 a->used.erase(it);
-                InterlockedIncrement(&s_frees);
             }
 
             ReleaseSRWLockExclusive(&s_lock);
