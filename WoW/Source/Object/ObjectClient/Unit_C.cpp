@@ -8875,7 +8875,11 @@ int32_t CGUnit_C::IsRunning() const {
 // A charge reaches the client as a fast ground spline (42 yd/s): not a jump or knockback arc, not flying, not
 // mounted or on a flight path. CombatChargeLoop falls back to Sprint, which older models already played here;
 // CombatChargeEnd plays only on models that have it. Units seen charging are kept by guid until they arrive.
-static std::unordered_set<uint64_t> s_chargingUnits;
+// Each with the time it was first seen charging: bots are moved in bursts of the same fast spline that end
+// within a frame or two (Animations.log, 2026-11-14: 150 of 184 "charges" lasted under 70 ms, the real ones
+// 370 ms and more), and each played CombatChargeEnd: on stairs, over obstacles, before a Heroic Throw.
+static std::unordered_map<uint64_t, uint32_t> s_chargingUnits;
+static const uint32_t kShortestChargeMs = 150;
 static std::unordered_map<uint64_t, uint32_t> s_chargeEndUntil;
 static std::unordered_map<uint64_t, uint32_t> s_abilityUntil;
 static std::unordered_map<uint64_t, uint32_t> s_releaseUntil;    // a spell release plays on until then
@@ -8933,7 +8937,14 @@ static bool ChooseChargeEndAnim(CGUnit_C* unit, uint32_t* anim) {
         return false;
     }
 
+    const uint32_t lasted = OsGetAsyncTimeMs() - charging->second;
     s_chargingUnits.erase(charging);
+
+    if (lasted < kShortestChargeMs) {
+        ChargeLog(unit, "fast move over after %u ms: not a charge, no CombatChargeEnd", lasted);
+        return false;
+    }
+
     CM2Model* model = unit->GetObjectModel();
 
     if (!model || !model->IsLoaded(0, 0) || !model->HasSequence(820)) {
@@ -9393,7 +9404,7 @@ int32_t CGUnit_C::ChooseMovementAnim(uint32_t flags, uint32_t* anim) const {
             s_chargeEndUntil.clear();
         }
 
-        if (s_chargingUnits.insert(this->m_obj->m_guid.m_guid).second) {
+        if (s_chargingUnits.emplace(this->m_obj->m_guid.m_guid, OsGetAsyncTimeMs()).second) {
             ChargeLog(this, "charge started at %.1f yd/s", this->m_movementData.GetBaseSpeed(0));
         }
 
