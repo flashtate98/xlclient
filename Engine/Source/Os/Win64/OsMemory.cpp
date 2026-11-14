@@ -30,9 +30,51 @@ namespace {
     std::vector<Arena*> s_arenas;
     SRWLOCK s_lock = SRWLOCK_INIT;
 
+    // FlashWOW: the walk below still froze the game 1 to 2 s at a time in crowded places (hangs.log,
+    // 2026-11-12: Dalaran, sitting down), walking the whole near range in both directions when it was
+    // full, then again for the block's own reservation. A walk that found nothing is remembered: for a
+    // few seconds, and until something near is freed, an anchor close to it fails at once instead.
+    struct FailedWalk {
+        uintptr_t center = 0;
+        uintptr_t bytes = 0;
+        DWORD tick = 0;
+        uint32_t frees = 0;
+        bool valid = false;
+    };
+    FailedWalk s_failed;
+    SRWLOCK s_failedLock = SRWLOCK_INIT;    // FindNear also runs outside s_lock (blocks bigger than an arena)
+    volatile LONG s_frees = 0;      // blocks given back since start (OsFreeNear), to retry after a free
+
+    bool RecentlyFailed(uintptr_t center, uintptr_t bytes) {
+        AcquireSRWLockShared(&s_failedLock);
+        const FailedWalk failed = s_failed;
+        ReleaseSRWLockShared(&s_failedLock);
+        if (!failed.valid || bytes < failed.bytes) return false;
+        const uintptr_t distance = center > failed.center ? center - failed.center : failed.center - center;
+        return distance < 256u * 1024u * 1024u && GetTickCount() - failed.tick < 5000 &&
+            static_cast<uint32_t>(s_frees) == failed.frees;
+    }
+
     // The address space walked from the anchor for `bytes` (granularity-rounded) of free space within
     // the near range, reserved (and committed when `commit`). The original OsAllocNear's search.
+    uintptr_t FindNearWalk(uintptr_t center, uintptr_t bytes, bool commit);
+
     uintptr_t FindNear(uintptr_t center, uintptr_t bytes, bool commit) {
+        if (RecentlyFailed(center, bytes)) return 0;
+        const uintptr_t found = FindNearWalk(center, bytes, commit);
+        if (!found) {
+            AcquireSRWLockExclusive(&s_failedLock);
+            s_failed.center = center;
+            s_failed.bytes = bytes;
+            s_failed.tick = GetTickCount();
+            s_failed.frees = static_cast<uint32_t>(s_frees);
+            s_failed.valid = true;
+            ReleaseSRWLockExclusive(&s_failedLock);
+        }
+        return found;
+    }
+
+    uintptr_t FindNearWalk(uintptr_t center, uintptr_t bytes, bool commit) {
         SYSTEM_INFO info;
         GetSystemInfo(&info);
         uintptr_t granularity = info.dwAllocationGranularity;
@@ -185,7 +227,19 @@ void* OsAllocNear(const void* anchor, size_t size) {
 
     uintptr_t p = 0;
 
-    if (uintptr_t base = FindNear(center, kArenaSize, false)) {
+    // FlashWOW: arenas cluster, so the space right after (or before) one already near the anchor is
+    // the likeliest free spot: one VirtualAlloc each instead of a walk.
+    uintptr_t base = 0;
+    for (size_t i = 0, count = s_arenas.size(); i < count && !base; ++i) {
+        const uintptr_t around[2] = { s_arenas[i]->base + kArenaSize, s_arenas[i]->base - kArenaSize };
+        for (uintptr_t at : around)
+            if (!base && Near(center, at, kArenaSize))
+                if (void* ptr = VirtualAlloc(reinterpret_cast<void*>(at), kArenaSize, MEM_RESERVE, PAGE_NOACCESS))
+                    base = reinterpret_cast<uintptr_t>(ptr);
+    }
+    if (!base) base = FindNear(center, kArenaSize, false);
+
+    if (base) {
         Arena* a = new Arena();
         a->base = base;
         a->free.emplace(0, kArenaSize);
@@ -214,6 +268,7 @@ void OsFreeNear(void* ptr) {
             if (it != a->used.end()) {
                 Give(*a, it->first, it->second);
                 a->used.erase(it);
+                InterlockedIncrement(&s_frees);
             }
 
             ReleaseSRWLockExclusive(&s_lock);
@@ -223,6 +278,7 @@ void OsFreeNear(void* ptr) {
 
     ReleaseSRWLockExclusive(&s_lock);
     VirtualFree(ptr, 0, MEM_RELEASE);
+    InterlockedIncrement(&s_frees);
 }
 
 #endif
