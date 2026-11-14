@@ -2210,7 +2210,7 @@ CTexture* CreateBlpSync(const char* fileName, char* extension, uint32_t flags, C
         *extension = '\0';
     }
 
-    SStrCopy(texture->m_filename, fileName, STORM_MAX_STR);
+    SStrCopy(texture->m_filename, fileName, sizeof(texture->m_filename));   // FlashWOW: bounded
     uint32_t size = SFileGetFileSize(file, nullptr);
     void* data = SMemAlloc(size, __FILE__, __LINE__, 0);
 
@@ -2239,7 +2239,10 @@ CTexture* TextureCreateFromBlpData(const char* name, CGxTexFlags texFlags, void*
     texFlags.m_maxAnisotropy = texFlags.m_filter == GxTex_Anisotropic ? s_maxAnisotropy : 1;
     CTexture* texture = new ("HTEXTURE", SLOG_OBJECT) CTexture;
     texture->m_gxTexFlags = texFlags;
-    SStrCopy(texture->m_filename, name, STORM_MAX_STR);
+    // FlashWOW: a Retail look names its textures by everything that went into them, longer than
+    // m_filename (260): the unbounded copy wrote past the CTexture (page heap, 2026-11-14), the heap
+    // corruption behind the Dalaran crash. The name is only a label here; it is cut to fit.
+    SStrCopy(texture->m_filename, name, sizeof(texture->m_filename));
 
     if (!PumpBlpTextureAsync(texture, blpData)) {
         FillInSolidTexture(*reinterpret_cast<const CImVector*>(&s_defaultColor), texture);
@@ -2292,7 +2295,7 @@ CTexture* CreateBlpAsync(char* extension, const char* fileName, uint32_t flags, 
         texture->m_flags |= 0x20;
     }
 
-    SStrCopy(texture->m_filename, fileName, STORM_MAX_STR);
+    SStrCopy(texture->m_filename, fileName, sizeof(texture->m_filename));   // FlashWOW: bounded
 
     if (blobTexture) {
         CTextureBlob::CreateTexture(texture, blobTexture);
@@ -2410,7 +2413,7 @@ CTexture* TextureCreateBlob(char* fileName, CGxTexFlags texFlags, CStatus* statu
     if (blobTexture) {
         CTexture* texture = new ("HTEXTURE", SLOG_OBJECT) CTexture;
         texture->m_gxTexFlags = texFlags;
-        SStrCopy(texture->m_filename, fileName, STORM_MAX_STR);
+        SStrCopy(texture->m_filename, fileName, sizeof(texture->m_filename));   // FlashWOW: bounded
         CTextureBlob::CreateTexture(texture, blobTexture);
         handle = reinterpret_cast<CTexture*>(HandleCreate(texture, "HTEXTURE"));
     }
