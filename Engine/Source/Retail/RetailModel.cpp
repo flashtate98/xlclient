@@ -368,7 +368,7 @@ bool Validate(const std::vector<uint8_t>& b, const ModelFiles& files, std::strin
                 return Fail(error, "Model vertex references an invalid bone");
     }
     for (uint32_t i = 0; i < U32(b, 0x70); ++i)
-        if (U16(b, U32(b, 0x74) + size_t(i) * 4 + 2) > 6) return Fail(error, "Unsupported Retail blend mode");
+        if (U16(b, U32(b, 0x74) + size_t(i) * 4 + 2) > 7) return Fail(error, "Unsupported Retail blend mode");   // 7: blend add (M2BLEND_BLEND_ADD)
     for (const auto& f : {Field{0xf0, 40}, Field{0x100, 36}, Field{0x108, 156}}) {
         for (uint32_t i = 0; i < U32(b, f.offset); ++i) {
             size_t p = U32(b, f.offset + 4) + size_t(i) * f.stride;
