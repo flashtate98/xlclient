@@ -402,7 +402,7 @@ size_t AppendAligned(std::vector<uint8_t>& out, const std::vector<uint8_t>& byte
 //   - flag 0x10000000 (multi-texture): the texture field packs three 5-bit indices; the first is kept;
 //   - flag 0x00800000: gravity keys are compressed vectors (x, y as int8 / 128, z as int16 * 0.04238648);
 //     each becomes the float the legacy emitter reads (positive pulls down): minus the vector's vertical part;
-//   - blend modes past the legacy seven draw additive; emitter types past spline become a sphere.
+//   - blend modes past blend add (7) draw additive; emitter types past spline become a sphere.
 // Left out for now: the second and third textures and their scrolling, sideways gravity, and the EXP2
 // chunk (alpha cutoff, color and alpha multipliers). False when the array does not fit the file.
 bool LegacyParticles(std::vector<uint8_t>& b) {
@@ -421,7 +421,7 @@ bool LegacyParticles(std::vector<uint8_t>& b) {
         if (flags & 0x10000000) Put16(b, p + 0x16, U16(b, p + 0x16) & 0x1f);
         if (textures && U16(b, p + 0x16) >= textures) Put16(b, p + 0x16, 0);
         Put16(b, p + 0x2c, 0);                                // multi-texture X parameters: unused before
-        if (b[p + 0x28] > 6) b[p + 0x28] = 4;
+        if (b[p + 0x28] > 7) b[p + 0x28] = 4;                 // 7, blend add, is drawn as such
         if (b[p + 0x29] > 3) b[p + 0x29] = 2;
 
         if (flags & 0x00800000) {
@@ -918,8 +918,9 @@ bool PrepareModel(const std::vector<uint8_t>& bytes, std::vector<uint8_t>& prepa
     if ((U32(b, 0x10) & 8) && !Array(b, 0x130, 2)) return Fail(error, "Invalid texture combiner array");
     // Retail added blend modes 7-14 beyond the legacy 7-entry table. Map each onto the closest legacy mode
     // and drop render flags the legacy renderer does not define.
-    // SXC: 7 ("blend add", ONE / INVSRCALPHA, wowdev's M2/Rendering) stays: the engine has it
-    // (M2BLEND_BLEND_ADD, GxBlend_BlendAdd). As Add (4) the infernal's fel glow washed out.
+    // SXC and FlashWOW, found separately: 7 ("blend add", ONE / INVSRCALPHA, wowdev's M2/Rendering) stays 7,
+    // since the engine has it (M2BLEND_BLEND_ADD, GxBlend_BlendAdd). As Add (4) the infernal's fel glow
+    // washed out, and a Retail effect's glow was dimmed by its own alpha (Thunder Clap's lightning).
     if (Array(b, 0x70, 4)) {
         static const uint8_t kBlend[] = {0, 1, 2, 3, 4, 5, 6, 7, 4, 2, 2, 3, 2, 4, 4};
         for (uint32_t i = 0; i < U32(b, 0x70); ++i) {
