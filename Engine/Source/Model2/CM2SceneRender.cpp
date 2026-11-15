@@ -441,6 +441,18 @@ void CM2SceneRender::SetupMaterial() {
         }
     }
 
+    // Not in the original: FlashWOW. Blend add (one, one minus source alpha) adds the color whole; Retail fades it by
+    // the batch's alpha first (color and transparency tracks). Without that a fading glow kept its full brightness:
+    // Thunder Clap's lightning model left a glow over the caster (2026-11-15).
+    if (blend == M2BLEND_BLEND_ADD) {
+        diffuse.x *= element->m_alpha;
+        diffuse.y *= element->m_alpha;
+        diffuse.z *= element->m_alpha;
+        emissive.x *= element->m_alpha;
+        emissive.y *= element->m_alpha;
+        emissive.z *= element->m_alpha;
+    }
+
     C4Vector color;
     color.x = diffuse.x;
     color.y = diffuse.y;
