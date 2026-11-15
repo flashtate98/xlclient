@@ -927,6 +927,33 @@ bool PrepareModel(const std::vector<uint8_t>& bytes, std::vector<uint8_t>& prepa
             swapIds(42, 364);
         }
     }
+    // SXC: the header's bounds cover every animation, and retail's newest reach far (the bodies' 1056-1062
+    // sweep 9 yd out: a radius of 15.5 against 1-2 for the rest). The client sizes effects by that box
+    // (CEffect::ComputeModelScaleFromTarget: a footstep's splash came out five times too large) and culls
+    // by it, yet plays only the animations AnimationData.dbc knows (ids below 506 in 3.3.5). So the bounds
+    // become those of the animations it can play, where it can play any.
+    {
+        constexpr uint16_t kLegacyAnimations = 506;
+        auto getF = [&](size_t at) { float v; std::memcpy(&v, b.data() + at, 4); return v; };
+        auto putF = [&](size_t at, float v) { std::memcpy(b.data() + at, &v, 4); };
+        float box[6] = {std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+            -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max()};
+        bool any = false;
+        for (uint32_t i = 0; i < U32(b, 0x1c); ++i) {
+            const size_t p = U32(b, 0x20) + size_t(i) * 64;
+            if (U16(b, p) >= kLegacyAnimations) continue;
+            for (int k = 0; k < 3; ++k) {
+                box[k] = std::min(box[k], getF(p + 32 + k * 4));
+                box[k + 3] = std::max(box[k + 3], getF(p + 44 + k * 4));
+            }
+            any = true;
+        }
+        if (any && box[0] <= box[3] && box[1] <= box[4] && box[2] <= box[5]) {
+            for (int k = 0; k < 6; ++k) putF(0xa0 + k * 4, box[k]);
+            const float dx = box[3] - box[0], dy = box[4] - box[1], dz = box[5] - box[2];
+            putF(0xb8, 0.5f * std::sqrt(dx * dx + dy * dy + dz * dz));
+        }
+    }
     // TXID replaces embedded filenames in modern models. Append stable virtual names;
     // every other array retains its original payload-relative offset.
     for (uint32_t i = 0; i < U32(b, 0x50); ++i) {

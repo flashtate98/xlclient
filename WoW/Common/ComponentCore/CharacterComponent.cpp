@@ -13,7 +13,8 @@
 #include <alloca.h>
 #endif
 #include "WoW/Common/ComponentCore/CharacterComponent.h"
-#include "WoW/Common/ComponentCore/RetailSheet.h"  // SXC: retail bodies' sheet
+#include "WoW/Common/ComponentCore/RetailSheet.h"
+#include "SXC/Models/Geosets.h"  // SXC: retail bodies' sheet
 #include "Engine/Source/Base/Handle.h"
 #include "Engine/Source/Base/ObjectAlloc.h"
 #include "Engine/Source/Base/Prop.h"
@@ -3564,6 +3565,7 @@ void CCharacterComponent::GeosRenderPrep() {
         this->m_data.m_model->SetGeometryVisible(rec.m_geosetGroup[0] + 1801, rec.m_geosetGroup[0] + 1801, 1);
     }
 
+    SXC::Geosets::ApplyOverrides(this->m_data.m_model);  // SXC: the Geosets panel's overrides
     this->m_data.m_model->OptimizeVisibleGeometry();
     this->m_flags &= ~0x4;
 }
