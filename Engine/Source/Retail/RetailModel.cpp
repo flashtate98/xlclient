@@ -399,11 +399,12 @@ size_t AppendAligned(std::vector<uint8_t>& out, const std::vector<uint8_t>& byte
 // FlashWOW: Retail's particle emitter is the 3.3.5 one (476 bytes) with 16 bytes of multi-texture scroll
 // parameters after it (492), and three fields read differently. Each emitter is moved down into the legacy
 // stride and made readable by the legacy emitter:
-//   - flag 0x10000000 (multi-texture): the texture field packs three 5-bit indices; the first is kept;
+//   - flag 0x10000000 (multi-texture): the texture field packs three 5-bit indices; the first stays the
+//     texture, the second goes to the unused field at 0x2c as 0x8000 | index (CParticleEmitter2::m_texture2);
 //   - flag 0x00800000: gravity keys are compressed vectors (x, y as int8 / 128, z as int16 * 0.04238648);
 //     each becomes the float the legacy emitter reads (positive pulls down): minus the vector's vertical part;
 //   - blend modes past blend add (7) draw additive; emitter types past spline become a sphere.
-// Left out for now: the second and third textures and their scrolling, sideways gravity, and the EXP2
+// Left out for now: the third texture, the layers' scrolling, sideways gravity, and the EXP2
 // chunk (alpha cutoff, color and alpha multipliers). False when the array does not fit the file.
 bool LegacyParticles(std::vector<uint8_t>& b) {
     const uint32_t count = U32(b, 0x128), first = U32(b, 0x12c);
@@ -418,9 +419,14 @@ bool LegacyParticles(std::vector<uint8_t>& b) {
         if (i) std::memmove(&b[p], &b[first + size_t(i) * 492], 476);
         uint32_t flags = U32(b, p + 4);
 
-        if (flags & 0x10000000) Put16(b, p + 0x16, U16(b, p + 0x16) & 0x1f);
+        uint16_t second = 0;                                  // FlashWOW marker for the renderer: 0x8000 | index
+        if (flags & 0x10000000) {
+            const uint16_t packed = U16(b, p + 0x16), layer = (packed >> 5) & 0x1f;
+            Put16(b, p + 0x16, packed & 0x1f);
+            if (layer != (packed & 0x1f) && (!textures || layer < textures)) second = uint16_t(0x8000 | layer);
+        }
         if (textures && U16(b, p + 0x16) >= textures) Put16(b, p + 0x16, 0);
-        Put16(b, p + 0x2c, 0);                                // multi-texture X parameters: unused before
+        Put16(b, p + 0x2c, second);                           // was unused: the second layer's texture
         if (b[p + 0x28] > 7) b[p + 0x28] = 4;                 // 7, blend add, is drawn as such
         if (b[p + 0x29] > 3) b[p + 0x29] = 2;
 

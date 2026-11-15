@@ -7512,6 +7512,11 @@ int32_t CM2Model::InitializeLoaded() {
             }
 
             emitter->SetMaterial(material, this->m_shared->m_textures[particleData->m_textureIndex]);
+
+            // Not in the original: FlashWOW. A Retail multi-texture emitter's second layer (RetailModel's LegacyParticles).
+            if ((particleData->unused_002C & 0x8000) && (particleData->unused_002C & 0x7fff) < this->m_shared->m_data->m_textures.m_count) {
+                emitter->SetTexture2(this->m_shared->m_textures[particleData->unused_002C & 0x7fff]);
+            }
             emitter->m_params.m_colorTrack = &particleData->m_colorTrack;
             emitter->m_params.m_scaleTrack = &particleData->m_scaleTrack;
             emitter->m_params.m_alphaTrack = &particleData->m_alphaTrack;

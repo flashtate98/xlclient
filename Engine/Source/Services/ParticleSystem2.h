@@ -96,6 +96,8 @@ class CParticleEmitter2 {
         /* 0018 */ uint32_t m_colorStride;
         /* 001C */ uint32_t m_texCoordStride;
         /* 0020 */ uint32_t m_count;
+        uint8_t* m_texCoord1 = nullptr;       // FlashWOW: the second layer's coordinates, when the format has them
+        uint32_t m_texCoord1Stride = 0;
     };
 
     struct SimpleKey {
@@ -284,6 +286,11 @@ class CParticleEmitter2 {
     int32_t UpdateLiveParticle(float deltaTime, CParticle2* particle, uint32_t index);
     void UpdateXform(const C44Matrix& transform, const C3Vector& viewPos, const C44Matrix* frameOfReference);
     CAaBox& WorldBounds();
+
+    // Not in the original: FlashWOW. A Retail multi-texture emitter's second layer (its color over the first,
+    // a mask): drawn by the fixed-function stages, texture 0 times texture 1 (CM2SceneRender::DrawParticle).
+    CTexture* m_texture2 = nullptr;
+    void SetTexture2(CTexture* texture);
 };
 
 class CPlaneParticleEmitter : public CParticleEmitter2 {
