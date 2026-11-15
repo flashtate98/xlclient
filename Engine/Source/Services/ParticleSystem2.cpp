@@ -228,6 +228,11 @@ static inline void AddVertex(CAaBox& bounds, CParticleEmitter2::ParticleVertex& 
     *reinterpret_cast<CImVector*>(vertex.m_color) = color;
     *reinterpret_cast<C2Vector*>(vertex.m_texCoord) = texCoord;
 
+    if (vertex.m_texCoord1) {   // FlashWOW: the second layer samples the same spot
+        *reinterpret_cast<C2Vector*>(vertex.m_texCoord1) = texCoord;
+        vertex.m_texCoord1 += vertex.m_texCoord1Stride;
+    }
+
     vertex.m_position += vertex.m_positionStride;
     vertex.m_normal += vertex.m_normalStride;
     vertex.m_color += vertex.m_colorStride;
@@ -791,6 +796,19 @@ void CParticleEmitter2::FillOutParticleVertex(void* buffer, EGxVertexBufferForma
     vertex->m_colorStride = stride;
     vertex->m_texCoordStride = stride;
     vertex->m_texCoord = static_cast<uint8_t*>(buffer) + GxVertexAttribOffset(format, GxVA_TexCoord0);
+
+    if (format == GxVBF_PCT2) {   // FlashWOW: a two-layer emitter
+        vertex->m_texCoord1 = static_cast<uint8_t*>(buffer) + GxVertexAttribOffset(format, GxVA_TexCoord1);
+        vertex->m_texCoord1Stride = stride;
+    }
+}
+
+void CParticleEmitter2::SetTexture2(CTexture* texture) {
+    if (this->m_texture2) {
+        HandleClose(reinterpret_cast<HOBJECT>(this->m_texture2));
+    }
+
+    this->m_texture2 = texture ? reinterpret_cast<CTexture*>(HandleDuplicate(reinterpret_cast<HOBJECT>(texture))) : nullptr;
 }
 
 // VERIFY: 5ce9bae8 manual
@@ -1479,6 +1497,8 @@ uint32_t CParticleEmitter2::GetNumPrimitives() {
 // VERIFY: 09c24957 manual
 // OFFSET: [0x0097BCC0, 0x0097D890]
 CParticleEmitter2::~CParticleEmitter2() {
+    this->SetTexture2(nullptr);
+
     if (this->m_texture) {
         HandleClose(reinterpret_cast<HOBJECT>(this->m_texture));
         this->m_texture = nullptr;
@@ -2365,7 +2385,7 @@ void CParticleEmitter2::RenderParticles(const C44Matrix* frameOfReference, void*
         count = this->m_liveList.Count();
     }
 
-    EGxVertexBufferFormat format = (this->m_params.m_materialFlags & 0x1) ? GxVBF_PNCT : GxVBF_PCT;
+    EGxVertexBufferFormat format = this->m_texture2 ? GxVBF_PCT2 : (this->m_params.m_materialFlags & 0x1) ? GxVBF_PNCT : GxVBF_PCT;
 
     if (!buffer) {
         buf = g_theGxDevicePtr->BufStream(GxPoolTarget_Vertex, GxVertexSize(format), count * this->m_vertsPerParticle);
@@ -2623,6 +2643,7 @@ CParticleEmitter2::CParticleEmitter2(const CParticleEmitter2& source, int32_t co
     }
 
     this->m_texture = reinterpret_cast<CTexture*>(HandleDuplicate(reinterpret_cast<HOBJECT>(source.m_texture)));
+    this->SetTexture2(source.m_texture2);
     this->m_flags &= ~0x80;
 
     if (!copyParticles || (!source.m_freeList.m_count && !source.m_liveList.m_count)) {

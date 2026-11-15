@@ -841,7 +841,7 @@ uint32_t CM2SceneRender::DrawBatchedParticle(uint32_t index, M2Element* elements
 
         uint32_t otherIndices = otherLive * otherEmitter->m_indicesPerParticle;
 
-        if (otherEmitter->m_params.m_materialBlend != materialBlend) {
+        if (otherEmitter->m_params.m_materialBlend != materialBlend || otherEmitter->m_texture2) {   // FlashWOW: two layers draw alone
             break;
         }
 
@@ -928,11 +928,41 @@ uint32_t CM2SceneRender::DrawParticle(uint32_t index, M2Element* elements, uint3
     this->m_curMaterial = &material;
     this->m_prevMaterial = nullptr;
 
-    if (this->m_cache->m_flags & 0x80) {
+    if ((this->m_cache->m_flags & 0x80) && !emitter->m_texture2) {
         return this->DrawBatchedParticle(index, elements, indices, count);
     }
 
     CGxTex* gxTex = TextureGetGxTex(emitter->m_texture, 0, nullptr);
+
+    // Not in the original: FlashWOW. A Retail two-layer emitter: its mask (texture 0) times its color (texture 1)
+    // times the particle's color, through the fixed-function stages; the particle shaders read one texture.
+    CGxTex* gxTex2 = emitter->m_texture2 ? TextureGetGxTex(emitter->m_texture2, 0, nullptr) : nullptr;
+
+    if (gxTex && gxTex2) {
+        g_theGxDevicePtr->RsSet(GxRs_Texture0, gxTex);
+        g_theGxDevicePtr->RsSet(GxRs_Texture1, gxTex2);
+        this->m_particleUnlitEffect->SetCurrent();
+        this->SetupLighting();
+        this->SetupMaterial();
+        g_theGxDevicePtr->RsSet(GxRs_VertexShader, nullptr);
+        g_theGxDevicePtr->RsSet(GxRs_PixelShader, nullptr);
+        GxRsSet(GxRs_ColorOp0, GxTexOp_Mod);
+        GxRsSet(GxRs_AlphaOp0, GxTexOp_Mod);
+        GxRsSet(GxRs_ColorOp1, GxTexOp_Mod);
+        GxRsSet(GxRs_AlphaOp1, GxTexOp_Mod);
+        this->SetupBillboardView(*reinterpret_cast<const C3Vector*>(&this->m_scene->m_viewInv.d0));
+        emitter->Render(static_cast<const C44Matrix*>(this->m_curModel->m_frameOfReference), nullptr, 1);
+        g_theGxDevicePtr->XformSetView(s_identity);
+        GxRsSet(GxRs_Texture1, nullptr);
+        GxRsSet(GxRs_ColorOp1, GxTexOp_Mod);   // the device default; stage 1 is off without a texture
+        GxRsSet(GxRs_AlphaOp1, GxTexOp_Mod);
+
+        CGxMatrixStack& world = g_theGxDevicePtr->m_xforms[GxXform_World];
+        world.m_dirty = 1;
+        world.m_flags[world.m_level] &= ~CGxMatrixStack::F_Identity;
+        world.m_mtx[world.m_level] = s_identity;
+        return 0;
+    }
 
     if (!gxTex) {
         return 0;
