@@ -1578,6 +1578,15 @@ int32_t CParticleEmitter2::BuildVertex(const CParticle2& particle, ParticleVerte
         this->InterpolateAllTracks(particle, &color, &scale, &headCell, &tailCell);
     }
 
+    // Not in the original: FlashWOW. Blend add (Retail's mode 7: one, one minus source alpha) adds the color whole:
+    // Retail's particles fade it by their alpha first. Without that a fading particle stayed at full brightness, and
+    // Thunder Clap's lightning flashes left a white glow (2026-11-15).
+    if (this->m_params.m_materialBlend == GxBlend_BlendAdd) {
+        color.r = static_cast<uint8_t>(color.r * color.a / 255);
+        color.g = static_cast<uint8_t>(color.g * color.a / 255);
+        color.b = static_cast<uint8_t>(color.b * color.a / 255);
+    }
+
     float spin;
     float spinRate;
     this->RandomizeSpin(particle, &spin, &spinRate);
