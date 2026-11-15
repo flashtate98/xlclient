@@ -4474,6 +4474,7 @@ static const uint32_t s_castHandAnims[][3] = {
     { 1290,     1110,  1112 },  // CastCurse
     { 1292,     1114,  1116 },  // CastSweep
     { 1294,     1148,  1118 },  // CastStrongUp
+    { 1082,     854,   852  },  // Thunder Clap's stomp, in no player model either: CombatStompRight, CombatStompLeft
 };
 static std::unordered_map<uint64_t, uint8_t> s_castHand;
 
