@@ -8880,6 +8880,13 @@ int32_t CGUnit_C::IsRunning() const {
 // 370 ms and more), and each played CombatChargeEnd: on stairs, over obstacles, before a Heroic Throw.
 static std::unordered_map<uint64_t, uint32_t> s_chargingUnits;
 static const uint32_t kShortestChargeMs = 150;
+
+// The unit whose animation just played to its end, while AnimEndHandler picks what follows. The stance asked
+// for then must not be held: the model has nothing else to play and stands frozen on the ended animation's
+// last frame until something else is asked for (seen as the warrior freezing for a second or two: an ability
+// cut short by a block, dodge or stun animation that ends inside the ability's hold; Animations.log,
+// 2026-11-14, "held 26 Ready1H during the ability, 719 ms left" with nothing after it for 1.9 s).
+static uint64_t s_animEndedFor = 0;
 static std::unordered_map<uint64_t, uint32_t> s_chargeEndUntil;
 static std::unordered_map<uint64_t, uint32_t> s_abilityUntil;
 static std::unordered_map<uint64_t, uint32_t> s_releaseUntil;    // a spell release plays on until then
@@ -9305,6 +9312,14 @@ static bool HoldForChargeEnd(CGUnit_C* unit, uint32_t* anim) {
             } else {
                 bool hold = IsChargeEndWaiter(*anim);
 
+                if (hold && s_animEndedFor == guid && !IsAutoAttackSwingAnim(*anim)) {
+                    hold = false;
+
+                    if (unit->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
+                        ChargeLog(unit, "the animation before it ended: not holding %u %s", *anim, AnimName(*anim));
+                    }
+                }
+
                 if (unit->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
                     ChargeLog(unit, "%s %u %s during the ability, %d ms left", hold ? "held" : "let through", *anim,
                         AnimName(*anim), static_cast<int32_t>(ability->second - OsGetAsyncTimeMs()));
@@ -9353,6 +9368,11 @@ static bool HoldForChargeEnd(CGUnit_C* unit, uint32_t* anim) {
     }
 
     bool hold = IsChargeEndWaiter(*anim);
+
+    if (hold && s_animEndedFor == guid && !IsAutoAttackSwingAnim(*anim)) {
+        hold = false;    // see s_animEndedFor
+    }
+
     ChargeLog(unit, "%s %u %s during CombatChargeEnd", hold ? "held" : "let through", *anim, AnimName(*anim));
     return hold;
 }
@@ -16050,6 +16070,13 @@ void CGUnit_C::AnimEndCallback(CM2Model* model, uint32_t boneId, uint32_t sequen
 // VERIFY: a0318ed7 manual
 // OFFSET: 0x0073BBD0
 void CGUnit_C::AnimEndHandler(CM2Model* model, uint32_t boneId, uint32_t sequenceId, int32_t interrupted, uint32_t time) {
+    // Not in the original: FlashWOW Retail animations, see s_animEndedFor.
+    struct AnimEnded {
+        uint64_t before;
+        AnimEnded(uint64_t guid) : before(s_animEndedFor) { s_animEndedFor = guid; }
+        ~AnimEnded() { s_animEndedFor = before; }
+    } animEnded(interrupted ? 0 : this->m_obj->m_guid.m_guid);
+
     if (this->m_vehiclePassenger && this->m_vehiclePassenger->m_state) {
         this->m_vehiclePassenger->OnAnimEnd(boneId);
     }
