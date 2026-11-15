@@ -5094,6 +5094,9 @@ static float AnimSpeedScale(uint32_t anim) {
             return 2.0f;
         case 654:   // Slam (Shockwave): the slam landed after the effect
             return 1.5f;
+        case 852:   // CombatStompLeft (Thunder Clap): Retail plays the effect on the stomp; here it plays on the cast,
+        case 854:   // CombatStompRight  so the foot comes down sooner
+            return 2.0f;
         default:
             return 1.0f;
     }
