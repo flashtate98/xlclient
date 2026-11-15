@@ -83,6 +83,7 @@ CGxShader* CGxDevice::s_uiVertexShader[2];
 
 // STATIC: 0x00C5DFE0
 ShadowConstants CGxDevice::s_shadowConstants[2];
+uint32_t CGxDevice::s_paletteEnd;
 
 // STATIC: 0x00C5FFFC
 CGxShader* CGxDevice::s_uiPixelShader;
@@ -893,6 +894,10 @@ void CGxDevice::ShaderConstantsUnlock(EGxShTarget target, uint32_t index, uint32
 
     if (shadow.dirtyMax < index + count - 1) {
         shadow.dirtyMax = index + count - 1;
+    }
+
+    if (target == GxSh_Vertex && index == 31) {
+        CGxDevice::s_paletteEnd = index + count;  // a bone palette (CM2SceneRender), see the declaration
     }
 }
 

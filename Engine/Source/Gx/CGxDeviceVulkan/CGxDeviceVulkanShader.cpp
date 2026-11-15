@@ -534,7 +534,15 @@ uint32_t CGxDeviceVulkan::IShaderPrograms(pipelines::Draw& draw) {
         draw.vertexRecord = vs->record;
         // A 256-row module (translated before the larger palette) reads the front of the larger slice.
         draw.vertexRows = vs->record->vconst > pipelines::kVertexRowsSmall ? pipelines::kVertexRowsLarge : pipelines::kVertexRowsSmall;
-        draw.vertexRowsUsed = s_vertexRowsWritten < draw.vertexRows ? s_vertexRowsWritten : draw.vertexRows;
+        // SXC: past 256 rows only the bone palettes are written, so a draw takes them up to the end of the
+        // last palette, not up to the highest row any palette ever reached: a retail body's (rows up to
+        // ~800) made every later draw of the session carry them, the frame's uniform ring ran full on a
+        // wide view (Goldshire looking north) and the draws after it - the world's models, the world
+        // map's cursor - were dropped.
+        uint32_t used = s_vertexRowsWritten < 256 ? s_vertexRowsWritten : 256;
+        used = CGxDevice::s_paletteEnd > used ? CGxDevice::s_paletteEnd : used;
+        used = used < s_vertexRowsWritten ? used : s_vertexRowsWritten;
+        draw.vertexRowsUsed = used < draw.vertexRows ? used : draw.vertexRows;
     } else {
         draw.vertex = pipelines::VertexProgram::FixedFunctionSemantic;
 

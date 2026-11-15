@@ -378,7 +378,13 @@ bool CGxDeviceVulkan::SxcGrassDraw(CGxTex* texture, const SXC::Grass::Run* runs,
 
     d.vertexRecord = instanced;
     d.lightsSurface = gxvk::vk::lights::kSurfaceOutdoor;   // step 7c: grass grows outside (our lights' inside / outside test)
-    d.vertexRows = instanced->vconst == gxvk::vk::pipelines::kVertexRowsLarge ? gxvk::vk::pipelines::kVertexRowsLarge : gxvk::vk::pipelines::kVertexRowsSmall;
+    // The instanced module declares 256 rows (the motion's from c64 on); the large slice holds them at its front
+    // (1024 rows with retail models, where an `==` took it for the small one and the motion read garbage).
+    d.vertexRows = instanced->vconst > gxvk::vk::pipelines::kVertexRowsSmall ? gxvk::vk::pipelines::kVertexRowsLarge : gxvk::vk::pipelines::kVertexRowsSmall;
+
+    if (d.vertexRowsUsed && d.vertexRowsUsed < instanced->vconst) {
+        d.vertexRowsUsed = instanced->vconst;
+    }
     static_assert(sizeof(SXC::Grass::Run) == sizeof(gxvk::vk::pipelines::Run), "SXC::Grass::Run is the pipelines' Run");
     d.runs = reinterpret_cast<const gxvk::vk::pipelines::Run*>(runs);
     d.runCount = count;

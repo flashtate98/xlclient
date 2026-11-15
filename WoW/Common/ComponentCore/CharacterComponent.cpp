@@ -3454,14 +3454,21 @@ void CCharacterComponent::GeosRenderPrep() {
     }
 
     CM2Model* model = this->m_data.m_model;
+    // SXC: retail bodies (modern M2) have groups up to 51, their eye effects in 17 (1701 the death
+    // knight's glow, 1702-1705 holy and elemental ones: none by default).
+    const bool retail = SXC::RetailSheet::IsRetailBody(model);
     // WarcraftXL: 0-2000 in the 3.3.5a client. Newer bodies (BfA's HD ones) have groups past 19
     // with several variants each; hidden here, they show their first variant below, as the
     // client shows a group it is not told about.
-    model->SetGeometryVisible(0, 2999, 0);
+    model->SetGeometryVisible(0, retail ? 9999 : 2999, 0);
     model->SetGeometryVisible(0, 0, 1);
 
     for (int32_t i = 0; i < NUM_CHARGEOSETS; i++) {
-        if (i == CHARGEOSET_EYEEFFECTS && eyeGlow) {
+        if (retail && i == CHARGEOSET_EYEEFFECTS) {
+            if (eyeGlow) {
+                this->m_data.m_model->SetGeometryVisible(1701, 1701, 1);
+            }
+        } else if (i == CHARGEOSET_EYEEFFECTS && eyeGlow) {
             this->m_data.m_model->SetGeometryVisible(1703, 1703, 1);
         } else if (i == 17 && this->m_data.m_geosets[i] == 1700) {
             // WarcraftXL: no eye geoset named: the newer bodies' own eyes (1702); a body without
@@ -3472,8 +3479,17 @@ void CCharacterComponent::GeosRenderPrep() {
         }
     }
 
-    for (uint32_t group = 20; group <= 29; group++) {
+    // SXC: a retail body takes the same rule for all its groups past 19: the first variant, none where
+    // a group has no xx01. A stopgap [deliberate hack]: the right defaults are each race's default
+    // choices (retail's ChrCustomizationChoice / ChrCustomizationGeoset), as a cdbc written by tswow
+    // or the data porter (kb: modern-models).
+    for (uint32_t group = 20; group <= (retail ? 99u : 29u); group++) {
         this->m_data.m_model->SetGeometryVisible(group * 100 + 1, group * 100 + 1, 1);
+    }
+
+    if (retail) {
+        // The face: 3201 is the neck, 3202 on the faces (humans have several).
+        this->m_data.m_model->SetGeometryVisible(3202, 3202, 1);
     }
 
     ItemDisplayInfoRec rec;
