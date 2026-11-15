@@ -387,6 +387,13 @@ static void CompressBlockSSE(const uint8_t* src, uint32_t stride, uint32_t* out)
 // VERIFY: 4cd9c152 manual
 // OFFSET: 0x004E7650
 void CCharacterComponent::DestroyRenderTextures() {
+    // SXC: a retail body's sheet is composed whole each time (RetailSheet.h), so every section's layers must
+    // still be there; the stock reload only brings back the sections whose items changed (undressing left
+    // plain skin where the other items' textures had been freed: Seyri, 2026-11-15).
+    if (SXC::RetailSheet::IsRetailBody(this->m_data.m_model)) {
+        return;
+    }
+
     for (int32_t section = 0; section < NUM_COMPONENT_SECTIONS; section++) {
         for (int32_t layer = 0; layer < 7; layer++) {
             if (this->m_section[section].m_layerItemDisplayId[layer] && this->m_section[section].m_layerTex[layer]) {
