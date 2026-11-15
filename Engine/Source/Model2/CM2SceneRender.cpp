@@ -489,8 +489,8 @@ static const char* FxTextureName(CTexture* texture) {
     return slash ? slash + 1 : name ? name : "(none)";
 }
 
-// WOW_FX_HIDE: a comma-separated list of texture names (or parts of them); an emitter with either layer
-// matching one is not drawn. For finding which emitter of a spell model draws something wrong.
+// WOW_FX_HIDE: a comma-separated list of texture names (or parts of them); an emitter or model batch with
+// either of its first two textures matching one is not drawn. For finding which emitter of a spell model draws something wrong.
 static bool FxHidden(CTexture* first, CTexture* second) {
     static const char* s_hide = std::getenv("WOW_FX_HIDE");
 
@@ -596,6 +596,20 @@ void CM2SceneRender::DrawBatch() {
     int32_t sharedVertices = this->m_curModel->m_shared->m_data->m_bones.m_count == 1 && (this->m_cache->m_flags & 0x40);
     this->SetBatchVertices(sharedVertices);
     CShaderEffect::SetShaders(this->m_curElement->m_vertexPermute, this->m_curElement->m_pixelPermute);
+
+    {   // Not in the original: FlashWOW WOW_FX_HIDE, for batches too (by either of their first two textures)
+        const M2Batch* fxBatch = this->m_curBatch;
+        CTexture* layers[2] = { nullptr, nullptr };
+
+        for (uint32_t t = 0; t < fxBatch->m_textureCount && t < 2; t++) {
+            const uint32_t combo = this->m_data->m_textureCombos[t + fxBatch->m_textureComboIndex];
+            layers[t] = combo < this->m_data->m_textures.m_count ? this->m_curModel->m_textures[combo] : nullptr;
+        }
+
+        if ((layers[0] || layers[1]) && FxHidden(layers[0], layers[1])) {
+            return;
+        }
+    }
 
     CGxBatch batch;
     batch.m_primType = GxPrim_Triangles;
