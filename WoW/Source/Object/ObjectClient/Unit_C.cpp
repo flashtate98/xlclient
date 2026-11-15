@@ -5096,7 +5096,7 @@ static float AnimSpeedScale(uint32_t anim) {
             return 1.5f;
         case 852:   // CombatStompLeft (Thunder Clap): Retail plays the effect on the stomp; here it plays on the cast,
         case 854:   // CombatStompRight  so the foot comes down sooner (2x still landed late, 2026-11-15)
-            return 3.0f;
+            return 2.25f;
         default:
             return 1.0f;
     }
