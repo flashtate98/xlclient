@@ -396,6 +396,62 @@ size_t AppendAligned(std::vector<uint8_t>& out, const std::vector<uint8_t>& byte
     out.insert(out.end(), bytes.begin(), bytes.end());
     return base;
 }
+// FlashWOW: Retail's particle emitter is the 3.3.5 one (476 bytes) with 16 bytes of multi-texture scroll
+// parameters after it (492), and three fields read differently. Each emitter is moved down into the legacy
+// stride and made readable by the legacy emitter:
+//   - flag 0x10000000 (multi-texture): the texture field packs three 5-bit indices; the first is kept;
+//   - flag 0x00800000: gravity keys are compressed vectors (x, y as int8 / 128, z as int16 * 0.04238648);
+//     each becomes the float the legacy emitter reads (positive pulls down): minus the vector's vertical part;
+//   - blend modes past the legacy seven draw additive; emitter types past spline become a sphere.
+// Left out for now: the second and third textures and their scrolling, sideways gravity, and the EXP2
+// chunk (alpha cutoff, color and alpha multipliers). False when the array does not fit the file.
+bool LegacyParticles(std::vector<uint8_t>& b) {
+    const uint32_t count = U32(b, 0x128), first = U32(b, 0x12c);
+    if (!count) return true;
+    if (count > 4096 || !Range(b, first, size_t(count) * 492)) return false;
+    const uint32_t sequences = Array(b, 0x1c, 64) ? U32(b, 0x1c) : 0;
+    const uint32_t sequenceAt = U32(b, 0x20);
+    const uint32_t textures = U32(b, 0x50);
+
+    for (uint32_t i = 0; i < count; ++i) {
+        const size_t p = first + size_t(i) * 476;
+        if (i) std::memmove(&b[p], &b[first + size_t(i) * 492], 476);
+        uint32_t flags = U32(b, p + 4);
+
+        if (flags & 0x10000000) Put16(b, p + 0x16, U16(b, p + 0x16) & 0x1f);
+        if (textures && U16(b, p + 0x16) >= textures) Put16(b, p + 0x16, 0);
+        Put16(b, p + 0x2c, 0);                                // multi-texture X parameters: unused before
+        if (b[p + 0x28] > 6) b[p + 0x28] = 4;
+        if (b[p + 0x29] > 3) b[p + 0x29] = 2;
+
+        if (flags & 0x00800000) {
+            const size_t track = p + 0x84;                    // gravity: interpolation, global sequence, times, keys
+            const bool global = U16(b, track + 2) != 0xffff;
+            const uint32_t lists = U32(b, track + 12), listAt = U32(b, track + 16);
+            if (Range(b, listAt, size_t(lists) * 8)) {
+                for (uint32_t s = 0; s < lists; ++s) {
+                    // Keys of a sequence kept in an .anim file are not in this buffer.
+                    if (!global && (s >= sequences || !(U32(b, sequenceAt + size_t(s) * 64 + 12) & 0x20))) continue;
+                    const uint32_t keys = U32(b, listAt + size_t(s) * 8), keyAt = U32(b, listAt + size_t(s) * 8 + 4);
+                    if (!Range(b, keyAt, size_t(keys) * 4)) continue;
+                    for (uint32_t k = 0; k < keys; ++k) {
+                        const size_t at = keyAt + size_t(k) * 4;
+                        const float x = int8_t(b[at]) / 128.0f, y = int8_t(b[at + 1]) / 128.0f;
+                        const float up = std::sqrt(std::max(0.0f, 1.0f - x * x - y * y));
+                        const float gravity = -up * int16_t(U16(b, at + 2)) * 0.04238648f;   // the vector points where particles are pulled; the legacy float is positive downward
+                        uint32_t bits;
+                        std::memcpy(&bits, &gravity, 4);
+                        Put(b, at, bits);
+                    }
+                }
+            }
+        }
+
+        Put(b, p + 4, flags & 0x007fffff);
+    }
+    return true;
+}
+
 bool ReadSkeletonChunks(const std::vector<uint8_t>& bytes, SkeletonChunks& chunks, std::string& error) {
     if (bytes.size() > 128 * 1024 * 1024) return Fail(error, "SKEL exceeds 128 MiB");
     for (size_t p = 0; p < bytes.size();) {
@@ -854,9 +910,10 @@ bool PrepareModel(const std::vector<uint8_t>& bytes, std::vector<uint8_t>& prepa
     }
     if (!Array(b, 0x1c, 64)) return Fail(error, "Invalid sequence array");
     // 0x200000 only marks chunked .anim files (AFM2 wraps the legacy payload); see StripAnimationChunk.
-    // Retail particle emitters use a newer layout the legacy emitter cannot read. Omit them; the mesh,
-    // skinning, ribbons and animation are unaffected. Documented limitation in retail-native-mounts.md.
-    Put(b, 0x128, 0);
+    // FlashWOW: Retail particle emitters were all left out. A model without a .skel (spell effects, doodads,
+    // totems) now has them rewritten into the legacy layout (LegacyParticles); a model with one (characters)
+    // still loses them until they have been looked at on their own.
+    if (files.skeleton || !LegacyParticles(b)) Put(b, 0x128, 0);
     if (!Cameras(b, error)) return false;
     if ((U32(b, 0x10) & 8) && !Array(b, 0x130, 2)) return Fail(error, "Invalid texture combiner array");
     // Retail added blend modes 7-14 beyond the legacy 7-entry table. Map each onto the closest legacy mode
