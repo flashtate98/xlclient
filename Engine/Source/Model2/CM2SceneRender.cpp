@@ -510,6 +510,43 @@ static const char* FxTextureName(CTexture* texture) {
     return slash ? slash + 1 : name ? name : "(none)";
 }
 
+// WOW_FX_HIDE: a comma-separated list of texture names (or parts of them); an emitter with either layer
+// matching one is not drawn. For finding which emitter of a spell model draws something wrong.
+static bool FxHidden(CTexture* first, CTexture* second) {
+    static const char* s_hide = std::getenv("WOW_FX_HIDE");
+
+    if (!s_hide || !*s_hide) {
+        return false;
+    }
+
+    const char* names[2] = { first ? FxTextureName(first) : nullptr, second ? FxTextureName(second) : nullptr };
+
+    for (const char* item = s_hide; *item;) {
+        const char* end = strchr(item, ',');
+        const size_t length = end ? static_cast<size_t>(end - item) : strlen(item);
+
+        if (length && length < 128) {
+            char part[128];
+            memcpy(part, item, length);
+            part[length] = '\0';
+
+            for (const char* name : names) {
+                if (name && SStrStrI(name, part)) {
+                    return true;
+                }
+            }
+        }
+
+        item += length + (end ? 1 : 0);
+    }
+
+    return false;
+}
+
+static int32_t FxRs(EGxRenderState state) {
+    return g_theGxDevicePtr->m_appRenderStates[state].m_value.m_data.i[0];
+}
+
 // VERIFY: aeedaf63 manual
 // OFFSET: 0x008203B0
 void CM2SceneRender::DrawBatch() {
@@ -1008,10 +1045,17 @@ uint32_t CM2SceneRender::DrawParticle(uint32_t index, M2Element* elements, uint3
             emitter->m_texture2 ? FxTextureName(emitter->m_texture2) : "-",
             emitter->m_texture2 ? (TextureGetGxTex(emitter->m_texture2, 0, nullptr) ? "loaded" : "NOT LOADED") : "-",
             static_cast<uint32_t>(emitter->m_liveList.Count()), emitter->m_params.m_materialFlags);
+        M2Log("FX   left over: texture shader %d %d, texgen %d %d, alpha ref %d, fog %d color 0x%06x, blend %d\n",
+            FxRs(GxRs_TextureShader0), FxRs(GxRs_TextureShader1), FxRs(GxRs_TexGen0), FxRs(GxRs_TexGen1),
+            FxRs(GxRs_AlphaRef), FxRs(GxRs_Fog), FxRs(GxRs_FogColor) & 0xffffff, FxRs(GxRs_BlendingMode));
     }
 
     this->m_curMaterial = &material;
     this->m_prevMaterial = nullptr;
+
+    if (FxHidden(emitter->m_texture, emitter->m_texture2)) {   // Not in the original: FlashWOW WOW_FX_HIDE
+        return 0;
+    }
 
     if ((this->m_cache->m_flags & 0x80) && !emitter->m_texture2) {
         return this->DrawBatchedParticle(index, elements, indices, count);
@@ -1031,6 +1075,14 @@ uint32_t CM2SceneRender::DrawParticle(uint32_t index, M2Element* elements, uint3
         this->SetupMaterial();
         g_theGxDevicePtr->RsSet(GxRs_VertexShader, nullptr);
         g_theGxDevicePtr->RsSet(GxRs_PixelShader, nullptr);
+        // The fixed-function stages also read the device's texture transforms, texgen and alpha ref, which
+        // the shader paths leave alone (CShaderEffect writes those to shader constants): whatever an
+        // earlier fixed-function draw left there would bend or cut these particles.
+        for (uint32_t stage = 0; stage < 2; stage++) {
+            GxRsSet(static_cast<EGxRenderState>(GxRs_TextureShader0 + stage), 0);
+            GxRsSet(static_cast<EGxRenderState>(GxRs_TexGen0 + stage), GxTexGen_Disabled);
+        }
+        GxRsSet(GxRs_AlphaRef, material.m_blendMode == M2BLEND_BLEND_ADD ? 0 : 1);
         GxRsSet(GxRs_ColorOp0, GxTexOp_Mod);
         GxRsSet(GxRs_AlphaOp0, GxTexOp_Mod);
         GxRsSet(GxRs_ColorOp1, GxTexOp_Mod);
