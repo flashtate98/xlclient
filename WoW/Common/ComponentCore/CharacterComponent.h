@@ -62,6 +62,7 @@ class CComponentRequest {
     /* 0038 */ HTEXTURECACHE m_layerTextures [40];
     /* 00D8 */ uint8_t m_layerSections [40];
     /* 0100 */ TSLink<CComponentRequest> m_link;
+    bool m_retailSheet;   // SXC: a retail body's sheet (WoW/Common/ComponentCore/RetailSheet.h); set per request
 
     void AddLayer(uint8_t section, HTEXTURECACHE texture);
     void DestroyCachedTextures();

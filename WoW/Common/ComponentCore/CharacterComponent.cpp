@@ -13,6 +13,7 @@
 #include <alloca.h>
 #endif
 #include "WoW/Common/ComponentCore/CharacterComponent.h"
+#include "WoW/Common/ComponentCore/RetailSheet.h"  // SXC: retail bodies' sheet
 #include "Engine/Source/Base/Handle.h"
 #include "Engine/Source/Base/ObjectAlloc.h"
 #include "Engine/Source/Base/Prop.h"
@@ -1411,7 +1412,8 @@ void CCharacterComponent::CreateRequestFO() {
 // VERIFY: b56204ff auto
 // OFFSET: 0x004E9510
 void CCharacterComponent::UpdateSections() {
-    if (this->m_flags & 0x1) {
+    // SXC: a retail body's sections lie elsewhere (RetailSheet.h): the whole texture.
+    if ((this->m_flags & 0x1) || SXC::RetailSheet::IsRetailBody(this->m_data.m_model)) {
         GxTexUpdate(TextureGetGxTex(this->m_baseSkinTexture, 1, nullptr), 0, 0, s_textureSize, s_textureSize, 1);
         return;
     }
@@ -3562,6 +3564,14 @@ void CCharacterComponent::GeosRenderPrep() {
 // VERIFY: f3bbc113 manual
 // OFFSET: 0x004EE0D0
 void CCharacterComponent::PrepSections() {
+    // SXC: a retail body's sheet (RetailSheet.h) is composed and uploaded whole.
+    const bool retail = SXC::RetailSheet::IsRetailBody(this->m_data.m_model);
+    SXC::RetailSheet::Scope scope(retail);
+
+    if (retail) {
+        this->m_dirtySections = 0xFFFFFFFF;
+    }
+
     for (int32_t section = 0; section < NUM_COMPONENT_SECTIONS; section++) {
         if (!((1 << section) & this->m_dirtySections)) {
             continue;
@@ -3569,13 +3579,13 @@ void CCharacterComponent::PrepSections() {
 
         (this->*CCharacterComponent::m_prepFunc[section])();
 
-        if (!(this->m_flags & 0x1) && this->m_gxTexFormat != GxTex_Dxt1) {
+        if (!(this->m_flags & 0x1) && this->m_gxTexFormat != GxTex_Dxt1 && !retail) {
             const CompSectionInfo& info = s_sectionInfo[section];
             GxTexUpdate(TextureGetGxTex(this->m_baseSkinTexture, 1, nullptr), info.m_pos.x, info.m_pos.y, info.m_pos.x + info.m_size.x, info.m_pos.y + info.m_size.y, 1);
         }
     }
 
-    if (!(this->m_flags & 0x1) && this->m_gxTexFormat != GxTex_Dxt1) {
+    if (!(this->m_flags & 0x1) && this->m_gxTexFormat != GxTex_Dxt1 && !retail) {
         return;
     }
 
@@ -3583,7 +3593,7 @@ void CCharacterComponent::PrepSections() {
         ComputeMipLevels(CCharacterComponent::s_textureBuffer, s_compressedTextureBuffer);
     }
 
-    if (this->m_flags & 0x1) {
+    if ((this->m_flags & 0x1) || retail) {
         GxTexUpdate(TextureGetGxTex(this->m_baseSkinTexture, 1, nullptr), 0, 0, s_textureSize, s_textureSize, 1);
         return;
     }
@@ -3626,6 +3636,7 @@ void CCharacterComponent::RenderPrepAll() {
     this->m_flags &= ~0x8;
     this->VariationsLoaded(1);
     this->ItemsLoaded(1);
+    SXC::RetailSheet::Scope scope(SXC::RetailSheet::IsRetailBody(this->m_data.m_model));   // SXC
 
     for (int32_t section = 0; section < NUM_COMPONENT_SECTIONS; section++) {
         (this->*CCharacterComponent::m_prepFunc[section])();
@@ -4709,6 +4720,11 @@ void CCharacterComponent::PasteFromSkin(COMPONENT_SECTIONS section, HTEXTURECACH
         return;
     }
 
+    if (SXC::RetailSheet::Active()) {   // SXC: a retail body's sheet
+        SXC::RetailSheet::PasteSkin(section, texture, dstMips, s_textureSize, CCharacterComponent::s_mipLevels);
+        return;
+    }
+
     TCTEXTUREINFO info;
     info.m_width = 0;
     info.m_height = 0;
@@ -4750,6 +4766,11 @@ void CCharacterComponent::PasteFromSkin(COMPONENT_SECTIONS section, HTEXTURECACH
 // OFFSET: 0x004F08A0
 void CCharacterComponent::PasteToSection(COMPONENT_SECTIONS section, HTEXTURECACHE texture, MipBits* dstMips) {
     if (!TextureCacheHasMips(texture)) {
+        return;
+    }
+
+    if (SXC::RetailSheet::Active()) {   // SXC: a retail body's sheet
+        SXC::RetailSheet::PasteLayer(section, texture, dstMips, s_textureSize, CCharacterComponent::s_mipLevels);
         return;
     }
 
@@ -4985,6 +5006,7 @@ void CCharacterComponent::ProcessFinishedRequest() {
 // OFFSET: 0x004F0EE0
 void CCharacterComponent::ProcessComponentRequest(CComponentRequest* request) {
     MipBits* dstMips = request->m_mipBits->m_mipBits;
+    SXC::RetailSheet::Scope scope(request->m_retailSheet);   // SXC
 
     if (request->m_format == GxTex_Dxt1) {
         dstMips = s_threadTextureBuffer;
@@ -5246,6 +5268,13 @@ int32_t CCharacterComponent::ThreadInitialize() {
 void CCharacterComponent::CreateComponentRequest() {
     this->m_request = CCharacterComponent::AllocComponentRequest();
     this->m_request->m_format = this->m_gxTexFormat;
+
+    // SXC: a retail body's sheet (RetailSheet.h) is composed whole, in its own layout.
+    this->m_request->m_retailSheet = SXC::RetailSheet::IsRetailBody(this->m_data.m_model);
+
+    if (this->m_request->m_retailSheet) {
+        this->m_dirtySections = 0xFFFFFFFF;
+    }
 
     for (int32_t section = 0; section < NUM_COMPONENT_SECTIONS; section++) {
         if ((1 << section) & this->m_dirtySections) {
