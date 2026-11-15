@@ -1,10 +1,16 @@
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <unordered_map>
 #include "Engine/Source/Model2/CM2SceneRender.h"
 #include "Engine/Source/Gx/CGxBuf.h"
 #include "Engine/Source/Gx/CGxDevice/CGxDevice.h"
 #include "Engine/Source/Gx/Gx.h"
 #include "Engine/Source/Model2/M2Cache.h"
+#include "Engine/Source/Model2/M2Log.h"
+#include "Engine/Source/Os/TimeManager.h"
 #include "Engine/Source/Model2/M2Light.h"
 #include "Engine/Source/Model2/M2Model.h"
 #include "Engine/Source/Model2/M2Scene.h"
@@ -446,6 +452,43 @@ void CM2SceneRender::SetupMaterial() {
     CShaderEffect::SetEmissive(color);
 }
 
+// Not in the original: FlashWOW effects log. With WOW_FX_LOG=<part of a model's file name> in the environment
+// (thunderclap, say), each batch and particle emitter of the models it names is logged to Models.log as it is
+// drawn: textures (and whether each is loaded), blend, shader, alpha and colors. Each one at most every 250 ms,
+// 3000 lines a session at most.
+static const char* FxLogFilter() {
+    static const char* s_filter = std::getenv("WOW_FX_LOG");
+    return s_filter && *s_filter ? s_filter : nullptr;
+}
+
+static bool FxLogWanted(const CM2Model* model, uint32_t index, uint32_t kind) {
+    const char* filter = FxLogFilter();
+
+    if (!filter || !model || !model->m_shared || !SStrStrI(model->m_shared->m_fileNameWithoutPath, filter)) {
+        return false;
+    }
+
+    static std::unordered_map<uint64_t, uint32_t> s_last;
+    static uint32_t s_lines = 0;
+    const uint64_t key = (reinterpret_cast<uintptr_t>(model) << 12) ^ (uint64_t(kind) << 10) ^ index;
+    const uint32_t now = OsGetAsyncTimeMs();
+    uint32_t& last = s_last[key];
+
+    if (s_lines >= 3000 || (last && now - last < 250)) {
+        return false;
+    }
+
+    last = now ? now : 1;
+    s_lines++;
+    return true;
+}
+
+static const char* FxTextureName(CTexture* texture) {
+    const char* name = texture ? TextureGetFilename(texture) : nullptr;
+    const char* slash = name ? std::max(strrchr(name, '\\'), strrchr(name, '/')) : nullptr;
+    return slash ? slash + 1 : name ? name : "(none)";
+}
+
 // VERIFY: aeedaf63 manual
 // OFFSET: 0x008203B0
 void CM2SceneRender::DrawBatch() {
@@ -460,6 +503,27 @@ void CM2SceneRender::DrawBatch() {
     this->SetupLighting();
     this->SetupMaterial();
     this->SetupTextures();
+
+    if (FxLogWanted(this->m_curModel, element->m_index, 0)) {   // Not in the original: FlashWOW effects log
+        const M2Batch* batch = this->m_curBatch;
+        const M2Data* data = this->m_data;
+        const char* names[2] = { "-", "-" };
+        int loaded[2] = { 0, 0 };
+
+        for (uint32_t t = 0; t < batch->m_textureCount && t < 2; t++) {
+            const uint32_t combo = data->m_textureCombos[t + batch->m_textureComboIndex];
+            CTexture* texture = combo < data->m_textures.m_count ? this->m_curModel->m_textures[combo] : nullptr;
+            names[t] = FxTextureName(texture);
+            loaded[t] = texture && TextureGetGxTex(texture, 0, nullptr) ? 1 : 0;
+        }
+
+        const uint32_t colorIndex = batch->m_colorIndex;
+        const C3Vector color = colorIndex < data->m_colors.m_count ? this->m_curModel->m_colors[colorIndex].m_colorTrack.m_currentValue : C3Vector(1.0f, 1.0f, 1.0f);
+        M2Log("FX %s batch %u: blend %u shader 0x%04x textures %s (%s), %s (%s); alpha %.3f color %.2f %.2f %.2f lit %d\n",
+            this->m_curModel->m_shared->m_fileNameWithoutPath, static_cast<uint32_t>(element->m_index), static_cast<uint32_t>(this->m_curMaterial->m_blendMode), batch->m_shader,
+            names[0], loaded[0] ? "loaded" : "NOT LOADED", names[1], loaded[1] ? "loaded" : "not loaded", static_cast<double>(element->m_alpha),
+            static_cast<double>(color.x), static_cast<double>(color.y), static_cast<double>(color.z), this->m_curLocalLighting ? 1 : 0);
+    }
 
     if (CShaderEffect::s_enableShaders && (this->m_curType != this->m_prevType || this->m_curModel != this->m_prevModel || this->m_curSkinSection->m_boneComboIndex != this->m_prevSkinSection->m_boneComboIndex)) {
         float* constants = g_theGxDevicePtr->ShaderConstantsLock(GxSh_Vertex) + 31 * 4;
@@ -915,6 +979,15 @@ uint32_t CM2SceneRender::DrawParticle(uint32_t index, M2Element* elements, uint3
     }
 
     material.m_blendMode = static_cast<M2BLEND>(ParticleBlendToM2Blend(emitter->m_params.m_materialBlend));
+
+    if (FxLogWanted(this->m_curModel, this->m_curElement->m_index, 1)) {   // Not in the original: FlashWOW effects log
+        M2Log("FX %s emitter %u: blend %u textures %s (%s), %s (%s); live %u, flags 0x%x\n",
+            this->m_curModel->m_shared->m_fileNameWithoutPath, static_cast<uint32_t>(this->m_curElement->m_index), emitter->m_params.m_materialBlend,
+            FxTextureName(emitter->m_texture), TextureGetGxTex(emitter->m_texture, 0, nullptr) ? "loaded" : "NOT LOADED",
+            emitter->m_texture2 ? FxTextureName(emitter->m_texture2) : "-",
+            emitter->m_texture2 ? (TextureGetGxTex(emitter->m_texture2, 0, nullptr) ? "loaded" : "NOT LOADED") : "-",
+            static_cast<uint32_t>(emitter->m_liveList.Count()), emitter->m_params.m_materialFlags);
+    }
 
     this->m_curMaterial = &material;
     this->m_prevMaterial = nullptr;
