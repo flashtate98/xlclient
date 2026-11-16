@@ -876,6 +876,14 @@ void __stdcall CParticleEmitter2::RenderParticleVertices(CGxBuf* buf, EGxVertexB
     CShaderEffect::SetDefaultShaders(0);
     CShaderEffect::UpdateWorldViewMatrix();
 
+    // Not in the original: FlashWOW. A two-layer emitter (CM2SceneRender::DrawParticle) draws through the
+    // fixed-function stages, as the particle shaders read one texture; the default shaders just set
+    // would drop the second layer.
+    if (format == GxVBF_PCT2) {
+        g_theGxDevicePtr->RsSet(GxRs_VertexShader, nullptr);
+        g_theGxDevicePtr->RsSet(GxRs_PixelShader, nullptr);
+    }
+
     CGxBatch batch;
     batch.m_primType = GxPrim_Triangles;
     batch.m_start = 0;
