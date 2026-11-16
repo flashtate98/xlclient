@@ -12,6 +12,9 @@
 #include "Engine/Source/Model2/M2Model.h"
 #include "Engine/Source/Model2/M2Shared.h"
 #include "Engine/Source/Retail/RetailModel.h"
+#if defined(WOWDECOMP_RETAIL_MODELS)
+#include "Engine/Source/Retail/LocalSource.h"
+#endif
 #include "SXC/ThirdParty/imgui/imgui.h"
 #include "WoW/Source/Object/ObjectClient/Player_C.h"
 #include "WoW/Source/Object/ObjectClient/Unit_C.h"
@@ -254,6 +257,32 @@ namespace SXC::Geosets {
         const M2Data* data = model->m_shared->m_data;
         const M2SkinProfile* skin = model->m_shared->m_skinData;
         ImGui::TextWrapped("%s: %u batches", model->m_shared->m_fileName, skin->m_batches.m_count);
+
+        // What kind of model it is, and what of it isn't finished yet (kb: modern-model-shaders).
+        uint32_t wip = 0;
+
+        for (uint32_t i = 0; i < skin->m_batches.m_count; i++) {
+            const CShaderEffect* effect = model->m_shared->m_effects ? model->m_shared->m_effects[i] : nullptr;
+            wip += effect && effect->m_key.m_str && std::strstr(effect->m_key.m_str, "[WIP") ? 1 : 0;
+        }
+
+#if defined(WOWDECOMP_RETAIL_MODELS)
+        const bool retail = Retail::Source().Handles(model->m_shared->m_fileName);
+#else
+        const bool retail = false;
+#endif
+        ImGui::Text("%s", retail ? "Retail (MD21, converted at load)" : "3.3.5 format (MD20)");
+        ImGui::SameLine();
+        ImGui::TextDisabled("v%u, %u particle emitters, %u ribbons", data->m_version, data->m_particles.m_count, data->m_ribbons.m_count);
+
+        if (wip) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.2f, 1.0f), "%u batch%s drawn with WIP stand-ins", wip, wip == 1 ? "" : "es");
+        }
+
+        if (retail && data->m_particles.m_count) {
+            ImGui::TextDisabled("Particles: retail emitters converted to the 3.3.5 layout (interim: no third layer, no layer scroll, no EXP2).");
+        }
         // The table as text, for pasting (filled while the rows are drawn, copied at the end).
         const bool copy = ImGui::SmallButton("Copy table");
         ImGui::SetItemTooltip("Copy the table as text (tab separated) to the clipboard.");
@@ -314,6 +343,12 @@ namespace SXC::Geosets {
             ImGui::TableNextColumn();
             const CShaderEffect* effect = model->m_shared->m_effects ? model->m_shared->m_effects[i] : nullptr;
             const char* effectName = effect && effect->m_key.m_str ? effect->m_key.m_str : "(none)";
+
+            if (std::strstr(effectName, "[WIP")) {
+                ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.2f, 1.0f), "WIP");
+                ImGui::SameLine();
+            }
+
             ImGui::TextUnformatted(effectName);
             ImGui::TableNextColumn();
             char row[768];
