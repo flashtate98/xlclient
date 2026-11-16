@@ -4,6 +4,7 @@
 #include <new>
 #include <typeinfo>
 #include <cstring>
+#include <unordered_map>
 #include "Engine/Source/Base/CDataStore.h"
 #include "Engine/Source/ConsoleBase/ConsoleVar.h"
 #include "Engine/Source/FrameScript/FrameScript.h"
