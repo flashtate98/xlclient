@@ -8,7 +8,6 @@
 
 class CM2Model;
 class CGxVertexPC;
-class CGxVertexPCT;
 class CTexture;
 
 struct SWING {
@@ -19,11 +18,15 @@ struct SWING {
     /* 060C */ uint32_t m_duration;
     /* 0610 */ uint32_t m_startTime;
     /* 0614 */ uint32_t m_lastTime;
-    CTexture* m_texture;    // FlashWOW: a Retail textured trail (not owned: WeaponTrailTexture keeps it)
+    // FlashWOW: a Retail textured trail (the texture is not owned: WeaponTrailTexture keeps it) and its edges'
+    // times, by edge number (m_points holds 64 edges as bottom / top pairs).
+    static const uint32_t kMaxEdges = 64;
+    CTexture* m_texture;
+    uint32_t m_edgeTimes [kMaxEdges];
 
     SWING();
     void FillVertices(CImVector color, uint8_t fade, CGxVertexPC* vertices);
-    void FillVertices(CImVector color, uint8_t fade, CGxVertexPCT* vertices);   // FlashWOW
+    bool BuildTexturedStrip(uint32_t time, const C3Vector& top, const C3Vector& bottom);   // FlashWOW
     bool BuildVertexBuffer(uint32_t time, const C3Vector& top, const C3Vector& bottom);
 };
 
