@@ -4101,14 +4101,26 @@ const VehicleSeatRec* CGUnit_C::GetPassengerSeatRec() const {
 
 // VERIFY: 49948b61 auto
 // OFFSET: 0x00715BA0
+// Not in the original: FlashWOW Retail weapon trails. The texture (FileDataID) of a trail a kit's char proc 27
+// has set pending, by unit, until the trail starts.
+static std::unordered_map<const CGUnit_C*, uint32_t> s_pendingTrailTexture;
+
 void CGUnit_C::UpdateWeaponTrails(const uint32_t* a2, uint32_t a3) {
+    uint32_t texture = 0;   // FlashWOW
+    const auto pending = s_pendingTrailTexture.find(this);
+
+    if (pending != s_pendingTrailTexture.end()) {
+        texture = pending->second;
+        s_pendingTrailTexture.erase(pending);
+    }
+
     if (this->m_sheatheState != WEAPONMODE_NORMALMODE) {
         return;
     }
 
     for (int32_t i = 0; i < 2; i++) {
         if (this->m_weaponTrails[i]) {
-            WeaponTrailSetDrawTrail(this->m_weaponTrails[i], a2, a3);
+            WeaponTrailSetDrawTrail(this->m_weaponTrails[i], a2, a3, texture);
         }
     }
 }
@@ -11922,6 +11934,8 @@ void CGUnit_C::ClearTrackingTarget(bool a2, bool a3) {
 // VERIFY: c1cb1df0 auto
 // OFFSET: 0x00715B70
 void CGUnit_C::ClearWeaponTrailHandles() {
+    s_pendingTrailTexture.erase(this);   // FlashWOW
+
     for (int32_t i = 0; i < 2; i++) {
         if (this->m_weaponTrails[i]) {
             WeaponTrailClose(this->m_weaponTrails[i]);
@@ -22673,6 +22687,17 @@ void CGUnit_C::CreateProceduralEffect(const SpellRec* spell, const SpellVisualRe
             case 8: {
                 this->m_pendingWeaponTrail[0] = (static_cast<int32_t>(param3) << 24) | static_cast<int32_t>(param0);
                 this->m_pendingWeaponTrail[1] = static_cast<int32_t>(param2);
+                break;
+            }
+
+            // Not in the original: FlashWOW. Retail's weapon trail (its procedural effect 27): a textured
+            // trail. Param 0 is the texture's FileDataID, param 2 the duration in ms, param 3 the alpha
+            // (0-255; 0 means opaque). Drawn white, added.
+            case 27: {
+                const int32_t alpha = param3 > 0.0f && param3 < 255.0f ? static_cast<int32_t>(param3) : 255;
+                this->m_pendingWeaponTrail[0] = (static_cast<uint32_t>(alpha) << 24) | 0xFFFFFFu;
+                this->m_pendingWeaponTrail[1] = static_cast<int32_t>(param2);
+                s_pendingTrailTexture[this] = static_cast<uint32_t>(param0);
                 break;
             }
 
