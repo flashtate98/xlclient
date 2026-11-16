@@ -11,6 +11,7 @@
 #include "Engine/Source/Model2/M2Data.h"
 #include "Engine/Source/Model2/M2Model.h"
 #include "Engine/Source/Model2/M2Shared.h"
+#include "Engine/Source/Retail/RetailModel.h"
 #include "SXC/ThirdParty/imgui/imgui.h"
 #include "WoW/Source/Object/ObjectClient/Player_C.h"
 #include "WoW/Source/Object/ObjectClient/Unit_C.h"
@@ -297,7 +298,11 @@ namespace SXC::Geosets {
 
             ImGui::SetItemTooltip("Show or hide skin section %u (this batch, and any other batch drawing the same section).", batch.m_skinSectionIndex);
             ImGui::TableNextColumn();
-            ImGui::Text("0x%04x", batch.m_shader);
+            // A retail packed id is kept tagged in memory (Retail::PrepareSkin); show it as the file has it.
+            char shaderId[24];
+            std::snprintf(shaderId, sizeof(shaderId), Retail::IsRetailPacked(batch.m_shader) ? "0x%04x retail" : "0x%04x",
+                          Retail::IsRetailPacked(batch.m_shader) ? Retail::RetailPackedId(batch.m_shader) : batch.m_shader);
+            ImGui::TextUnformatted(shaderId);
             ImGui::TableNextColumn();
             char blend[48] = "";
 
@@ -311,8 +316,8 @@ namespace SXC::Geosets {
             const char* effectName = effect && effect->m_key.m_str ? effect->m_key.m_str : "(none)";
             ImGui::TextUnformatted(effectName);
             ImGui::TableNextColumn();
-            char row[160];
-            std::snprintf(row, sizeof(row), "%u\t%u\t%s\t0x%04x\t%s\t%s\t", i, geoset, shown ? "yes" : "-", batch.m_shader, blend, effectName);
+            char row[768];
+            std::snprintf(row, sizeof(row), "%u\t%u\t%s\t%s\t%s\t%s\t", i, geoset, shown ? "yes" : "-", shaderId, blend, effectName);
             text += row;
 
             for (uint32_t k = 0; k < batch.m_textureCount; k++) {

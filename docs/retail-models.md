@@ -73,9 +73,13 @@ same name keeps loading as before.
 
 - **Particle emitters are omitted.** Retail emitters use a layout the legacy emitter cannot read;
   the mesh, ribbons and animation are unaffected.
-- **Glow layers are dropped.** Retail shader 0x8003 (a base layer plus an additive glow texture)
-  draws only its base layers; the glow needs its own pixel shader, which is not ported.
-- **Other multi-texture Retail shaders** draw with their first texture.
+- **Retail shaders the 3.3.5 client lacks draw with stand-ins, and say so.** A batch keeps its retail
+  shader id, and its effect is named after the real shader with what the stand-in lacks, e.g.
+  `Retail 0x8015 Diffuse_EdgeFade_T1_T2 / Combiners_Mod_Mod [WIP: without the edge fade; drawn as
+  Diffuse_T1_T2 / Combiners_Mod_Mod]` (the Batches panel shows both). Retail 0x8000 to 0x8002 are
+  3.3.5's own shaders and draw exactly; 0x8003 lacks its glow layer, 0x8015 and index 33 their edge
+  fade, and every other packed shader draws its first texture only. The table is
+  `Retail::RetailPackedShader` (`RetailModel.cpp`).
 - Textures must be BLP2 version 1, the client's native format.
 - No character customization: Retail player bodies load as models, but the customization system,
   equipment on Retail bodies and the race tables are not part of this.

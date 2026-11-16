@@ -776,17 +776,38 @@ CShaderEffect* CM2Shared::GetEffect(M2Batch* batch) {
     CShaderEffect* effect;
 
 #if defined(WOWDECOMP_RETAIL_MODELS)
-    // Not in the original: two-texture Retail combiners the adapter maps to stock shader pairs.
-    if ((batch->m_shader == 0x8011 || batch->m_shader == 0x8012) && IsRetailModel(this->m_fileName)) {
-        const bool mod2x = batch->m_shader == 0x8011;
-        const char* name = mod2x ? "Retail_Mod_Mod2x_T1_T2" : "Retail_Mod_Mod_T1_T2";
+    // Not in the original: a retail packed shader (tagged by Retail::PrepareSkin) gets an effect named
+    // after the real shader. Where 3.3.5 has those shaders it draws with them; otherwise the effect is an
+    // explicitly unfinished stand-in, and its name says what draws it and what is missing, so the Batches
+    // panel shows the truth. TODO: the real shaders (kb: modern-model-shaders).
+    if (Retail::IsRetailPacked(batch->m_shader) && IsRetailModel(this->m_fileName)) {
+        const uint16_t index = batch->m_shader & Retail::kRetailIndexMask;
+        const Retail::RetailShader* entry = &Retail::RetailPackedShader(index);
+        bool fewer = false;
+
+        if (batch->m_textureCount < entry->drawTextures) {
+            fewer = true;
+            entry = &Retail::RetailFirstTextureStandIn();
+        }
+
+        const Retail::RetailShader& real = Retail::RetailPackedShader(index);
+        char name[512];
+        int length = real.pixel
+            ? std::snprintf(name, sizeof(name), "Retail 0x%04X %s / %s", Retail::RetailPackedId(batch->m_shader), real.vertex, real.pixel)
+            : std::snprintf(name, sizeof(name), "Retail 0x%04X (not in Cataclysm's table)", Retail::RetailPackedId(batch->m_shader));
+
+        if (fewer) {
+            std::snprintf(name + length, sizeof(name) - length, " [WIP: only %u texture(s), without %s; drawn as %s / %s]", static_cast<unsigned>(batch->m_textureCount), entry->missing, entry->drawVertex, entry->drawPixel);
+        } else if (entry->missing) {
+            std::snprintf(name + length, sizeof(name) - length, " [WIP: without %s; drawn as %s / %s]", entry->missing, entry->drawVertex, entry->drawPixel);
+        }
 
         if (CShaderEffect* existing = CShaderEffectManager::GetEffect(name)) {
             return existing;
         }
 
         effect = CShaderEffectManager::CreateEffect(name);
-        effect->InitEffect("Diffuse_T1_T2", mod2x ? "Combiners_Mod_Mod2x" : "Combiners_Mod_Mod");
+        effect->InitEffect(entry->drawVertex, entry->drawPixel);
         return effect;
     }
 #endif
@@ -1843,7 +1864,10 @@ int32_t CM2Shared::Initialize() {
     for (uint32_t i = 0; i < this->m_data->m_materials.m_count; i++) {
         M2Material* material = &this->m_data->m_materials[i];
 
-        if (material->m_blendMode >= M2BLEND_MOD) {
+        // SXC: not blend add (7, WarcraftXL's), which retail lights like any other batch unless the
+        // material says unlit (WebWowViewerCpp's m2 shader); unlit, the infernal's fel glow shone at full
+        // strength in the dark.
+        if (material->m_blendMode >= M2BLEND_MOD && material->m_blendMode != M2BLEND_BLEND_ADD) {
             material->m_flags |= 1;
         }
     }
