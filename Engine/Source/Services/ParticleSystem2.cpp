@@ -783,7 +783,8 @@ void CParticleEmitter2::FillOutParticleVertex(void* buffer, EGxVertexBufferForma
     vertex->m_position = static_cast<uint8_t*>(buffer) + GxVertexAttribOffset(format, GxVA_Position);
     vertex->m_positionStride = stride;
 
-    if (this->m_params.m_materialFlags & 0x1) {
+    // FlashWOW: a lit two-layer emitter uses PCT2, which has no normal; writing one ran past the buffer.
+    if ((this->m_params.m_materialFlags & 0x1) && format != GxVBF_PCT2) {
         vertex->m_normalStride = stride;
         vertex->m_normal = static_cast<uint8_t*>(buffer) + GxVertexAttribOffset(format, GxVA_Normal);
     } else {
