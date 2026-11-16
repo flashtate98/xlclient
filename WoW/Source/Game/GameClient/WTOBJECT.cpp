@@ -6,15 +6,10 @@
 #include "Engine/Source/Gx/CGxBuf.h"
 #include "Engine/Source/Gx/CGxVertexPC.h"
 #include "Engine/Source/Gx/CGxVertexPCT.h"
-#include "Engine/Source/Model2/M2Data.h"
 #include "Engine/Source/Model2/M2Log.h"
-#include "Engine/Source/Model2/M2Scene.h"
-#include "Engine/Source/Model2/M2Shared.h"
 #include "Engine/Source/ShaderEffect/Types.h"
 #include "Engine/Source/Retail/LocalSource.h"
 #include "Engine/Source/Services/Texture.h"
-#include <cmath>
-#include <cstdlib>
 #include <string>
 #include <unordered_map>
 #include "Engine/Source/Gx/CGxDevice/CGxDevice.h"
@@ -130,7 +125,7 @@ static CTexture* WeaponTrailTexture(uint32_t fileDataId) {
 // the way Retail's trail textures are painted (bright at the blade and along the tip, fading behind).
 // Drawn added at full strength (one, one) like Retail's glowing trails; the colour's alpha scales it.
 static const uint32_t kEdgeLifeMs = 500;
-static const uint32_t kSteps = 4;
+static const uint32_t kSteps = 8;
 
 static C3Vector CatmullRom(const C3Vector& p0, const C3Vector& p1, const C3Vector& p2, const C3Vector& p3, float t) {
     const float t2 = t * t;
@@ -335,69 +330,16 @@ bool SWING::BuildVertexBuffer(uint32_t time, const C3Vector& top, const C3Vector
     return true;
 }
 
-// Not in the original: FlashWOW. A weapon without the trail events ($BTW / $TTW: many Retail weapons): the
-// blade taken as the model's longest extent from its origin (the grip), the trail from a quarter of the way
-// up to the tip, through the root bone.
-static bool WeaponTrailFallbackPoints(CM2Model* model, C3Vector& top, C3Vector& bottom) {
-    const M2Data* data = model->m_shared->m_data;
-
-    if (!data->m_bones.m_count || !model->m_boneMatrices) {
-        return false;
-    }
-
-    const CAaBox& box = data->m_bounds.m_extent;
-    const float lows[3] = { box.b.x, box.b.y, box.b.z };
-    const float highs[3] = { box.t.x, box.t.y, box.t.z };
-    uint32_t axis = 0;
-    float reach = 0.0f;
-
-    for (uint32_t i = 0; i < 3; i++) {
-        const float extent = fabsf(lows[i]) > fabsf(highs[i]) ? lows[i] : highs[i];
-
-        if (fabsf(extent) > fabsf(reach)) {
-            reach = extent;
-            axis = i;
-        }
-    }
-
-    if (fabsf(reach) < 0.05f) {
-        return false;
-    }
-
-    float tip[3] = { 0.0f, 0.0f, 0.0f };
-    tip[axis] = reach;
-    float base[3] = { 0.0f, 0.0f, 0.0f };
-    base[axis] = reach * 0.25f;
-
-    model->Animate();
-    top = C3Vector(tip[0], tip[1], tip[2]) * model->m_boneMatrices[0] * model->m_scene->m_viewInv;
-    bottom = C3Vector(base[0], base[1], base[2]) * model->m_boneMatrices[0] * model->m_scene->m_viewInv;
-    return true;
-}
-
 // VERIFY: 1e058dc3 auto
 // OFFSET: 0x007E4F50
 static void WeaponTrailCallback(CM2Model* model, const CM2Lighting* lighting, void* arg) {
-    C3Vector bottom;
-    C3Vector top;
-    const bool events = model->HasEvent('BTW$') && model->HasEvent('TTW$');
-
-    if (events) {
-        bottom = model->GetEventPosition('BTW$');
-        top = model->GetEventPosition('TTW$');
-    } else if (!WeaponTrailFallbackPoints(model, top, bottom)) {
+    if (!model->HasEvent('BTW$') || !model->HasEvent('TTW$')) {
         return;
     }
 
-    static std::unordered_map<const void*, bool> s_logged;   // once per model file
-
-    if (std::getenv("WOW_FX_LOG") && !s_logged[model->m_shared]) {
-        s_logged[model->m_shared] = true;
-        M2Log("Weapon trail on %s: %s\n", model->m_shared->m_fileNameWithoutPath,
-            events ? "the model's trail events" : "no trail events, the model's longest extent");
-    }
-
     uint32_t time = FrameTime::s_curTimeMs;
+    C3Vector bottom = model->GetEventPosition('BTW$');
+    C3Vector top = model->GetEventPosition('TTW$');
     WTOBJECT* trail = static_cast<WTOBJECT*>(arg);
 
     if (!trail->m_swing->BuildVertexBuffer(time, top, bottom)) {
