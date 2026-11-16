@@ -1344,6 +1344,9 @@ bool PrepareSkin(std::vector<uint8_t>& b, const std::vector<uint8_t>& m, std::st
         if (index > kRetailIndexMask || (!degradeShaders && RetailPackedShader(index).drawTextures < 2))
             return Fail(error, ("Retail packed shader is unknown: 0x" + HexWord(shader) + " in batch " + std::to_string(i) + " (textures " + std::to_string(U16(b, U32(b, 40) + size_t(i) * 24 + 14)) + ")").c_str());
         Put16(b, p, uint16_t(kRetailPackedTag | index));
+        // The engine draws at most three textures per batch; character layers carry up to six (0x801C on
+        // the bodies). Those keep what their effect draws (the stand-in: the first texture).
+        if (U16(b, p + 12) > 3) Put16(b, p + 12, std::max<uint16_t>(1, RetailPackedShader(index).drawTextures));
     }
     // Diagnostic: WOW_RETAIL_HIDE_BATCHES=1,5 drops those batch indices (of the original skin) from every Retail model.
     if (const char* hide = std::getenv("WOW_RETAIL_HIDE_BATCHES")) {
