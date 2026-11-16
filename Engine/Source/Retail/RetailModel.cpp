@@ -1274,6 +1274,22 @@ bool PrepareSkin(std::vector<uint8_t>& b, const std::vector<uint8_t>& m, std::st
         } else if (shader == 0x8015) {
             // Diffuse_EdgeFade_T1_T2 / Combiners_Mod_Mod: the 3.3.5 client has no edge-fade vertex shader, so draw it without the fade.
             b[p] = 0x12; b[p + 1] = 0x80;
+        } else if ((shader >= 0x8004 && shader <= 0x8007) || shader == 0x800a || shader == 0x800b
+            || (shader >= 0x800d && shader <= 0x800f) || shader == 0x8012 || shader == 0x8017) {
+            // A base texture plus a glow or blend layer: Opaque/Mod_AddAlpha(_Alpha, _Wgt) and Mod_Add_Alpha
+            // (retail M2ShaderTable 4-7, 10, 11, 13-15), 18 Mod_Dual_Crossfade and 23 Opaque_Alpha (a lerp to
+            // texture 2). The two-texture Mod_Mod pair would multiply the base by a mostly black glow map, or by
+            // itself; draw the base texture with the Mod combiner (0x10), which keeps its alpha. These models
+            // used to fail outside character layers. shortcut: no glow layer. Mapping from STRHercules/wowdecomp
+            // (Engine/Source/Retail/RetailModel.cpp), where each case was checked on a model.
+            b[p] = 0x10; b[p + 1] = 0;
+            b[p + 12] = 1; b[p + 13] = 0;
+        } else if (shader == 0x8013) {
+            // Diffuse_EdgeFade_T1 / Combiners_Mod_Depth: soft cards for steam, dust and light rays, which rely on
+            // fading at their edges and where they meet geometry. Without that they are hard flat quads, so the
+            // batch is off (0x8000, the disabled marker). shortcut: no mist or rays until an edge-fade shader
+            // exists. Also after wowdecomp.
+            b[p] = 0; b[p + 1] = 0x80;
         } else if ((shader & 0x8000) && degradeShaders) {
             // Character layers (tabards, armor effects) use multi-texture shaders the legacy renderer lacks.
             // Draw them with their first texture and the plain opaque combiner instead of failing the model.
