@@ -3,8 +3,11 @@
 #include "SXC/Models/Geosets.h"
 
 #include <cstdio>
+#include <cstring>
 #include <map>
 #include <string>
+#include "Engine/Source/Services/Texture.h"
+#include "Engine/Source/ShaderEffect/ShaderEffect.h"
 #include "Engine/Source/Model2/M2Data.h"
 #include "Engine/Source/Model2/M2Model.h"
 #include "Engine/Source/Model2/M2Shared.h"
@@ -232,6 +235,120 @@ namespace SXC::Geosets {
 
         if (overrides.empty()) {
             s_overrides.erase(file);
+        }
+    }
+
+    void DrawBatchesPanel(void* user) {
+        ImGui::RadioButton("Player", &s_fromTarget, 0);
+        ImGui::SameLine();
+        ImGui::RadioButton("Target", &s_fromTarget, 1);
+
+        CM2Model* model = Selected();
+
+        if (!Ready(model) || !model->m_shared->m_data) {
+            ImGui::TextDisabled(s_fromTarget ? "No target, or its model isn't loaded." : "No player model loaded.");
+            return;
+        }
+
+        const M2Data* data = model->m_shared->m_data;
+        const M2SkinProfile* skin = model->m_shared->m_skinData;
+        ImGui::TextWrapped("%s: %u batches", model->m_shared->m_fileName, skin->m_batches.m_count);
+        // The table as text, for pasting (filled while the rows are drawn, copied at the end).
+        const bool copy = ImGui::SmallButton("Copy table");
+        ImGui::SetItemTooltip("Copy the table as text (tab separated) to the clipboard.");
+        std::string text = std::string(model->m_shared->m_fileName) + "\n#\tgeoset\tshown\tshader\tblend\teffect\tstages\n";
+
+        if (!ImGui::BeginTable("##batches", 7, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders)) {
+            return;
+        }
+
+        ImGui::TableSetupColumn("#");
+        ImGui::TableSetupColumn("geoset");
+        ImGui::TableSetupColumn("shown");
+        ImGui::TableSetupColumn("shader");
+        ImGui::TableSetupColumn("blend");
+        ImGui::TableSetupColumn("effect");
+        ImGui::TableSetupColumn("stages: type texture (transform)");
+        ImGui::TableHeadersRow();
+
+        static const char* kBlends[] = { "opaque", "alpha key", "alpha", "no alpha add", "add", "mod", "mod2x", "blend add" };
+
+        for (uint32_t i = 0; i < skin->m_batches.m_count; i++) {
+            const M2Batch& batch = skin->m_batches[i];
+            const M2SkinSection& section = skin->m_skinSections[batch.m_skinSectionIndex];
+            const M2Material* material = batch.m_materialIndex < data->m_materials.m_count ? &data->m_materials[batch.m_materialIndex] : nullptr;
+            ImGui::PushID(static_cast<int>(i));
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("%u", i);
+            ImGui::TableNextColumn();
+            const uint32_t geoset = M2SkinSectionGeosetId(*skin, section);
+            ImGui::Text("%u", geoset);
+            ImGui::TableNextColumn();
+            // The batch's skin section shown or hidden directly (for telling batches of one geoset apart;
+            // the section may carry other batches too, and the client's next geoset update resets it).
+            bool shown = model->m_skinSections[batch.m_skinSectionIndex] != 0;
+
+            if (ImGui::Checkbox("##shown", &shown)) {
+                model->m_skinSections[batch.m_skinSectionIndex] = shown ? 1 : 0;
+                model->UnoptimizeVisibleGeometry();
+                model->OptimizeVisibleGeometry();
+            }
+
+            ImGui::SetItemTooltip("Show or hide skin section %u (this batch, and any other batch drawing the same section).", batch.m_skinSectionIndex);
+            ImGui::TableNextColumn();
+            ImGui::Text("0x%04x", batch.m_shader);
+            ImGui::TableNextColumn();
+            char blend[48] = "";
+
+            if (material) {
+                std::snprintf(blend, sizeof(blend), "%s%s", material->m_blendMode < 8 ? kBlends[material->m_blendMode] : "?", (material->m_flags & 1) ? ", unlit" : "");
+            }
+
+            ImGui::TextUnformatted(blend);
+            ImGui::TableNextColumn();
+            const CShaderEffect* effect = model->m_shared->m_effects ? model->m_shared->m_effects[i] : nullptr;
+            const char* effectName = effect && effect->m_key.m_str ? effect->m_key.m_str : "(none)";
+            ImGui::TextUnformatted(effectName);
+            ImGui::TableNextColumn();
+            char row[160];
+            std::snprintf(row, sizeof(row), "%u\t%u\t%s\t0x%04x\t%s\t%s\t", i, geoset, shown ? "yes" : "-", batch.m_shader, blend, effectName);
+            text += row;
+
+            for (uint32_t k = 0; k < batch.m_textureCount; k++) {
+                const uint32_t at = batch.m_textureComboIndex + k;
+                const uint32_t combo = at < data->m_textureCombos.m_count ? data->m_textureCombos[at] : 0xFFFF;
+                const uint32_t tat = batch.m_textureTransformComboIndex + k;
+                const uint32_t transform = tat < data->m_textureTransformCombos.m_count ? data->m_textureTransformCombos[tat] : 0xFFFF;
+                const CTexture* texture = combo < data->m_textures.m_count ? model->m_textures[combo] : nullptr;
+                const char* name = texture ? texture->m_filename : "(no texture)";
+                const char* slash = strrchr(name, '\\');
+                // Whether it reached the GPU: without a GxTex the device binds its blank white fallback.
+                char gpu[64] = "";
+
+                if (texture) {
+                    if (texture->m_gxTex) {
+                        std::snprintf(gpu, sizeof(gpu), " [gpu %ux%u fmt %d]", texture->m_gxWidth, texture->m_gxHeight, static_cast<int>(texture->m_gxTexFormat));
+                    } else {
+                        std::snprintf(gpu, sizeof(gpu), " [NOT ON GPU, flags 0x%x]", texture->m_flags);
+                    }
+                }
+
+                char stage[400];
+                std::snprintf(stage, sizeof(stage), "%u: %u %s (%s)%s", k, combo < data->m_textures.m_count ? data->m_textures[combo].m_type : 0xFFFF,
+                              slash ? slash + 1 : name, transform == 0xFFFF ? "-" : std::to_string(transform).c_str(), gpu);
+                ImGui::TextUnformatted(stage);
+                text += (k ? " | " : "") + std::string(stage);
+            }
+
+            text += "\n";
+            ImGui::PopID();
+        }
+
+        ImGui::EndTable();
+
+        if (copy) {
+            ImGui::SetClipboardText(text.c_str());
         }
     }
 }

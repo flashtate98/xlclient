@@ -10,6 +10,10 @@ class CM2Model;
 namespace SXC::Geosets {
     void DrawPanel(void* user);
 
+    // The Batches panel: each batch of the same model - geoset, shader id, blend, the effect the client
+    // chose and the texture bound on each stage - for finding why a model draws wrong.
+    void DrawBatchesPanel(void* user);
+
     // The session's overrides for this model's file, applied (CCharacterComponent::GeosRenderPrep).
     void ApplyOverrides(CM2Model* model);
 }

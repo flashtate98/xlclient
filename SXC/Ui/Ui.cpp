@@ -184,6 +184,7 @@ namespace {
         SXC::Ui::AddPanel(water, "Underwater", SXC::Water::DrawMediumPanel);
         const int models = SXC::Ui::AddModule("Models", "Models (kb: modern-models): geosets and what the client shows of them.");
         SXC::Ui::AddPanel(models, "Geosets", SXC::Geosets::DrawPanel);
+        SXC::Ui::AddPanel(models, "Batches", SXC::Geosets::DrawBatchesPanel);
     }
 
     PFN_vkVoidFunction LoadVulkan(const char* name, void* user) {
