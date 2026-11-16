@@ -97,7 +97,8 @@ struct RetailShader {
 const RetailShader& RetailPackedShader(uint16_t index);
 // Whether `index` has an entry of its own (else RetailPackedShader returns the unknown stand-in).
 bool IsKnownRetailPacked(uint16_t index);
-// The first-texture stand-in: Diffuse_T1 + Combiners_Opaque.
+// The first-texture stand-in: Diffuse_T1 + Combiners_Mod, which keeps the texture's alpha (Combiners_Opaque
+// drew an additive headlight beam as a solid panel; Esteria's wowdecomp found it).
 const RetailShader& RetailFirstTextureStandIn();
 // Non-packed retail ids (stage ops in the low byte, 0x4000 = second UV set) mean what they mean in
 // 3.3.5 and stay as they are; the stock CM2Shared::GetEffect(count, shader, coords) decodes them.
