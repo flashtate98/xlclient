@@ -259,7 +259,19 @@ namespace gxvk::vk::memory
         d.GetBufferMemoryRequirements(s.device, handle, &req);
 
         Block block;
-        if (!Allocate(req, where, block))
+        bool allocated = Allocate(req, where, block);
+        // SXC: the BAR window without ReBAR (214 MiB here) is shared with the driver and every other
+        // program on the GPU, so a Stream allocation can fail while we hold well under half of it (the
+        // grass's 96 MiB plant buffer did, and the grass fell back to the stock bake): take plain
+        // host-visible memory then, as Stream does once we hold half the window.
+        if (!allocated && where == Where::Stream)
+        {
+            allocated = Allocate(req, Where::HostVisible, block);
+            if (allocated)
+                Write(Info, "vulkan: memory: the BAR window had no room for a %llu-byte Stream buffer: host-visible memory instead",
+                      static_cast<unsigned long long>(size));
+        }
+        if (!allocated)
         {
             d.DestroyBuffer(s.device, handle, nullptr);
             Write(Warn, "vulkan: memory: no memory for a %llu-byte %s buffer", static_cast<unsigned long long>(size),
