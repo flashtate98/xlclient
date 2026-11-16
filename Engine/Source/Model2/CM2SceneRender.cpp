@@ -1082,8 +1082,12 @@ uint32_t CM2SceneRender::DrawParticle(uint32_t index, M2Element* elements, uint3
     CGxTex* gxTex2 = emitter->m_texture2 ? TextureGetGxTex(emitter->m_texture2, 0, nullptr) : nullptr;
 
     if (gxTex && gxTex2) {
-        g_theGxDevicePtr->RsSet(GxRs_Texture0, gxTex);
-        g_theGxDevicePtr->RsSet(GxRs_Texture1, gxTex2);
+        // WOW_FX_LAYER2 (FlashWOW, for testing): "off" draws the first layer alone, "only" the second alone.
+        static const char* s_layer2 = std::getenv("WOW_FX_LAYER2");
+        const bool layer2Off = s_layer2 && SStrStrI(s_layer2, "off");
+        const bool layer2Only = s_layer2 && SStrStrI(s_layer2, "only");
+        g_theGxDevicePtr->RsSet(GxRs_Texture0, layer2Only ? gxTex2 : gxTex);
+        g_theGxDevicePtr->RsSet(GxRs_Texture1, layer2Off || layer2Only ? nullptr : gxTex2);
         this->m_particleUnlitEffect->SetCurrent();
         this->SetupLighting();
         this->SetupMaterial();
