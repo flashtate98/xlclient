@@ -98,22 +98,6 @@ SWING::SWING() {
     this->m_texture = nullptr;
 }
 
-// Not in the original: FlashWOW Retail weapon trails. The textured strip: U runs along the trail (0 at the
-// weapon, 1 at the oldest edge kept), V across it (0 at the top point, the blade's tip, 1 at the bottom),
-// as Retail's trail textures are drawn: brightest at the weapon and along the tip. The texture fades the
-// trail along its length itself, so the colour is the same over the strip (it fades as a whole).
-void SWING::FillVertices(CImVector color, uint8_t fade, CGxVertexPCT* vertices) {
-    const int32_t edges = (this->m_head - this->m_tail) / 2;
-
-    for (int32_t i = this->m_tail; i < this->m_head; i++, vertices++) {
-        vertices->p = this->m_points[i & 0x7F];
-        vertices->c = color;
-        const int32_t edge = (this->m_head - 1 - i) / 2;
-        vertices->tc.x = edges > 1 ? static_cast<float>(edge) / static_cast<float>(edges - 1) : 0.0f;
-        vertices->tc.y = (i & 0x1) ? 0.0f : 1.0f;   // odd points are the tops
-    }
-}
-
 // Not in the original: FlashWOW. A Retail trail texture by FileDataID, loaded once and kept.
 static CTexture* WeaponTrailTexture(uint32_t fileDataId) {
     static std::unordered_map<uint32_t, CTexture*> s_textures;
@@ -138,9 +122,136 @@ static CTexture* WeaponTrailTexture(uint32_t fileDataId) {
     return texture;
 }
 
+// Not in the original: FlashWOW Retail weapon trails. Retail's trail is a ribbon of the blade's recent
+// positions: each frame of the swing adds an edge (the blade from bottom to tip, stamped with the time), an
+// edge lives kEdgeLifeMs, and the strip between them is smoothed (Catmull-Rom, kSteps pieces between two
+// edges) so a fast swing draws an arc rather than a fan of straight cuts. The texture is laid along the
+// strip by age: U is 0 at the blade and 1 at an edge about to die, V is 0 at the tip and 1 at the bottom,
+// the way Retail's trail textures are painted (bright at the blade and along the tip, fading behind).
+// Drawn added at full strength (one, one) like Retail's glowing trails; the colour's alpha scales it.
+static const uint32_t kEdgeLifeMs = 500;
+static const uint32_t kSteps = 4;
+
+static C3Vector CatmullRom(const C3Vector& p0, const C3Vector& p1, const C3Vector& p2, const C3Vector& p3, float t) {
+    const float t2 = t * t;
+    const float t3 = t2 * t;
+    return (p1 * 2.0f + (p2 - p0) * t + (p0 * 2.0f - p1 * 5.0f + p2 * 4.0f - p3) * t2 + (p1 * 3.0f - p0 - p2 * 3.0f + p3) * t3) * 0.5f;
+}
+
+bool SWING::BuildTexturedStrip(uint32_t time, const C3Vector& top, const C3Vector& bottom) {
+    const uint32_t elapsed = time - this->m_startTime;
+    this->m_lastTime = time;
+
+    // Edges are pairs in m_points (bottom, top), at most kMaxEdges, their times in m_edgeTimes.
+    if (elapsed < this->m_duration) {
+        if (this->m_head - this->m_tail >= 2 * static_cast<int32_t>(kMaxEdges)) {
+            this->m_tail += 2;
+        }
+
+        const int32_t edge = this->m_head / 2;
+        this->m_points[this->m_head++ & 0x7F] = bottom;
+        this->m_points[this->m_head++ & 0x7F] = top;
+        this->m_edgeTimes[edge % kMaxEdges] = time;
+    }
+
+    while (this->m_tail < this->m_head && time - this->m_edgeTimes[(this->m_tail / 2) % kMaxEdges] >= kEdgeLifeMs) {
+        this->m_tail += 2;
+    }
+
+    const int32_t edges = (this->m_head - this->m_tail) / 2;
+
+    if (edges <= 0) {
+        return elapsed < this->m_duration;   // nothing yet, or the trail has died out
+    }
+
+    if (edges < 2) {
+        return true;
+    }
+
+    CGxTex* gxTex = TextureGetGxTex(this->m_texture, 0, nullptr);
+
+    if (!gxTex) {
+        return true;
+    }
+
+    // Newest edge first: the strip starts at the blade.
+    const int32_t first = this->m_head / 2 - 1;
+    auto edgeAt = [&](int32_t k, bool tip) -> const C3Vector& {
+        k = k < 0 ? 0 : (k >= edges ? edges - 1 : k);
+        return this->m_points[(2 * (first - k) + (tip ? 1 : 0)) & 0x7F];
+    };
+    auto ageAt = [&](int32_t k) -> float {
+        return static_cast<float>(time - this->m_edgeTimes[(first - k) % kMaxEdges]);
+    };
+
+    const uint32_t count = (static_cast<uint32_t>(edges - 1) * kSteps + 1) * 2;
+    CImVector color = this->m_color;
+    const float strength = color.a / 255.0f;
+    color.r = static_cast<uint8_t>(color.r * strength);
+    color.g = static_cast<uint8_t>(color.g * strength);
+    color.b = static_cast<uint8_t>(color.b * strength);
+    color.a = 255;
+    color = GxSwizzleColor(color);
+
+    g_theGxDevicePtr->RsPush();
+    GxRsSet(GxRs_Culling, 0);
+    GxRsSet(GxRs_Fog, 0);
+    GxRsSet(GxRs_Lighting, 0);
+    GxRsSet(GxRs_BlendingMode, GxBlend_NoAlphaAdd);
+    GxRsSet(GxRs_AlphaRef, 0);
+    GxRsSet(GxRs_DepthWrite, 0);
+    GxRsSet(GxRs_DepthTest, 1);
+    g_theGxDevicePtr->RsSet(GxRs_Texture0, gxTex);
+    GxRsSet(GxRs_Texture1, 0);
+    GxRsSet(GxRs_ColorOp0, GxTexOp_Mod);
+    GxRsSet(GxRs_AlphaOp0, GxTexOp_Mod);
+    GxRsSet(GxRs_TextureShader0, 0);
+    GxRsSet(GxRs_TexGen0, GxTexGen_Disabled);
+
+    CGxBuf* buf = g_theGxDevicePtr->BufStream(GxPoolTarget_Vertex, sizeof(CGxVertexPCT), count);
+    CGxVertexPCT* vertices = reinterpret_cast<CGxVertexPCT*>(g_theGxDevicePtr->BufLock(buf));
+
+    for (int32_t k = 0; k < edges; k++) {
+        const uint32_t steps = k + 1 < edges ? kSteps : 1;
+
+        for (uint32_t step = 0; step < steps; step++) {
+            const float t = static_cast<float>(step) / static_cast<float>(kSteps);
+            const float age = ageAt(k) + (ageAt(k + 1 < edges ? k + 1 : k) - ageAt(k)) * t;
+            const float u = age / static_cast<float>(kEdgeLifeMs);
+
+            for (int32_t side = 0; side < 2; side++) {
+                const bool tip = side == 0;
+                vertices->p = CatmullRom(edgeAt(k - 1, tip), edgeAt(k, tip), edgeAt(k + 1, tip), edgeAt(k + 2, tip), t);
+                vertices->c = color;
+                vertices->tc.x = u > 1.0f ? 1.0f : u;
+                vertices->tc.y = tip ? 0.0f : 1.0f;
+                vertices++;
+            }
+        }
+    }
+
+    g_theGxDevicePtr->BufUnlock(buf, 0);
+    buf->m_hasData = 1;
+    GxPrimVertexPtr(buf, GxVBF_PCT);
+
+    CGxBatch batch;
+    batch.m_primType = GxPrim_TriangleStrip;
+    batch.m_start = 0;
+    batch.m_count = count;
+    batch.m_minIndex = 0;
+    batch.m_maxIndex = count - 1;
+    g_theGxDevicePtr->Draw(&batch, 0);
+    g_theGxDevicePtr->RsPop();
+    return true;
+}
+
 // VERIFY: 76207940 manual
 // OFFSET: 0x007E4CE0
 bool SWING::BuildVertexBuffer(uint32_t time, const C3Vector& top, const C3Vector& bottom) {
+    if (this->m_texture) {   // Not in the original: FlashWOW
+        return this->BuildTexturedStrip(time, top, bottom);
+    }
+
     uint32_t elapsed = time - this->m_startTime;
 
     if (elapsed < this->m_duration) {
@@ -199,28 +310,9 @@ bool SWING::BuildVertexBuffer(uint32_t time, const C3Vector& top, const C3Vector
         GxRsSet(GxRs_Texture0, 0);
         GxRsSet(GxRs_Texture1, 0);
 
-        // Not in the original: FlashWOW. A textured (Retail) trail: the texture times the colour, added.
-        CGxTex* gxTex = this->m_texture ? TextureGetGxTex(this->m_texture, 0, nullptr) : nullptr;
-
-        if (gxTex) {
-            GxRsSet(GxRs_BlendingMode, GxBlend_Add);
-            GxRsSet(GxRs_AlphaRef, 0);
-            g_theGxDevicePtr->RsSet(GxRs_Texture0, gxTex);
-            GxRsSet(GxRs_ColorOp0, GxTexOp_Mod);
-            GxRsSet(GxRs_AlphaOp0, GxTexOp_Mod);
-            GxRsSet(GxRs_TextureShader0, 0);
-            GxRsSet(GxRs_TexGen0, GxTexGen_Disabled);
-        }
-
-        const uint32_t vertexSize = gxTex ? sizeof(CGxVertexPCT) : sizeof(CGxVertexPC);
-        CGxBuf* buf = g_theGxDevicePtr->BufStream(GxPoolTarget_Vertex, vertexSize, count);
-        void* locked = g_theGxDevicePtr->BufLock(buf);
-
-        if (gxTex) {
-            this->FillVertices(GxSwizzleColor(this->m_color), fade, static_cast<CGxVertexPCT*>(locked));
-        } else {
-            this->FillVertices(GxSwizzleColor(this->m_color), fade, static_cast<CGxVertexPC*>(locked));
-        }
+        CGxBuf* buf = g_theGxDevicePtr->BufStream(GxPoolTarget_Vertex, sizeof(CGxVertexPC), count);
+        CGxVertexPC* vertices = reinterpret_cast<CGxVertexPC*>(g_theGxDevicePtr->BufLock(buf));
+        this->FillVertices(GxSwizzleColor(this->m_color), fade, vertices);
 
         if (static_cast<int32_t>(elapsed) > static_cast<int32_t>(this->m_duration >> 1)) {
             this->m_color.a -= fade;
@@ -228,7 +320,7 @@ bool SWING::BuildVertexBuffer(uint32_t time, const C3Vector& top, const C3Vector
 
         g_theGxDevicePtr->BufUnlock(buf, 0);
         buf->m_hasData = 1;
-        GxPrimVertexPtr(buf, gxTex ? GxVBF_PCT : GxVBF_PC);
+        GxPrimVertexPtr(buf, GxVBF_PC);
 
         CGxBatch batch;
         batch.m_primType = GxPrim_TriangleStrip;
