@@ -85,11 +85,14 @@ struct RetailShader {
     const char* pixel;
     const char* drawVertex;  // the stock shaders that draw it now
     const char* drawPixel;
-    const char* missing;     // nullptr when drawVertex/drawPixel are retail's own shaders; else what the
-                             // stand-in lacks. TODO: replace each stand-in with the real shader (kb:
+    const char* missing;     // nullptr when what draws it matches retail; else what the stand-in lacks.
+                             // TODO: replace each stand-in with the real shader (kb:
                              // modern-model-shaders, Cataclysm's bytecode through Tools/VulkanShaders).
     uint8_t drawTextures;    // the stages drawVertex/drawPixel sample; a batch with fewer textures
                              // gets the first-texture stand-in instead
+    bool edgeFade = false;   // retail's vertex shader fades edges (Diffuse_EdgeFade_*): the translated model
+                             // pixel modules do it per draw (SXC/Models/RetailEffects.h); lit batches only,
+                             // since the unlit vertex permutations carry no normal
 };
 
 // The entry for packed index `index` (retail id 0x8000 + index). Never null: an index we know nothing

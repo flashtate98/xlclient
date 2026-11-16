@@ -12,8 +12,9 @@ The interface contract every module shares (the device's pipelines are built aga
                   p[] and misc come first so a pixel module, which never reads v[], can declare v[64]
                   whatever class the paired vertex module is. VCONST is 64 or 256 per the vertex
                   record's highest constant (manifest `vconst=`). misc.x is the alpha test reference
-                  (alphaRef / 255, 0 = off), misc.z / misc.w the stage-0 colour / alpha op (read by
-                  the generated companion stages only).
+                  (alphaRef / 255, 0 = off), misc.y SXC's edge fade switch (the model pixel modules),
+                  misc.z / misc.w the stage-0 colour / alpha op (read by the generated companion
+                  stages only).
   Samplers        a combined image sampler per D3D sampler slot, set 0 binding <slot>.
   Clip space      gl_Position.y is negated in every vertex module (D3D's +y up, Vulkan's +y down);
                   depth is already in [0, 1] (the device's projection is D3D's).
@@ -691,8 +692,9 @@ class Emitter(object):
             for sem in self.reads:
                 t = VARYING_TYPE.get(sem, 'vec4')
                 P('layout(location = %d) in %s %s;' % (VARYING_LOCATION[sem], t, sem))
-            if self.sxc_lights:
-                P('// SXC: the view position and normal the vertex module captured, for our lights (step 6b).')
+            if self.sxc_lights or self.sxc_lit_pixel:
+                P('// SXC: the view position and normal the vertex module captured, for our lights (step 6b) and')
+                P('// retail\'s edge fade.')
                 P('layout(location = %d) in vec4 sxcView;' % SXC_VIEW_LOCATION)
                 P('layout(location = %d) in vec4 sxcNormal;' % SXC_NORMAL_LOCATION)
             P('')
@@ -710,7 +712,7 @@ class Emitter(object):
         P('// record\'s highest constant (manifest `vconst=`); the slice is 272 + 16*VCONST bytes.')
         P('layout(std140, set = 1, binding = 0) uniform Regs {')
         P('    vec4 p[%d];     // pixel c0..c%d' % (PCONST, PCONST - 1))
-        P('    vec4 misc;       // misc.x = alphaRef / 255 (fixed-function alpha test, 0 = off)')
+        P('    vec4 misc;       // misc.x = alphaRef / 255 (fixed-function alpha test, 0 = off), misc.y = SXC edge fade')
         P('    vec4 v[%d];     // vertex c0..c%d' % (self.vconst, self.vconst - 1))
         P('} regs;')
         if self.sxc_lights:
@@ -807,6 +809,15 @@ class Emitter(object):
                 P('        float mask = mode < 1.5 ? 1.0 : mode < 2.5 ? g.a : smoothstep(regs.p[%d].y, regs.p[%d].y + max(regs.p[%d].z, 0.001), lit);'
                   % (SXC_GLOW_ROW2, SXC_GLOW_ROW2, SXC_GLOW_ROW2))
                 P('        oC0.rgb += g.rgb * regs.p[%d].rgb * mask * clamp(%s, 0.0, 1.0);' % (SXC_GLOW_ROW, fog))
+                P('    }')
+            if self.sxc_lit_pixel:
+                # SXC: retail's Diffuse_EdgeFade_* vertex shaders, per pixel (SXC/Models/RetailEffects.h):
+                # misc.y 1 for a retail batch whose shader fades its edges; w 0 = the vertex module has no normal.
+                P('    // SXC: retail\'s edge fade (misc.y; SXC::Models::DrawEdgeFade): surfaces seen edge-on fade out.')
+                P('    if (regs.misc.y > 0.5 && sxcNormal.w > 0.5)')
+                P('    {')
+                P('        float d = clamp(dot(-normalize(sxcView.xyz), normalize(sxcNormal.xyz)), 0.0, 1.0);')
+                P('        oC0.a *= clamp(2.7 * d * d - 0.4, 0.0, 1.0);')
                 P('    }')
             P('    // The alpha test (GxRs_AlphaRef) is not in the bytecode: GREATEREQUAL against')
             P('    // misc.x = alphaRef / 255, off when 0.')

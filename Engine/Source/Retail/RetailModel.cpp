@@ -1280,20 +1280,21 @@ constexpr RetailShader kRetailShaders[] = {
     /* 0x8010 */ {"Diffuse_T1_Env", "Combiners_Opaque_Mod_Add_Wgt", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
     /* 0x8011 */ {"Diffuse_T1_Env_T1", "Combiners_Opaque_Mod2xNA_Alpha_UnshAlpha", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
     /* 0x8012 */ {"Diffuse_T1_T1_T1", "Combiners_Mod_Dual_Crossfade", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
-    /* 0x8013 */ {"Diffuse_EdgeFade_T1", "Combiners_Mod", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8013 */ {"Diffuse_EdgeFade_T1", "Combiners_Mod", "Diffuse_T1", "Combiners_Mod", nullptr, 1, true},
     /* 0x8014 */ {"Diffuse_T1_Env_T2", "Combiners_Opaque_Mod2xNA_Alpha_Alpha", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
-    /* 0x8015 */ {"Diffuse_EdgeFade_T1_T2", "Combiners_Mod_Mod", "Diffuse_T1_T2", "Combiners_Mod_Mod", "the edge fade", 2},
+    /* 0x8015 */ {"Diffuse_EdgeFade_T1_T2", "Combiners_Mod_Mod", "Diffuse_T1_T2", "Combiners_Mod_Mod", nullptr, 2, true},
     /* 0x8016 */ {"Diffuse_T1_T1_T1_T2", "Combiners_Mod_Masked_Dual_Crossfade", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
     /* 0x8017 */ {"Diffuse_T1_T1", "Combiners_Opaque_Alpha", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
     /* 0x8018 */ {"Diffuse_T1_Env_T2", "Combiners_Opaque_Mod2xNA_Alpha_UnshAlpha", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
-    /* 0x8019 */ {"Diffuse_EdgeFade_Env", "Combiners_Mod", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8019 */ {"Diffuse_EdgeFade_Env", "Combiners_Mod", "Diffuse_T1", "Combiners_Mod", "the environment map", 1, true},
     /* 0x801A */ {"Diffuse_T1_T2_T1", "Guild", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
     /* 0x801B */ {"Diffuse_T1_T2", "Guild_NoBorder", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
     /* 0x801C */ {"Diffuse_T1_T2_T1", "Guild_Opaque", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
 };
 // Past Cataclysm's table: known by what it does, not yet by name.
-constexpr RetailShader kRetailEdgeFade33 = {nullptr, nullptr, "Diffuse_T1_T2", "Combiners_Mod_Mod",
-    "the edge fade (index 33, a two-texture edge-fade combiner: the Haranir fire totem's flame, a fire gradient times a scrolling flame mask)", 2};
+// Index 33, a two-texture edge-fade combiner (the Haranir fire totem's flame: a fire gradient times a
+// scrolling flame mask); its name is unknown, what it does is drawn.
+constexpr RetailShader kRetailEdgeFade33 = {nullptr, nullptr, "Diffuse_T1_T2", "Combiners_Mod_Mod", nullptr, 2, true};
 constexpr RetailShader kRetailUnknown = {nullptr, nullptr, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1};
 }
 

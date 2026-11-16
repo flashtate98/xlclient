@@ -26,6 +26,10 @@
 #include "Engine/Source/Tempest/CMath.h"
 #include "Engine/Source/Tempest/CImVector.h"
 #include "SXC/Lights/Lights.h"  // SXC: which of our lights a model takes
+#include "SXC/Models/RetailEffects.h"  // SXC: retail's edge fade
+#if defined(WOWDECOMP_RETAIL_MODELS)
+#include "Engine/Source/Retail/RetailModel.h"
+#endif
 #include "SXC/Settings/Settings.h"  // SXC: [Models] AlphaKeyRetail
 #include "WarcraftXL/Seams.h"
 
@@ -85,6 +89,11 @@ CM2SceneRender::CM2SceneRender(CM2Scene* scene) {
 // OFFSET: 0x0081F450
 void CM2SceneRender::SetupTextures() {
     SXC::Lights::ClearDrawGlow();  // SXC: glows (SetDrawGlow below)
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // SXC: retail's edge fade for the batch's draws (SXC/Models/RetailEffects.h); particles and ribbons never.
+    SXC::Models::SetDrawEdgeFade(this->m_curType <= 2 && this->m_curBatch && Retail::IsRetailPacked(this->m_curBatch->m_shader) &&
+                                 Retail::RetailPackedShader(this->m_curBatch->m_shader & Retail::kRetailIndexMask).edgeFade);
+#endif
 
     if (this->m_curType > 2) {
         for (uint32_t i = 0; i < 2; i++) {
@@ -1213,6 +1222,7 @@ void CM2SceneRender::Draw(M2PASS pass, M2Element* elements, uint32_t* indices, u
         this->m_cache->LinkToSharedUpdateList(this->m_curShared);
         SXC::Lights::SetDrawModel(this->m_curModel);  // SXC: which of our lights it takes (inside / outside)
         SXC::Lights::ClearDrawGlow();                 // SXC: a batch's SetupTextures sets its own
+        SXC::Models::SetDrawEdgeFade(false);          // SXC: likewise
 
         switch (this->m_curElement->m_type) {
             case 0:
