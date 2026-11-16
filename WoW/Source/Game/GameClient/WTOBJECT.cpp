@@ -126,6 +126,7 @@ static CTexture* WeaponTrailTexture(uint32_t fileDataId) {
 // Drawn added at full strength (one, one) like Retail's glowing trails; the colour's alpha scales it.
 static const uint32_t kEdgeLifeMs = 500;
 static const uint32_t kSteps = 8;
+static const uint32_t kSmoothPasses = 2;
 
 static C3Vector CatmullRom(const C3Vector& p0, const C3Vector& p1, const C3Vector& p2, const C3Vector& p3, float t) {
     const float t2 = t * t;
@@ -169,11 +170,33 @@ bool SWING::BuildTexturedStrip(uint32_t time, const C3Vector& top, const C3Vecto
         return true;
     }
 
-    // Newest edge first: the strip starts at the blade.
+    // Newest edge first: the strip starts at the blade. The recorded edges carry the swing animation's
+    // frame-to-frame wobble (the wrist turning a little each way), so the strip is drawn through a smoothed
+    // copy: kSmoothPasses passes of a 1-2-1 average over neighbouring edges. The newest edge stays exact, so
+    // the trail still leaves from the blade.
     const int32_t first = this->m_head / 2 - 1;
+    C3Vector smooth[2][kMaxEdges];
+
+    for (int32_t k = 0; k < edges; k++) {
+        smooth[0][k] = this->m_points[(2 * (first - k)) & 0x7F];
+        smooth[1][k] = this->m_points[(2 * (first - k) + 1) & 0x7F];
+    }
+
+    for (uint32_t pass = 0; pass < kSmoothPasses; pass++) {
+        for (int32_t side = 0; side < 2; side++) {
+            C3Vector previous = smooth[side][0];
+
+            for (int32_t k = 1; k + 1 < edges; k++) {
+                const C3Vector current = smooth[side][k];
+                smooth[side][k] = (previous + current * 2.0f + smooth[side][k + 1]) * 0.25f;
+                previous = current;
+            }
+        }
+    }
+
     auto edgeAt = [&](int32_t k, bool tip) -> const C3Vector& {
         k = k < 0 ? 0 : (k >= edges ? edges - 1 : k);
-        return this->m_points[(2 * (first - k) + (tip ? 1 : 0)) & 0x7F];
+        return smooth[tip ? 1 : 0][k];
     };
     auto ageAt = [&](int32_t k) -> float {
         return static_cast<float>(time - this->m_edgeTimes[(first - k) % kMaxEdges]);
