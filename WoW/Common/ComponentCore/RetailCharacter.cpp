@@ -1783,8 +1783,8 @@ bool RetailCustomizationChoices(const CCharacterComponent* character, RetailChoi
 
 // FlashWOW: the choices a new character of each race, sex and class may take, as world database rows for
 // mod-retail-customization, which rolls playerbots' looks from them. The same lists the create screen's randomize
-// picks from: each option's choices for the class, with the 3.3.5 values and every other option at their first.
-// Writes Logs\retail_customization_bot_pool.sql.
+// picks from: each option's choices for the class, with the 3.3.5 values and every other option at their first, and
+// the values each 3.3.5 selector may take. Writes Logs\retail_customization_bot_pool.sql.
 int32_t CCommand_RetailBotLooks(const char*, const char*) {
     const std::filesystem::path path = std::filesystem::path("Logs") / "retail_customization_bot_pool.sql";
     std::ofstream out(path, std::ios::trunc);
@@ -1810,8 +1810,26 @@ int32_t CCommand_RetailBotLooks(const char*, const char*) {
                 std::vector<ResolvedOption> resolved;
                 std::vector<uint32_t> choices;
                 ResolveFor(prefs, nullptr, chrModel, resolved, choices);
+                std::vector<Retail::Appearance::Option> ownClass;
+                Retail::Appearance::Options(chrModel, cls, ownClass);
                 bool any = false;
                 for (const auto& option : resolved) {
+                    // A 3.3.5 selector's option: a row per value the class may take (option 0xFFFFFF10 + the selector:
+                    // skin, face, hair style, hair colour, facial hair; choice: the value), for a Two Forms bot's other
+                    // form. The selector lists choices as a Death Knight sees them, so other classes skip theirs.
+                    if (option.driven && option.stock >= 0) {
+                        const std::vector<uint32_t>* own = nullptr;
+                        for (const auto& mine : ownClass)
+                            if (mine.id == option.id) own = &mine.choices;
+                        for (uint32_t value = 0; value < option.offered.size() && value < 256; ++value) {
+                            if (own && std::find(own->begin(), own->end(), option.offered[value]) == own->end()) continue;
+                            out << (first ? "INSERT INTO `retail_customization_bot_pool` (`race`, `sex`, `class`, `option_id`, `choice_id`) VALUES\n" : ",\n")
+                                << "(" << race << ", " << sex << ", " << cls << ", " << (0xFFFFFF10u + static_cast<uint32_t>(option.stock))
+                                << ", " << value << ")";
+                            first = false;
+                        }
+                        continue;
+                    }
                     if (!option.Row()) continue;
                     for (const uint32_t choice : option.offered) {
                         out << (first ? "INSERT INTO `retail_customization_bot_pool` (`race`, `sex`, `class`, `option_id`, `choice_id`) VALUES\n" : ",\n")
