@@ -106,10 +106,13 @@ static CTexture* WeaponTrailTexture(uint32_t fileDataId) {
     std::string path;
     CTexture* texture = nullptr;
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // The listfile lives in the Retail loader; without it (WOWDECOMP_RETAIL_MODELS off) a trail has no texture.
     if (Retail::Source().PathOf(fileDataId, path)) {
         CStatus status;
         texture = TextureCreate(path.c_str(), CGxTexFlags(GxTex_LinearMipLinear, 0, 0, 0, 0, 0, 1, 0, 0, 0), &status, 0);
     }
+#endif
 
     M2Log("Weapon trail texture %u: %s%s\n", fileDataId, path.empty() ? "no path in the listfile" : path.c_str(),
         texture ? "" : " (not loaded)");
