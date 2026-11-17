@@ -98,13 +98,18 @@ static bool HaveShader(const char* kind, const char* name) {
     return found;
 }
 
-void M2RetailBatchShaders(const M2Batch* batch, const char** vertex, const char** pixel, char* name, size_t size) {
+void M2RetailBatchShaders(const M2Batch* batch, const char** vertex, const char** pixel, char* name, size_t size, bool* cataFiles) {
     const uint16_t index = batch->m_shader & Retail::kRetailIndexMask;
     const Retail::RetailShader& real = Retail::RetailPackedShader(index);
     const bool present = real.vertex && HaveShader("Vertex", real.vertex) && HaveShader("Pixel", real.pixel);
     *vertex = real.vertex;
     *pixel = real.pixel;
     int length = 0;
+
+    if (cataFiles) {
+        // Retail's shaders past 0x8002 include at least one of Cataclysm's files (0x8000..0x8002 are 3.3.5's own).
+        *cataFiles = present && !real.unavailable && batch->m_textureCount >= real.textures && index > 2;
+    }
 
     if (name) {
         length = !real.vertex
@@ -1347,18 +1352,18 @@ int32_t CM2Shared::InitializeSkinProfile() {
     {
 #if defined(WOWDECOMP_RETAIL_MODELS)
         // Not in the original: a 3.3.5-format model may carry retail's packed ids, kept by a retroport.
-        // 3.3.5 stores none (it makes 0x8001..0x8003 itself, in SubstituteSpecializedShaders, numbered one
-        // off from retail; 0x8000 is its "layer drawn by the one before"), so a stored id from 0x8001 is
-        // retail's: tagged and drawn as retail models draw it. 0x8000 keeps 3.3.5's meaning (one stock
-        // weapon stores it). The layer merging packs two texture slots and would mangle the tagged
-        // batches' texture runs, so a model with any is drawn unmerged.
+        // 3.3.5 stores none (it makes 0x8000..0x8003 itself, in SubstituteSpecializedShaders, numbered one
+        // off from retail; of 27,055 stock skins only an orphan one, M2512E00.skin with no model, stores
+        // one), so a stored packed id is retail's: tagged and drawn as retail models draw it. The layer
+        // merging packs two texture slots and would mangle the tagged batches' texture runs, so a model
+        // with any is drawn unmerged.
         bool retailIds = false;
 
         for (uint32_t i = 0; i < this->m_skinData->m_batches.m_count; i++) {
             M2Batch* batch = &this->m_skinData->m_batches[i];
             const uint16_t index = batch->m_shader & 0x7FFF;
 
-            if ((batch->m_shader & 0x8000) && index >= 1 && index <= Retail::kRetailIndexMask) {
+            if ((batch->m_shader & 0x8000) && index <= Retail::kRetailIndexMask) {
                 batch->m_shader = static_cast<uint16_t>(Retail::kRetailPackedTag | index);
                 retailIds = true;
             }

@@ -71,7 +71,7 @@ bool ValidateSkin(const std::vector<uint8_t>& bytes, const std::vector<uint8_t>&
 // loaded skin, tagged so the stock code can't misread them: 3.3.5 numbers its own three packed effects
 // from 1 and uses 0x8000 itself as "disabled layer" (CM2Shared::InitializeSkinProfile, the draw paths).
 // PrepareSkin writes kRetailPackedTag | index into the batch (only in memory, never into a file), and
-// CM2Shared::InitializeSkinProfile does for the ids from 0x8001 a 3.3.5-format model stores (retroports);
+// CM2Shared::InitializeSkinProfile does for the packed ids a 3.3.5-format model stores (retroports);
 // CM2Shared::GetEffect draws it by RetailPackedShader(index), and the Batches panel shows it as retail's id.
 constexpr uint16_t kRetailPackedTag = 0xA000;   // 0x8000 kept (a packed id), 0x2000 marks retail numbering
 constexpr uint16_t kRetailPackedMask = 0xF000;
