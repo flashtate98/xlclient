@@ -297,8 +297,18 @@ const LightParamsRec* DayNight::GetLightParams(const LightRec* light, int32_t pa
 // VERIFY: 731bfb93 auto
 // OFFSET: 0x007EBF90
 float DayNight::CalcIndividualColorFromDBRec(int32_t time, const LightParamsRec* params, int32_t band) {
-    LightFloatBandRec rec;
-    g_lightFloatBandDB.GetRecord(band + 6 * params->m_id - 5, &rec);
+    // SXC: a missing row left `rec` uninitialised (GetRecord doesn't touch it), and its garbage, NaN included,
+    // reached the fog (Deepholm fogged solid where a ported light's rows sat at the wrong ids, 2026-11-17). Now
+    // it reads as empty (0), logged once.
+    LightFloatBandRec rec = {};
+    const int32_t id = band + 6 * params->m_id - 5;
+
+    if (!g_lightFloatBandDB.GetRecord(id, &rec)) {
+        char key[64];
+        SStrPrintf(key, sizeof key, "light-float-band %d", id);
+        SXC::LogOnce(key, "Light: LightFloatBand %d is missing (LightParams %d, band %d); read as 0", id, params->m_id, band);
+    }
+
     return DayNight::InterpFloatBand(&rec, time, band);
 }
 
@@ -2327,6 +2337,22 @@ void DayNight::UpdateFog() {
             ApplyFogColorBlend(&info.m_fogInterior);
         } else {
             DayNight::s_lightFlags &= ~1;
+        }
+    }
+
+    // SXC: the stock fog's distances and where they come from, logged when they change by a fifth (a place
+    // fogged to a few yards: Deepholm, 2026-11-17).
+    {
+        static float s_loggedEnd = -1.0f;
+        const float fogEnd = info.m_fog.m_end;
+
+        if (s_loggedEnd < 0.0f || fogEnd < s_loggedEnd * 0.8f || fogEnd > s_loggedEnd * 1.25f) {
+            SXC::Log("Fog: stock fog %.1f-%.1f yd, density %.2f (the light's bands: end %.1f yd, start x%.2f, rate %.2f; far clip %.1f; "
+                "%s; WMO fog %s; liquid %d; light flags 0x%x)",
+                info.m_fog.m_start, fogEnd, info.m_fog.m_density, info.m_bands.m_fogEnd, info.m_bands.m_fogStartMul,
+                info.m_bands.m_fogRate, info.m_farClip, s_fogOverride ? "overridden (SetOverrideFog)" : "not overridden",
+                inside ? "applied" : "none", liquidStatus, DayNight::s_lightFlags);
+            s_loggedEnd = fogEnd;
         }
     }
 
