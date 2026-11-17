@@ -933,7 +933,9 @@ bool PrepareModel(const std::vector<uint8_t>& bytes, std::vector<uint8_t>& prepa
             const size_t m = U32(b, 0x74) + size_t(i) * 4;
             const uint16_t blend = U16(b, m + 2);
             if (blend < sizeof(kBlend)) { b[m + 2] = kBlend[blend]; b[m + 3] = 0; }
-            b[m] &= 0x1f; b[m + 1] = 0;
+            // 0x100 (receives no shadow) means the same to the 3.3.5 engine (CM2Scene::ComputeElementShaders):
+            // kept, so glow cards, beams and dust don't darken in the stock shadow.
+            b[m] &= 0x1f; b[m + 1] &= 0x01;
         }
     }
     // Retail ribbons may layer several textures and scroll them with a texture transform (byte 175; the

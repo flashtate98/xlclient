@@ -1,8 +1,9 @@
-"""Cataclysm's model shaders (4.3.4) for the 3.3.5 engine: read from Cata's own `.bls` files, repacked
-into 3.3.5's container and permutation order, so the engine loads them like any stock shader.
+"""Cataclysm's model and WMO shaders (4.3.4) for the 3.3.5 engine: read from Cata's own `.bls` files,
+repacked into 3.3.5's container and permutation order, so the engine loads them like any stock shader.
 
 Only what 3.3.5 lacks is taken: the vertex and pixel shaders Cata's packed model shader table names
-(Engine/Source/Model2/M2Shader.cpp there) that the client has no file for. A name the client has
+(Engine/Source/Model2/M2Shader.cpp there) and its unified WMO effects use (WMO_VERTEX, WMO_PIXEL), that
+the client has no file for, plus those effects as an effects file of their own. A name the client has
 keeps the client's own shader.
 
 Cata's container (`GXSH` version 0x10004, CGxShader::Load / CGxShaderPermute::Load in the Cata
@@ -46,6 +47,18 @@ MODEL_PIXEL = ('Combiners_Opaque_Mod2xNA_Alpha', 'Combiners_Opaque_AddAlpha', 'C
                'Combiners_Opaque_Mod_Add_Wgt', 'Combiners_Opaque_Mod2xNA_Alpha_UnshAlpha', 'Combiners_Mod_Dual_Crossfade',
                'Combiners_Mod', 'Combiners_Opaque_Mod2xNA_Alpha_Alpha', 'Combiners_Mod_Mod',
                'Combiners_Mod_Masked_Dual_Crossfade', 'Combiners_Opaque_Alpha', 'Guild', 'Guild_NoBorder', 'Guild_Opaque')
+
+# Cataclysm's unified WMO effects 7-13 (CMapObjRender::s_unifiedEffects there; 10 is drawn as a liquid
+# window, not by an effect) need these shaders 3.3.5 lacks (Effects\MapObjU.wfx there). The WMO shaders read
+# the model shaders' constants (sun, lights, fog, c28/c29) and the texture matrices c6..c9, which 3.3.5's
+# own WMO vertex shaders never read (CMapObj::UnifiedRender sets them for these effects, as Cata does).
+WMO_VERTEX = ('MapObjUDiffuse_Comp_Refl', 'MapObjUDiffuse_Comp_Terrain', 'MapObjUDiffuse_T1_Env_T2')
+WMO_PIXEL = ('MapObjTwoLayerEnvMetal', 'MapObjTwoLayerTerrain', 'MapObjDiffuseEmissive', 'MapObjMaskedEnvMetal',
+             'MapObjEnvMetalEmissive', 'MapObjTwoLayerDiffuseOpaque', 'MapObjTwoLayerDiffuse')
+# The effects file the client adds after its own MapObjU.wfx (World::Initialize): Cata's effects whose names
+# 3.3.5's file doesn't have, MapObjUTwoLayerDiffuse among them: the client draws 6 with it where deployed, as
+# Cata draws every WMO (3.3.5's MapObjUComposite otherwise).
+WMO_EFFECTS = 'CataMapObjU.wfx'
 
 PROFILE = {'vertex': 'vs_3_0', 'pixel': 'ps_3_0'}
 PERMUTATIONS = {'vertex': 90, 'pixel': 16}   # what 3.3.5's CShaderEffect loads per shader
@@ -105,11 +118,46 @@ class Repacked(object):
         self.data = container([(hdr[0], hdr[1], code) for hdr, code in self.records])
 
 
+class EffectFile(object):
+    """A loose effects file (no shader records): Cata's WMO effects the client lacks."""
+
+    def __init__(self, name, data):
+        self.kind, self.name, self.records, self.data = 'effects', name, [], data
+        self.path = BS.join(['Shaders', 'Effects', name])
+
+
+def wmo_effects(cata_dir):
+    """Cataclysm's unified WMO effects that 3.3.5's MapObjU.wfx lacks, as an effects file of their own."""
+    path = os.path.join(cata_dir, 'Effects', 'MapObjU.wfx')
+    if not os.path.isfile(path):
+        raise SystemExit('no Effects\\MapObjU.wfx in the Cataclysm shaders (%s)' % path)
+    text = open(path, 'rb').read().decode('latin-1')
+    stock = ('MapObjUDiffuse', 'MapObjUOpaque', 'MapObjUSpecular', 'MapObjUMetal', 'MapObjUEnv', 'MapObjUEnvMetal')
+    blocks, i = [], 0
+    while True:
+        start = text.find('Effect(', i)
+        if start < 0:
+            break
+        depth, j = 0, text.index('{', start)
+        while True:
+            depth += {'{': 1, '}': -1}.get(text[j], 0)
+            j += 1
+            if depth == 0:
+                break
+        name = text[start + 7:text.index(')', start)].strip()
+        if name not in stock:
+            blocks.append(text[start:j])
+        i = j
+    header = '// Cataclysm 4.3.4 unified WMO effects 3.3.5 lacks (Tools/VulkanShaders --cata). Generated; do not edit.\r\n'
+    return EffectFile(WMO_EFFECTS, (header + '\r\n\r\n'.join(blocks) + '\r\n').encode('latin-1'))
+
+
 def repack(cata_dir, have):
-    """Every model shader of Cata's table the client lacks, from Cata's shader folder (the one holding
-    Vertex\\ and Pixel\\). `have(kind, name)` says whether the client has the shader already."""
+    """Every model and WMO shader of Cata's tables the client lacks, from Cata's shader folder (the one
+    holding Vertex\\ and Pixel\\), and the WMO effects file. `have(kind, name)` says whether the client has
+    the shader already."""
     out = []
-    for kind, names in (('vertex', MODEL_VERTEX), ('pixel', MODEL_PIXEL)):
+    for kind, names in (('vertex', MODEL_VERTEX + WMO_VERTEX), ('pixel', MODEL_PIXEL + WMO_PIXEL)):
         for name in names:
             if have(kind, name):
                 continue
@@ -118,6 +166,7 @@ def repack(cata_dir, have):
                 raise SystemExit('no %s in the Cataclysm shaders (%s)' % (name, path))
             with open(path, 'rb') as f:
                 out.append(Repacked(kind, name, read_container(f.read())))
+    out.append(wmo_effects(cata_dir))
     return out
 
 

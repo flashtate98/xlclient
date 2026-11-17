@@ -5,6 +5,7 @@
 #include "Engine/Source/Storm/H/storm.h"
 #include "Engine/Source/ShaderEffect/ShaderEffect.h"
 #include <cmath>
+#include <cstring>
 #include "WoW/Source/WorldClient/Types.h"
 #include "WoW/Source/WorldClient/DayNight.h"
 #include "Engine/Source/Services/AsyncFile.h"
@@ -174,10 +175,28 @@ void CMapObj::CreateMaterial(uint8_t texture) {
         texture2 = "";
     }
 
+    // SXC: Cataclysm's unified shaders 7-13 draw with its own effects (MapObjCata) in a unified WMO when they
+    // are deployed; as Cataclysm does, a material missing a texture its shader samples becomes opaque (4).
+    const char* texture3 = &this->m_textureNameList[material.m_texture3];
+    bool cata = (this->m_header->m_flags & 0x2) && MapObjCata::Drawn(material.m_shader);
+
+    if (cata) {
+        const char* names[3] = { texture1, texture2, texture3 };
+
+        for (uint32_t i = 0; i < MapObjCata::TextureCount(material.m_shader); i++) {
+            if (!*names[i]) {
+                material.m_shader = 4;
+                cata = false;
+                break;
+            }
+        }
+    }
+
     // SXC: retail WMOs (Cataclysm on) use shaders past 3.3.5's seven (CMapObj::s_unifiedShaders), which the draw
-    // indexed unchecked: a garbage effect and a crash (Seyri, 2026-10-31, the Abyssal Breach). Each takes the
-    // nearest of ours: two-layer ones the composite (6), env-metal ones env-metal (5), the rest diffuse.
-    if (material.m_shader >= 7) {
+    // indexed unchecked: a garbage effect and a crash (Seyri, 2026-10-31, the Abyssal Breach). Where Cataclysm's
+    // effect can't draw one, it takes the nearest of ours: two-layer ones the composite (6), env-metal ones
+    // env-metal (5), the rest diffuse.
+    if (material.m_shader >= 7 && !cata) {
         static const uint8_t kRetail[] = {
             5,  // 7 TwoLayerEnvMetal
             6,  // 8 TwoLayerTerrain
@@ -198,7 +217,10 @@ void CMapObj::CreateMaterial(uint8_t texture) {
         const uint32_t ours = retail < sizeof kRetail ? kRetail[retail] : 0;
         char key[300];
         SStrPrintf(key, sizeof key, "wmo-shader %s %u", this->m_wmoName, material.m_shader);
-        SXC::LogOnce(key, "WMO %s: material shader %u (retail) drawn as %u; we don't have it yet", this->m_wmoName, material.m_shader, ours);
+        SXC::LogOnce(key, "WMO %s: material shader %u (retail) drawn as %u: %s", this->m_wmoName, material.m_shader, ours,
+            material.m_shader == 10 || material.m_shader >= 14 ? "we don't have it yet"
+            : !(this->m_header->m_flags & 0x2) ? "Cataclysm's shaders draw in unified WMOs only"
+            : "Cataclysm's WMO effects aren't deployed (Tools/VulkanShaders --cata)");
         material.m_shader = ours;
     }
 
@@ -225,12 +247,28 @@ void CMapObj::CreateMaterial(uint8_t texture) {
             break;
     }
 
+    // SXC: TwoLayerTerrain's second texture is the named one's specular (<name>_s.blp), as Cataclysm loads it.
+    char specular[260];
+
+    if (cata && material.m_shader == 8) {
+        SStrCopy(specular, texture2, sizeof specular);
+        if (char* dot = strrchr(specular, '.')) {
+            SStrCopy(dot, "_s.blp", sizeof specular - (dot - specular));
+        }
+        texture2 = specular;
+    }
+
     material.Textures()[0] = CMap::LoadTexture(texture1);
 
     if (texture2) {
         material.Textures()[1] = CMap::LoadTexture(texture2);
     } else {
         material.Textures()[1] = nullptr;
+    }
+
+    // SXC: the third texture of Cataclysm's three-texture shaders, kept beside the material (MapObjCata).
+    if (cata && MapObjCata::TextureCount(material.m_shader) > 2) {
+        MapObjCata::SetThirdTexture(material, CMap::LoadTexture(texture3));
     }
 }
 
@@ -623,7 +661,8 @@ void CMapObjGroup::Create() {
     }
 
     for (uint32_t i = 0; i < batchCount; i++) {
-        if (mapObj->m_materialList[this->m_batchList[i].m_texture].m_shader == 6) {
+        // SXC: Cataclysm's two-layer shaders read the second colour and UV set too (6 alone in the original)
+        if (MapObjCata::SecondVertexSet(mapObj->m_materialList[this->m_batchList[i].m_texture].m_shader)) {
             this->m_unkLoadedFlag |= 0x8;
             return;
         }

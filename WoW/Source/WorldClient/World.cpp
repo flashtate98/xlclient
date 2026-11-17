@@ -1720,6 +1720,9 @@ void CWorld::Initialize() {
     CShaderEffect::InitShaderSystem(M2GetCacheFlags() & 0x8, CWorld::enables2 & Enable_HwPcf);
     CShaderEffectManager::AddEffectFile("MapObj.wfx");
     CShaderEffectManager::AddEffectFile("MapObjU.wfx");
+    // SXC: Cataclysm's unified WMO effects 7-13 (Tools/VulkanShaders --cata writes it; absent, nothing is added
+    // and those shaders draw as 3.3.5's, CMapObj::CreateMaterial)
+    CShaderEffectManager::AddEffectFile("CataMapObjU.wfx");
     CShaderEffectManager::AddEffectFile("Model2.wfx");
     CShaderEffectManager::AddEffectFile("Particle.wfx");
     CShaderEffectManager::AddEffectFile("ShadowMap.wfx");

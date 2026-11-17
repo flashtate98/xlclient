@@ -75,8 +75,9 @@ def main(argv):
     ap.add_argument('--retail-palette', action='store_true',
                     help='declare 1024 vertex constant rows (for clients built with WOWDECOMP_RETAIL_MODELS)')
     ap.add_argument('--cata', default=None,
-                    help="Cataclysm's shader folder (holding Vertex\\ and Pixel\\): the model shaders its packed "
-                         "table names that the client lacks, repacked into <out>/data/ and translated")
+                    help="Cataclysm's shader folder (holding Vertex\\, Pixel\\ and Effects\\): the model and WMO "
+                         "shaders its tables name that the client lacks, repacked into <out>/data/ and translated, "
+                         "and its WMO effects the client lacks")
     args = ap.parse_args(argv)
     if args.retail_palette:
         emitter_module.VCONST_LARGE = 1024
@@ -101,7 +102,7 @@ def main(argv):
         have = {(r.kind, r.name.lower()) for r in recs}
         repacked = cata.repack(args.cata, lambda kind, name: (kind, name.lower()) in have)
         recs += cata.records(repacked, archive.Record)
-        print('cataclysm: %d model shader(s) the client lacks: %s' % (len(repacked), ', '.join(rp.name for rp in repacked)))
+        print('cataclysm: %d shader(s) and effects file(s) the client lacks: %s' % (len(repacked), ', '.join(rp.name for rp in repacked)))
     # Fold byte-identical records: one module per md5, every Name:perm that has it listed.
     by_md5 = collections.OrderedDict()
     names = collections.defaultdict(list)

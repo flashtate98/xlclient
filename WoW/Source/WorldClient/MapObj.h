@@ -68,7 +68,9 @@ class CMapObj : public CMapObjIndex, public TSHashObject<CMapObj, HASHKEY_NONE> 
     static void (CMapObj::*s_renderGroupExterior)(CMapObjGroup* group, uint32_t index);
     static void (CMapObj::*s_renderGroupInterior)(CMapObjGroup* group, uint32_t index);
     static CShaderEffect* s_classicShaders[7];
-    static CShaderEffect* s_unifiedShaders[7];
+    // SXC: 14, for Cataclysm's unified effects 7-13 (Shaders\Effects\CataMapObjU.wfx, Tools/VulkanShaders
+    // --cata; null when not deployed, and 10, a liquid window there). 0-6 are 3.3.5's own.
+    static CShaderEffect* s_unifiedShaders[14];
     static int32_t s_lightingMode;
     static uint32_t s_maxLiquidQueryDepth;
 
@@ -308,6 +310,24 @@ struct SMOMaterial {
 
 inline CTexture** SMOMaterial::Textures() {
     return reinterpret_cast<CTexture**>(&this->m_runTimeData[4 - 2 * sizeof(CTexture*) / sizeof(uint32_t)]);
+}
+
+// SXC: Cataclysm's unified WMO shaders (7-13) in unified WMOs. Their textures, UV sets and vertex colours as
+// Cataclysm counts them (s_shaderInfo there); the third texture (TwoLayerEnvMetal, MaskedEnvMetal,
+// EnvMetalEmissive), for which the material's run-time data has no room, is kept beside it.
+namespace MapObjCata {
+    // Whether a unified material's shader is drawn by Cataclysm's effect (7-13, deployed).
+    bool Drawn(uint32_t shader);
+    // The textures the shader samples (0: not one of Cataclysm's).
+    uint32_t TextureCount(uint32_t shader);
+    // Whether the shader reads the second vertex colour and UV set (the group's PNC2T2 vertices); 6, 3.3.5's
+    // composite, too.
+    bool SecondVertexSet(uint32_t shader);
+    CTexture* ThirdTexture(const SMOMaterial& material);
+    void SetThirdTexture(const SMOMaterial& material, CTexture* texture);
+    // Before drawing a batch with Cataclysm's effect: its third texture, the wrap of the other two, and the
+    // texture matrices its vertex shader reads (CMapObjRender::ApplyMaterial there).
+    void Apply(const SMOMaterial& material, uint32_t shader);
 }
 
 struct SMOPortal {
