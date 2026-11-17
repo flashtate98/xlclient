@@ -26,7 +26,6 @@
 #include "Engine/Source/Tempest/CMath.h"
 #include "Engine/Source/Tempest/CImVector.h"
 #include "SXC/Lights/Lights.h"  // SXC: which of our lights a model takes
-#include "SXC/Models/RetailEffects.h"  // SXC: retail's edge fade
 #if defined(WOWDECOMP_RETAIL_MODELS)
 #include "Engine/Source/Retail/RetailModel.h"
 #endif
@@ -41,6 +40,47 @@ namespace {
                                             "Cut alpha-keyed model textures at 128/255 like later clients, so retail and retroported models show. Off: 3.3.5's 224/255.");
         return s_retail.Get() ? 0.50196081f : 0.87843138f;
     }
+
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: a retail packed batch's texture matrices and texture weights, as Cataclysm's
+    // CM2SceneRender::SetupTextureTransforms / SetupTextures set them for the vertex shader it draws with.
+    void SetupRetailTextures(const M2Data* data, CM2Model* model, const M2Batch* batch) {
+        const char* vertex;
+        const char* pixel;
+        M2RetailBatchShaders(batch, &vertex, &pixel, nullptr, 0);
+        const Retail::RetailTransforms transforms = Retail::RetailVertexTransforms(vertex);
+
+        for (uint32_t k = 0; k < 2; k++) {
+            if (transforms.slot[k] < 0) {
+                continue;
+            }
+
+            const uint32_t combo = transforms.slot[k] + batch->m_textureTransformComboIndex;
+            const uint32_t transform = combo < data->m_textureTransformCombos.m_count ? data->m_textureTransformCombos[combo] : 0xFFFF;
+
+            if (transform >= data->m_textureTransforms.m_count) {
+                CShaderEffect::SetTexMtx_Identity(transforms.stage[k]);
+            } else {
+                CShaderEffect::SetTexMtx(model->m_textureMatrices[transform], transforms.stage[k]);
+            }
+        }
+
+        // Batch flag 0x40: a weight per texture (else all 1).
+        float weights[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+
+        if (batch->m_flags & 0x40) {
+            for (uint32_t k = 0; k < batch->m_textureCount && k < 4; k++) {
+                const uint32_t combo = k + batch->m_textureWeightComboIndex;
+
+                if (combo < data->m_textureWeightCombos.m_count && data->m_textureWeightCombos[combo] < data->m_textureWeights.m_count) {
+                    weights[k] = model->m_textureWeights[data->m_textureWeightCombos[combo]].m_currentValue;
+                }
+            }
+        }
+
+        GxShaderConstantsSet(GxSh_Pixel, 4, weights, 1);
+    }
+#endif
 }
 
 // STATIC: 0x00A45390
@@ -89,11 +129,6 @@ CM2SceneRender::CM2SceneRender(CM2Scene* scene) {
 // OFFSET: 0x0081F450
 void CM2SceneRender::SetupTextures() {
     SXC::Lights::ClearDrawGlow();  // SXC: glows (SetDrawGlow below)
-#if defined(WOWDECOMP_RETAIL_MODELS)
-    // SXC: retail's edge fade for the batch's draws (SXC/Models/RetailEffects.h); particles and ribbons never.
-    SXC::Models::SetDrawEdgeFade(this->m_curType <= 2 && this->m_curBatch && Retail::IsRetailPacked(this->m_curBatch->m_shader) &&
-                                 Retail::RetailPackedShader(this->m_curBatch->m_shader & Retail::kRetailIndexMask).edgeFade);
-#endif
 
     if (this->m_curType > 2) {
         for (uint32_t i = 0; i < 2; i++) {
@@ -120,6 +155,14 @@ void CM2SceneRender::SetupTextures() {
 
     uint32_t i = 0;
     CTexture* glowStages[2] = { nullptr, nullptr };  // SXC: the stages' textures, for the model's glows
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: a retail packed batch takes its texture matrices as Cataclysm sets them, by the
+    // vertex shader its effect draws with (the loop below would give stage 2 the sun's rows c10/c11), and
+    // the texture weights of the _Wgt and crossfade pixel shaders in pixel c4 (Cata's SetupTextures).
+    const bool retail = CShaderEffect::s_enableShaders && Retail::IsRetailPacked(batch->m_shader);
+#else
+    const bool retail = false;
+#endif
 
     if (count) {
         uint32_t shift = 4;
@@ -148,7 +191,9 @@ void CM2SceneRender::SetupTextures() {
             uint32_t stage = envSecond ? 1 : i;
             uint16_t shader = this->m_curBatch->m_shader;
 
-            if ((shader & 0x8000) || !((shader >> shift) & 8)) {
+            if (retail) {
+                // the matrices after the loop
+            } else if ((shader & 0x8000) || !((shader >> shift) & 8)) {
                 if (transform >= this->m_data->m_textureTransforms.m_count) {
                     CShaderEffect::SetTexMtx_Identity(stage);
                 } else {
@@ -163,6 +208,12 @@ void CM2SceneRender::SetupTextures() {
         } while (i < count);
 
         SXC::Lights::SetDrawGlow(this->m_curModel, glowStages);  // SXC:
+
+#if defined(WOWDECOMP_RETAIL_MODELS)
+        if (retail) {
+            SetupRetailTextures(this->m_data, this->m_curModel, batch);
+        }
+#endif
 
         if (i >= 2) {
             return;
@@ -1222,7 +1273,6 @@ void CM2SceneRender::Draw(M2PASS pass, M2Element* elements, uint32_t* indices, u
         this->m_cache->LinkToSharedUpdateList(this->m_curShared);
         SXC::Lights::SetDrawModel(this->m_curModel);  // SXC: which of our lights it takes (inside / outside)
         SXC::Lights::ClearDrawGlow();                 // SXC: a batch's SetupTextures sets its own
-        SXC::Models::SetDrawEdgeFade(false);          // SXC: likewise
 
         switch (this->m_curElement->m_type) {
             case 0:

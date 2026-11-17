@@ -15,7 +15,6 @@
 #include "Engine/Source/Gx/CGxTex.h"
 #include "SXC/Cover/Cover.h"  // SXC: projected textures on the raised covers
 #include "SXC/Lights/Lights.h"  // SXC: the draw's glow
-#include "SXC/Models/RetailEffects.h"  // SXC: and its edge fade
 #include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler's draw count
 
 namespace frame     = gxvk::vk::frame;
@@ -270,7 +269,7 @@ bool CGxDeviceVulkan::IDrawState(pipelines::Draw& d) {
     d.params[2] = static_cast<float>(colourOp0 | (colourOp1 << 3));
     d.params[3] = static_cast<float>(alphaOp0 | (alphaOp1 << 3));
     d.misc[0] = d.params[0] / 255.0f;
-    d.misc[1] = SXC::Lights::DrawingModel() ? SXC::Models::DrawEdgeFade() : 0.0f;  // SXC: retail's edge fade (the model pixel modules)
+    d.misc[1] = 0.0f;
     d.misc[2] = static_cast<float>(colourOp0);
     d.misc[3] = static_cast<float>(alphaOp0);
     this->ITexTransforms(d);

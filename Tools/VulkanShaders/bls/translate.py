@@ -19,6 +19,7 @@ import sys
 import tempfile
 
 from . import archive
+from . import cata
 from . import emitter as emitter_module
 from .emitter import (Emitter, Refused, companion_module, companion_block, manifest_block, is_grass_vertex, grass_instanced_module, grass_block, FOG_ROW,
                       PCONST, VCONST_SMALL)
@@ -73,6 +74,9 @@ def main(argv):
     ap.add_argument('--no-compile', action='store_true', help='emit GLSL only')
     ap.add_argument('--retail-palette', action='store_true',
                     help='declare 1024 vertex constant rows (for clients built with WOWDECOMP_RETAIL_MODELS)')
+    ap.add_argument('--cata', default=None,
+                    help="Cataclysm's shader folder (holding Vertex\\ and Pixel\\): the model shaders its packed "
+                         "table names that the client lacks, repacked into <out>/data/ and translated")
     args = ap.parse_args(argv)
     if args.retail_palette:
         emitter_module.VCONST_LARGE = 1024
@@ -92,6 +96,12 @@ def main(argv):
     write_tree = scratch is None
 
     recs = archive.enumerate_records(args.data)
+    repacked = []
+    if args.cata:
+        have = {(r.kind, r.name.lower()) for r in recs}
+        repacked = cata.repack(args.cata, lambda kind, name: (kind, name.lower()) in have)
+        recs += cata.records(repacked, archive.Record)
+        print('cataclysm: %d model shader(s) the client lacks: %s' % (len(repacked), ', '.join(rp.name for rp in repacked)))
     # Fold byte-identical records: one module per md5, every Name:perm that has it listed.
     by_md5 = collections.OrderedDict()
     names = collections.defaultdict(list)
@@ -112,10 +122,16 @@ def main(argv):
         selected.setdefault(r.md5, r)
 
     if write_tree:
-        for kind in ('vertex', 'pixel'):
+        for kind in ('vertex', 'pixel', 'data'):
             d = os.path.join(out, kind)
             if os.path.isdir(d):
                 shutil.rmtree(d)
+        # The repacked Cata containers, laid out as the client's Data folder has them (loose files).
+        for rp in repacked:
+            path = os.path.join(out, 'data', *rp.path.split('\\'))
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, 'wb') as f:
+                f.write(rp.data)
     for kind in ('vertex', 'pixel'):
         os.makedirs(os.path.join(out, kind), exist_ok=True)
 

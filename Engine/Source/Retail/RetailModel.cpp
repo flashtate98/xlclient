@@ -1160,9 +1160,9 @@ bool ValidateSkin(const std::vector<uint8_t>& b, const std::vector<uint8_t>& m, 
         size_t p = U32(b, 40) + size_t(i) * 24;
         uint32_t n = U16(b, p + 14);
         uint16_t shader = U16(b, p + 2);
-        // Packed ids must carry the retail tag (PrepareSkin); three textures only with a packed retail
-        // shader, since the stock decoder of non-packed ids knows two stages.
-        if (!n || n > 3 || ((shader & 0x8000) && !IsRetailPacked(shader)) || (n == 3 && !IsRetailPacked(shader)))
+        // Packed ids must carry the retail tag (PrepareSkin); three or four textures only with a packed
+        // retail shader, since the stock decoder of non-packed ids knows two stages.
+        if (!n || n > 4 || ((shader & 0x8000) && !IsRetailPacked(shader)) || (n >= 3 && !IsRetailPacked(shader)))
             return Fail(error, "Retail shader or texture count is not supported yet");
         // The batch geoset index (+6) is unused by the legacy renderer and may exceed the section count in newer models.
         const bool section = U16(b, p + 4) < U32(b, 28);
@@ -1257,45 +1257,65 @@ std::string HexWord(uint16_t v) {
 
 namespace {
 // Retail's packed shader table by index, as far as Cataclysm's 4.3.4 client knows it (M2Shader.cpp's
-// s_shaderEffects; kb: cata-decomp-reference-2026-11-16), with how each is drawn today. Later
-// indices come from wowdev's .skin page (8.0.1 M2ShaderTable) when we meet them.
+// s_shaderEffects; kb: cata-decomp-reference-2026-11-16): retail's shaders, the stages they sample, and
+// the stand-in for when they can't be used. Later indices come from wowdev's .skin page (8.0.1
+// M2ShaderTable) when we meet them.
 constexpr const char* kFirstTexture = "every layer past the first texture";
+constexpr const char* kGuildColours = "the guild colours (pixel c0, c1, c3), which 3.3.5 doesn't have";
 constexpr RetailShader kRetailShaders[] = {
-    /* 0x8000 */ {"Diffuse_T1_Env", "Combiners_Opaque_Mod2xNA_Alpha", "Diffuse_T1_Env", "Combiners_Opaque_Mod2xNA_Alpha", nullptr, 2},
-    /* 0x8001 */ {"Diffuse_T1_Env", "Combiners_Opaque_AddAlpha", "Diffuse_T1_Env", "Combiners_Opaque_AddAlpha", nullptr, 2},
-    /* 0x8002 */ {"Diffuse_T1_Env", "Combiners_Opaque_AddAlpha_Alpha", "Diffuse_T1_Env", "Combiners_Opaque_AddAlpha_Alpha", nullptr, 2},
-    /* 0x8003 */ {"Diffuse_T1_Env_T1", "Combiners_Opaque_Mod2xNA_Alpha_Add", "Diffuse_T1_Env", "Combiners_Opaque_Mod2xNA_Alpha", "the third texture's additive glow layer", 2},
-    /* 0x8004 */ {"Diffuse_T1_Env", "Combiners_Mod_AddAlpha", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
-    /* 0x8005 */ {"Diffuse_T1_T1", "Combiners_Opaque_AddAlpha", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
-    /* 0x8006 */ {"Diffuse_T1_T1", "Combiners_Mod_AddAlpha", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
-    /* 0x8007 */ {"Diffuse_T1_Env", "Combiners_Mod_AddAlpha_Alpha", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
-    /* 0x8008 */ {"Diffuse_T1_Env", "Combiners_Opaque_Alpha_Alpha", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
-    /* 0x8009 */ {"Diffuse_T1_Env_T1", "Combiners_Opaque_Mod2xNA_Alpha_3s", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
-    /* 0x800A */ {"Diffuse_T1_T1", "Combiners_Opaque_AddAlpha_Wgt", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
-    /* 0x800B */ {"Diffuse_T1_Env", "Combiners_Mod_Add_Alpha", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
-    /* 0x800C */ {"Diffuse_T1_Env", "Combiners_Opaque_ModNA_Alpha", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
-    /* 0x800D */ {"Diffuse_T1_Env", "Combiners_Mod_AddAlpha_Wgt", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
-    /* 0x800E */ {"Diffuse_T1_T1", "Combiners_Mod_AddAlpha_Wgt", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
-    /* 0x800F */ {"Diffuse_T1_T2", "Combiners_Opaque_AddAlpha_Wgt", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
-    /* 0x8010 */ {"Diffuse_T1_Env", "Combiners_Opaque_Mod_Add_Wgt", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
-    /* 0x8011 */ {"Diffuse_T1_Env_T1", "Combiners_Opaque_Mod2xNA_Alpha_UnshAlpha", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
-    /* 0x8012 */ {"Diffuse_T1_T1_T1", "Combiners_Mod_Dual_Crossfade", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
-    /* 0x8013 */ {"Diffuse_EdgeFade_T1", "Combiners_Mod", "Diffuse_T1", "Combiners_Mod", nullptr, 1, true},
-    /* 0x8014 */ {"Diffuse_T1_Env_T2", "Combiners_Opaque_Mod2xNA_Alpha_Alpha", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
-    /* 0x8015 */ {"Diffuse_EdgeFade_T1_T2", "Combiners_Mod_Mod", "Diffuse_T1_T2", "Combiners_Mod_Mod", nullptr, 2, true},
-    /* 0x8016 */ {"Diffuse_T1_T1_T1_T2", "Combiners_Mod_Masked_Dual_Crossfade", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
-    /* 0x8017 */ {"Diffuse_T1_T1", "Combiners_Opaque_Alpha", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
-    /* 0x8018 */ {"Diffuse_T1_Env_T2", "Combiners_Opaque_Mod2xNA_Alpha_UnshAlpha", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
-    /* 0x8019 */ {"Diffuse_EdgeFade_Env", "Combiners_Mod", "Diffuse_T1", "Combiners_Mod", "the environment map", 1, true},
-    /* 0x801A */ {"Diffuse_T1_T2_T1", "Guild", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
-    /* 0x801B */ {"Diffuse_T1_T2", "Guild_NoBorder", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
-    /* 0x801C */ {"Diffuse_T1_T2_T1", "Guild_Opaque", "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8000 */ {"Diffuse_T1_Env", "Combiners_Opaque_Mod2xNA_Alpha", 2, "Diffuse_T1_Env", "Combiners_Opaque_Mod2xNA_Alpha", nullptr, 2},
+    /* 0x8001 */ {"Diffuse_T1_Env", "Combiners_Opaque_AddAlpha", 2, "Diffuse_T1_Env", "Combiners_Opaque_AddAlpha", nullptr, 2},
+    /* 0x8002 */ {"Diffuse_T1_Env", "Combiners_Opaque_AddAlpha_Alpha", 2, "Diffuse_T1_Env", "Combiners_Opaque_AddAlpha_Alpha", nullptr, 2},
+    /* 0x8003 */ {"Diffuse_T1_Env_T1", "Combiners_Opaque_Mod2xNA_Alpha_Add", 3, "Diffuse_T1_Env", "Combiners_Opaque_Mod2xNA_Alpha", "the third texture's additive glow layer", 2},
+    /* 0x8004 */ {"Diffuse_T1_Env", "Combiners_Mod_AddAlpha", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8005 */ {"Diffuse_T1_T1", "Combiners_Opaque_AddAlpha", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8006 */ {"Diffuse_T1_T1", "Combiners_Mod_AddAlpha", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8007 */ {"Diffuse_T1_Env", "Combiners_Mod_AddAlpha_Alpha", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8008 */ {"Diffuse_T1_Env", "Combiners_Opaque_Alpha_Alpha", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8009 */ {"Diffuse_T1_Env_T1", "Combiners_Opaque_Mod2xNA_Alpha_3s", 3, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x800A */ {"Diffuse_T1_T1", "Combiners_Opaque_AddAlpha_Wgt", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x800B */ {"Diffuse_T1_Env", "Combiners_Mod_Add_Alpha", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x800C */ {"Diffuse_T1_Env", "Combiners_Opaque_ModNA_Alpha", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x800D */ {"Diffuse_T1_Env", "Combiners_Mod_AddAlpha_Wgt", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x800E */ {"Diffuse_T1_T1", "Combiners_Mod_AddAlpha_Wgt", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x800F */ {"Diffuse_T1_T2", "Combiners_Opaque_AddAlpha_Wgt", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8010 */ {"Diffuse_T1_Env", "Combiners_Opaque_Mod_Add_Wgt", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8011 */ {"Diffuse_T1_Env_T1", "Combiners_Opaque_Mod2xNA_Alpha_UnshAlpha", 3, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8012 */ {"Diffuse_T1_T1_T1", "Combiners_Mod_Dual_Crossfade", 3, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8013 */ {"Diffuse_EdgeFade_T1", "Combiners_Mod", 1, "Diffuse_T1", "Combiners_Mod", "the edge fade", 1},
+    /* 0x8014 */ {"Diffuse_T1_Env_T2", "Combiners_Opaque_Mod2xNA_Alpha_Alpha", 3, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8015 */ {"Diffuse_EdgeFade_T1_T2", "Combiners_Mod_Mod", 2, "Diffuse_T1_T2", "Combiners_Mod_Mod", "the edge fade", 2},
+    /* 0x8016 */ {"Diffuse_T1_T1_T1_T2", "Combiners_Mod_Masked_Dual_Crossfade", 4, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8017 */ {"Diffuse_T1_T1", "Combiners_Opaque_Alpha", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8018 */ {"Diffuse_T1_Env_T2", "Combiners_Opaque_Mod2xNA_Alpha_UnshAlpha", 3, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8019 */ {"Diffuse_EdgeFade_Env", "Combiners_Mod", 1, "Diffuse_T1", "Combiners_Mod", "the environment map and the edge fade", 1},
+    /* 0x801A */ {"Diffuse_T1_T2_T1", "Guild", 3, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1, kGuildColours},
+    /* 0x801B */ {"Diffuse_T1_T2", "Guild_NoBorder", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1, kGuildColours},
+    /* 0x801C */ {"Diffuse_T1_T2_T1", "Guild_Opaque", 3, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1, kGuildColours},
 };
 // Past Cataclysm's table: known by what it does, not yet by name.
 // Index 33, a two-texture edge-fade combiner (the Haranir fire totem's flame: a fire gradient times a
-// scrolling flame mask); its name is unknown, what it does is drawn.
-constexpr RetailShader kRetailEdgeFade33 = {nullptr, nullptr, "Diffuse_T1_T2", "Combiners_Mod_Mod", nullptr, 2, true};
-constexpr RetailShader kRetailUnknown = {nullptr, nullptr, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1};
+// scrolling flame mask), drawn with Cataclysm's edge-fade vertex shader and Combiners_Mod_Mod.
+constexpr RetailShader kRetailEdgeFade33 = {"Diffuse_EdgeFade_T1_T2", "Combiners_Mod_Mod", 2, "Diffuse_T1_T2", "Combiners_Mod_Mod", "the edge fade", 2, nullptr, true};
+constexpr RetailShader kRetailUnknown = {nullptr, nullptr, 0, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1};
+}
+
+RetailTransforms RetailVertexTransforms(const char* vertexShader) {
+    // Cataclysm's M2GetVertexShaderID cases, by name: which transform combo slot each matrix stage takes.
+    struct Row { const char* name; RetailTransforms transforms; };
+    static const Row rows[] = {
+        {"Diffuse_T1", {{0, -1}, {0, -1}}},           {"Diffuse_T1_Env", {{0, -1}, {0, -1}}},
+        {"Diffuse_Env_T1", {{0, -1}, {0, -1}}},       {"Diffuse_T1_Env_T1", {{0, -1}, {0, -1}}},
+        {"Diffuse_T1_T1", {{0, -1}, {0, -1}}},        {"Diffuse_T1_T1_T1", {{0, -1}, {0, -1}}},
+        {"Diffuse_EdgeFade_T1", {{0, -1}, {0, -1}}},  {"Diffuse_EdgeFade_Env", {{0, -1}, {0, -1}}},
+        {"Diffuse_T1_T2", {{1, 0}, {1, 0}}},          {"Diffuse_EdgeFade_T1_T2", {{1, 0}, {1, 0}}},
+        {"Diffuse_T2", {{0, -1}, {1, -1}}},           {"Diffuse_T1_Env_T2", {{2, 0}, {1, 0}}},
+        {"Diffuse_T1_T1_T1_T2", {{3, 0}, {1, 0}}},    {"Diffuse_T1_T2_T1", {{1, 0}, {1, 0}}},
+    };
+    for (const Row& row : rows) {
+        if (std::strcmp(row.name, vertexShader) == 0) return row.transforms;
+    }
+    return {{-1, -1}, {-1, -1}};   // Diffuse_Env, Diffuse_Env_Env: environment maps only
 }
 
 const RetailShader& RetailPackedShader(uint16_t index) {
@@ -1333,21 +1353,24 @@ bool PrepareSkin(std::vector<uint8_t>& b, const std::vector<uint8_t>& m, std::st
     }
     if (!Array(b, 36, 24)) return Fail(error, "Invalid SKIN batches");
     // Retail's packed shader ids keep their index, tagged (RetailModel.h, kRetailPackedTag); the batch's
-    // texture count stays the file's. CM2Shared::GetEffect draws each by RetailPackedShader: the real
-    // shaders where 3.3.5 has them, otherwise a named stand-in. Non-packed ids mean what they mean in 3.3.5.
+    // texture count stays the file's. CM2Shared::GetEffect draws each by RetailPackedShader: retail's
+    // shaders where the client has them, otherwise a named stand-in. Non-packed ids mean what they mean
+    // in 3.3.5.
     for (uint32_t i = 0; i < U32(b, 36); ++i) {
         size_t p = U32(b, 40) + size_t(i) * 24 + 2;
         uint16_t shader = U16(b, p);
         if (!(shader & 0x8000)) continue;
         const uint16_t index = shader & 0x7FFF;
-        // Without degradeShaders, an id only the first-texture stand-in can draw (unknown ids among them)
-        // fails the model instead.
-        if (index > kRetailIndexMask || (!degradeShaders && RetailPackedShader(index).drawTextures < 2))
+        // Without degradeShaders, an id we know nothing about fails the model instead.
+        if (index > kRetailIndexMask || (!degradeShaders && !IsKnownRetailPacked(index)))
             return Fail(error, ("Retail packed shader is unknown: 0x" + HexWord(shader) + " in batch " + std::to_string(i) + " (textures " + std::to_string(U16(b, U32(b, 40) + size_t(i) * 24 + 14)) + ")").c_str());
         Put16(b, p, uint16_t(kRetailPackedTag | index));
-        // The engine draws at most three textures per batch; character layers carry up to six (0x801C on
-        // the bodies). Those keep what their effect draws (the stand-in: the first texture).
-        if (U16(b, p + 12) > 3) Put16(b, p + 12, std::max<uint16_t>(1, RetailPackedShader(index).drawTextures));
+        // The engine's model shaders sample at most four textures; character layers carry up to six (0x801C
+        // on the bodies). Those keep what draws them (retail's shaders, or the stand-in).
+        if (U16(b, p + 12) > 4) {
+            const RetailShader& entry = RetailPackedShader(index);
+            Put16(b, p + 12, std::max<uint16_t>(1, entry.vertex && !entry.unavailable ? entry.textures : entry.standInTextures));
+        }
     }
     // Diagnostic: WOW_RETAIL_HIDE_BATCHES=1,5 drops those batch indices (of the original skin) from every Retail model.
     if (const char* hide = std::getenv("WOW_RETAIL_HIDE_BATCHES")) {
