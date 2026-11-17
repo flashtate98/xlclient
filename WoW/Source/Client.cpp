@@ -1769,6 +1769,7 @@ bool InitializeGlobal() {
     // Not in the original: loads the Retail customization DB2s and reports what loaded.
     ConsoleCommandRegister("retailTables", Retail::Db2::tables::CCommand_RetailTables, CATEGORY_DEBUG, "Load the Retail customization tables and list them");
     ConsoleCommandRegister("retailCustomize", CCommand_RetailCustomize, CATEGORY_DEBUG, "List the Retail customization rows, or step one: retailCustomize <row> <delta>");
+    ConsoleCommandRegister("retailBotLooks", CCommand_RetailBotLooks, CATEGORY_DEBUG, "Write the Retail choices each race, sex and class may take, for playerbots (Logs\\retail_customization_bot_pool.sql)");
 #endif
 
     s_timeTestError = OsTimeGetTestError();

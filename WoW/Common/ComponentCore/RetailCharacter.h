@@ -61,6 +61,10 @@ struct RetailCustomizationOption {
 };
 bool RetailCustomizationOptions(const CCharacterComponent* character, std::vector<RetailCustomizationOption>& options);
 
+// FlashWOW console command retailBotLooks: writes the choices each race, sex and class may take as SQL rows for
+// mod-retail-customization's playerbot looks (Logs\retail_customization_bot_pool.sql).
+int32_t CCommand_RetailBotLooks(const char* command, const char* arguments);
+
 // FlashWOW customization panel: every option the player can change, the five the 3.3.5 selectors drive
 // included, in OrderIndex order. `row` is the option's index for RetailCustomizationCycle (-1 for a driven
 // one); `stock` is the 3.3.5 selector that drives it (CHAR_CUSTOMIZATION_TYPE; -1 for a row). False for stock
