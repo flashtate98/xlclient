@@ -94,6 +94,23 @@ namespace {
     };
     std::mutex s_thirdTexturesMutex;
     std::unordered_map<const SMOMaterial*, CTexture*> s_thirdTextures;
+    std::unordered_map<const SMOMaterial*, MapObjCata::ShaderNote> s_shaderNotes;   // under s_thirdTexturesMutex
+}
+
+MapObjCata::ShaderNote MapObjCata::Note(const SMOMaterial& material) {
+    std::lock_guard<std::mutex> lock(s_thirdTexturesMutex);
+    const auto found = s_shaderNotes.find(&material);
+    return found == s_shaderNotes.end() ? ShaderNote() : found->second;
+}
+
+void MapObjCata::SetNote(const SMOMaterial& material, uint32_t retail, const char* reason) {
+    std::lock_guard<std::mutex> lock(s_thirdTexturesMutex);
+    s_shaderNotes[&material] = ShaderNote{ retail, reason, true };
+}
+
+void MapObjCata::ClearNote(const SMOMaterial& material) {
+    std::lock_guard<std::mutex> lock(s_thirdTexturesMutex);
+    s_shaderNotes.erase(&material);
 }
 
 bool MapObjCata::Drawn(uint32_t shader) {
@@ -1973,6 +1990,8 @@ void CMapObj::Clear() {
             HandleClose(reinterpret_cast<HOBJECT>(third));
             MapObjCata::SetThirdTexture(this->m_materialList[i], nullptr);
         }
+
+        MapObjCata::ClearNote(this->m_materialList[i]);
     }
 
     for (uint32_t i = 0; i < static_cast<uint32_t>(this->m_mapObjGroupCount); i++) {

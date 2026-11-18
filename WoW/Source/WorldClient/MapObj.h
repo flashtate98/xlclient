@@ -328,6 +328,12 @@ namespace MapObjCata {
     // Before drawing a batch with Cataclysm's effect: its third texture, the wrap of the other two, and the
     // texture matrices its vertex shader reads (CMapObjRender::ApplyMaterial there).
     void Apply(const SMOMaterial& material, uint32_t shader);
+    // The shader the file names and why the material is drawn with another (nullptr: it isn't), kept from
+    // CreateMaterial, which overwrites m_shader with the one that draws it; for the Ray panel's surface readout.
+    struct ShaderNote { uint32_t retail = 0; const char* reason = nullptr; bool known = false; };
+    ShaderNote Note(const SMOMaterial& material);
+    void SetNote(const SMOMaterial& material, uint32_t retail, const char* reason);
+    void ClearNote(const SMOMaterial& material);
 }
 
 struct SMOPortal {

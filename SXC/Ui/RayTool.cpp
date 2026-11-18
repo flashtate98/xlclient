@@ -1,12 +1,18 @@
 #include "SXC/Ui/RayTool.h"
 
 #include <cmath>
+#include <cstdarg>
 #include <cstdio>
 #include <string>
 #include <vector>
 #include "SXC/Api/sxc_world.h"
 #include "SXC/ThirdParty/imgui/imgui.h"
 #include "SXC/World/World.h"
+#include "WoW/Source/WorldClient/Map.h"
+#include "WoW/Source/WorldClient/MapObj.h"
+#include "WoW/Source/WorldClient/MapObjDef.h"
+#include "WoW/Source/WorldClient/MapObjGroup.h"
+#include "WoW/Source/WorldClient/Types.h"
 #include "WoW/Source/WorldClient/World.h"
 
 namespace SXC::WorldApi {
@@ -28,6 +34,7 @@ namespace {
         std::string what;          // what was hit
         bool water = false;        // the water's surface came first
         float waterDepth = 0.0f;   // from that surface down the ray to the ground behind it
+        std::vector<std::string> surface;   // a WMO's surface: triangle, material, shader, textures, colours
     };
 
     struct Pin {
@@ -85,6 +92,122 @@ namespace {
         return text;
     }
 
+    // Retail's WMO shaders by id (wowdev's WMO page, MOMT), for the surface readout.
+    const char* WmoShaderName(uint32_t shader) {
+        static const char* const kNames[] = {
+            "Diffuse", "Specular", "Metal", "Env", "Opaque", "EnvMetal", "TwoLayerDiffuse", "TwoLayerEnvMetal",
+            "TwoLayerTerrain", "DiffuseEmissive", "waterWindow", "MaskedEnvMetal", "EnvMetalEmissive",
+            "TwoLayerDiffuseOpaque", "submarineWindow", "TwoLayerDiffuseEmissive", "DiffuseTerrain",
+            "AdditiveMaskedEnvMetal", "TwoLayerDiffuseMod2x", "TwoLayerDiffuseMod2xNA", "TwoLayerDiffuseAlpha", "Lod",
+            "Parallax", "UnkDFShader",
+        };
+        return shader < sizeof(kNames) / sizeof(kNames[0]) ? kNames[shader] : "?";
+    }
+
+    void Line(std::vector<std::string>& out, const char* format, ...) {
+        char text[512];
+        va_list args;
+        va_start(args, format);
+        std::vsnprintf(text, sizeof(text), format, args);
+        va_end(args);
+        out.emplace_back(text);
+    }
+
+    // The WMO triangle the ray meets (collidable faces: the camera's mask), and what draws it.
+    std::vector<std::string> DescribeSurface(const C3Vector& start, const C3Vector& end) {
+        std::vector<std::string> out;
+        C3Vector s = start, e = end;
+        float t = 1.0f;
+        uint16_t face = 0xFFFF;
+        CMapObj* mapObj = nullptr;
+        CMapObjDef* def = nullptr;
+        CMapObjDefGroup* defGroup = nullptr;
+
+        if (!CMap::VectorIntersect(&s, &e, kSolid, 0x100, &t, &face, &mapObj, &def, &defGroup) || !mapObj || !defGroup || face == 0xFFFF) {
+            return out;
+        }
+
+        const uint32_t groupNum = defGroup->m_groupNum;
+        CMapObjGroup* group = groupNum < 512 ? mapObj->m_mapObjGroupArray[groupNum] : nullptr;
+
+        if (!group || !group->m_polyList || face >= static_cast<uint32_t>(group->m_polyListSize)) {
+            return out;
+        }
+
+        const uint32_t headerFlags = mapObj->m_header ? mapObj->m_header->m_flags : 0;
+        const bool unified = (headerFlags & 0x2) != 0;
+        Line(out, "%s", mapObj->m_wmoName);
+        Line(out, "root flags 0x%02x (%s)", headerFlags, unified ? "unified" : "classic");
+        Line(out, "group %u %s, flags 0x%08x (%s)", groupNum, group->m_groupName ? group->m_groupName : "",
+            static_cast<uint32_t>(group->m_flags), (group->m_flags & 0x2000) ? "interior" : (group->m_flags & 0x8) ? "exterior" : "neither");
+
+        const SMOPoly& poly = group->m_polyList[face];
+        Line(out, "triangle %u, MOPY flags 0x%02x, material %u", face, poly.m_flags, poly.m_materialId);
+
+        const uint32_t index = static_cast<uint32_t>(face) * 3;
+
+        for (int32_t i = 0; i < group->m_batchListCount; i++) {
+            const SMOBatch& batch = group->m_batchList[i];
+
+            if (index >= batch.m_indexStart && index < batch.m_indexStart + batch.m_indexCount) {
+                const char* kind = i < group->m_transparencyBatchesCount ? "transition"
+                    : i < group->m_transparencyBatchesCount + group->m_intBatchCount ? "interior" : "exterior";
+                Line(out, "batch %d (%s), vertices %u-%u", i, kind, batch.m_vertexStart, batch.m_vertexEnd);
+                break;
+            }
+        }
+
+        if (poly.m_materialId < mapObj->m_materialsCount) {
+            SMOMaterial& material = mapObj->m_materialList[poly.m_materialId];
+            const MapObjCata::ShaderNote note = MapObjCata::Note(material);
+            const uint32_t fileShader = note.known ? note.retail : material.m_shader;
+            Line(out, "shader in the file: %u %s", fileShader, WmoShaderName(fileShader));
+
+            if (unified && MapObjCata::Drawn(material.m_shader)) {
+                Line(out, "drawn with: Cataclysm's effect %u (MapObjU%s)", material.m_shader, WmoShaderName(material.m_shader));
+            } else {
+                Line(out, "drawn with: 3.3.5's %s effect %u %s", unified ? "unified" : "classic", material.m_shader, WmoShaderName(material.m_shader));
+            }
+
+            if (note.reason) {
+                Line(out, "  why: %s", note.reason);
+            }
+
+            Line(out, "blend mode %u, flags 0x%x, flags2 0x%x", material.m_blendMode, material.m_flags, material.m_flags2);
+            const uint32_t offsets[3] = { material.m_texture1, material.m_texture2, material.m_texture3 };
+
+            for (uint32_t k = 0; k < 3; k++) {
+                if (mapObj->m_textureNameList && offsets[k] < static_cast<uint32_t>(mapObj->m_texturesSize) && mapObj->m_textureNameList[offsets[k]]) {
+                    Line(out, "texture %u: %s", k + 1, &mapObj->m_textureNameList[offsets[k]]);
+                }
+            }
+        }
+
+        // The corners: vertex colour (MOCV, as the client fixed it), the blend set's alpha, the UV sets.
+        for (uint32_t k = 0; k < 3; k++) {
+            const uint16_t v = group->m_indices[index + k];
+            char colour[48] = "-", blend[16] = "-", uv2[32] = "";
+
+            if (group->m_colorVertexList && v < group->m_colorVertexListSize) {
+                const CImVector& c = group->m_colorVertexList[v];
+                std::snprintf(colour, sizeof(colour), "%u,%u,%u a%u", c.r, c.g, c.b, c.a);
+            }
+
+            if (group->m_colorVertexListExtra && v < group->m_colorVertexListExtraSize) {
+                std::snprintf(blend, sizeof(blend), "%u", group->m_colorVertexListExtra[v].a);
+            }
+
+            if (group->m_textureVertexList2 && v < group->m_textureVertexList2Count) {
+                std::snprintf(uv2, sizeof(uv2), " / %.2f,%.2f", group->m_textureVertexList2[v].x, group->m_textureVertexList2[v].y);
+            }
+
+            const C2Vector uv = v < group->m_textureVertexListCount ? group->m_textureVertexList[v] : C2Vector(0.0f, 0.0f);
+            Line(out, "corner %u (vertex %u): MOCV %s, blend alpha %s, uv %.2f,%.2f%s", k, v, colour, blend, uv.x, uv.y, uv2);
+        }
+
+        return out;
+    }
+
     // What the ray from the camera through a window point meets first.
     Pick Cast(float windowX, float windowY) {
         Pick pick;
@@ -114,6 +237,11 @@ namespace {
         pick.fromCamera = (pick.water ? water : solid) * kReach;
         pick.waterDepth = pick.water ? (solid - water) * kReach : 0.0f;
         pick.what = pick.water ? "water surface; behind it " + Describe(debug, &hit.x) : Describe(debug, &hit.x);
+
+        if (!pick.water && debug.m_type == 4) {
+            pick.surface = DescribeSurface(start, end);
+        }
+
         return pick;
     }
 
@@ -129,6 +257,26 @@ namespace {
 
         if (pick.water) {
             ImGui::Text("water to the ground behind: %.1f yd along the ray", pick.waterDepth);
+        }
+
+        if (!pick.surface.empty()) {
+            ImGui::PushID(&pick);
+            ImGui::SeparatorText("WMO surface");
+            ImGui::SameLine();
+
+            if (ImGui::SmallButton("Copy")) {
+                std::string text;
+                for (const std::string& line : pick.surface) text += line + "\n";
+                ImGui::SetClipboardText(text.c_str());
+            }
+
+            ImGui::SetItemTooltip("The surface readout as text, to paste into a bug report or a chat.");
+
+            for (const std::string& line : pick.surface) {
+                ImGui::TextUnformatted(line.c_str());
+            }
+
+            ImGui::PopID();
         }
     }
 

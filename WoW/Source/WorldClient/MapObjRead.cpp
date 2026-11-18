@@ -166,6 +166,8 @@ void CMapObj::CreateMaterial(uint8_t texture) {
 
     const char* texture1 = &this->m_textureNameList[material.m_texture1];
     const char* texture2 = &this->m_textureNameList[material.m_texture2];
+    const uint32_t fileShader = material.m_shader;   // SXC: for the Ray panel (MapObjCata::Note)
+    const char* fallback = nullptr;
 
     if (!*texture1) {
         texture1 = "createcrappygreentexture.blp";
@@ -187,6 +189,7 @@ void CMapObj::CreateMaterial(uint8_t texture) {
             if (!*names[i]) {
                 material.m_shader = 4;
                 cata = false;
+                fallback = "a texture its shader samples is missing: opaque (4), as Cataclysm does";
                 break;
             }
         }
@@ -217,10 +220,10 @@ void CMapObj::CreateMaterial(uint8_t texture) {
         const uint32_t ours = retail < sizeof kRetail ? kRetail[retail] : 0;
         char key[300];
         SStrPrintf(key, sizeof key, "wmo-shader %s %u", this->m_wmoName, material.m_shader);
-        SXC::LogOnce(key, "WMO %s: material shader %u (retail) drawn as %u: %s", this->m_wmoName, material.m_shader, ours,
-            material.m_shader == 10 || material.m_shader >= 14 ? "we don't have it yet"
+        fallback = material.m_shader == 10 || material.m_shader >= 14 ? "we don't have it yet"
             : !(this->m_header->m_flags & 0x2) ? "Cataclysm's shaders draw in unified WMOs only"
-            : "Cataclysm's WMO effects aren't deployed (Tools/VulkanShaders --cata)");
+            : "Cataclysm's WMO effects aren't deployed (Tools/VulkanShaders --cata)";
+        SXC::LogOnce(key, "WMO %s: material shader %u (retail) drawn as %u: %s", this->m_wmoName, material.m_shader, ours, fallback);
         material.m_shader = ours;
     }
 
@@ -234,6 +237,7 @@ void CMapObj::CreateMaterial(uint8_t texture) {
 
             material.m_shader = 4;
             texture2 = nullptr;
+            fallback = fallback ? fallback : "no second texture: opaque (4), as 3.3.5 does";
             break;
 
         case 0:
@@ -270,6 +274,8 @@ void CMapObj::CreateMaterial(uint8_t texture) {
     if (cata && MapObjCata::TextureCount(material.m_shader) > 2) {
         MapObjCata::SetThirdTexture(material, CMap::LoadTexture(texture3));
     }
+
+    MapObjCata::SetNote(material, fileShader, fallback);
 }
 
 // VERIFY: 03cc8920 manual
