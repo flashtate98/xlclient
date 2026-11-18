@@ -1,5 +1,7 @@
 #include "Engine/Source/Retail/LocalSource.h"
 #include "Engine/Source/Retail/RetailModel.h"
+#include "Engine/Source/Retail/RetailWmo.h"
+#include <cctype>
 #include "Engine/Source/BlizzardCore/SFile2-Core.h"
 #include "Engine/Source/BlizzardCore/Source/System/Log/Log.h"
 #include <algorithm>
@@ -55,6 +57,13 @@ std::string Extension(const std::string& key) {
 std::string Stem(const std::string& key) {
     const auto ext = Extension(key);
     return key.substr(0, key.size() - ext.size());
+}
+
+// A WMO group's conventional name: <root>_NNN.wmo.
+bool IsWmoGroupName(const std::string& key) {
+    if (key.size() < 9 || key.compare(key.size() - 4, 4, ".wmo")) return false;
+    const size_t u = key.size() - 8;
+    return key[u] == '_' && std::isdigit(uint8_t(key[u + 1])) && std::isdigit(uint8_t(key[u + 2])) && std::isdigit(uint8_t(key[u + 3]));
 }
 
 bool Number(const std::string& text, uint32_t& value) {
@@ -222,6 +231,7 @@ struct LocalSource::Impl {
     std::unordered_map<uint32_t, std::string> listfile;      // optional CSV, wins over the DB2 tables
     PathTable texturePaths, modelPaths;
     std::unordered_map<std::string, bool> modelKinds;        // .m2 name -> header is MD21
+    std::unordered_map<std::string, bool> wmoKinds;          // .wmo root name -> a retail root (RetailWmo.h)
     std::map<std::string, Reference> dependencies;           // published skin/anim names
     std::map<std::string, std::pair<std::shared_ptr<Model>, size_t>> models;
     std::map<std::string, uint32_t> preparedSizes;
@@ -424,9 +434,26 @@ bool LocalSource::Handles(const char* name) {
     {
         std::lock_guard<std::mutex> lock(m_impl->mutex);
         if (m_impl->dependencies.count(key) || m_impl->models.count(key)) return true;
-        if (Extension(key) != ".m2") return false;
-        const auto kind = m_impl->modelKinds.find(key);
-        if (kind != m_impl->modelKinds.end()) return kind->second;
+        if (Extension(key) == ".wmo") {
+            // A group is handled once its retail root registered it; only roots are looked at.
+            if (IsWmoGroupName(key)) return false;
+            const auto kind = m_impl->wmoKinds.find(key);
+            if (kind != m_impl->wmoKinds.end()) return kind->second;
+        } else if (Extension(key) != ".m2") {
+            return false;
+        } else {
+            const auto kind = m_impl->modelKinds.find(key);
+            if (kind != m_impl->modelKinds.end()) return kind->second;
+        }
+    }
+    if (Extension(key) == ".wmo") {
+        // First sight of this root: read it outside the lock (roots are small) and look for retail's GFID.
+        std::vector<uint8_t> raw;
+        std::string error;
+        const bool retail = RawRead(key, raw, error) && IsRetailWmoRoot(raw);
+        std::lock_guard<std::mutex> lock(m_impl->mutex);
+        m_impl->wmoKinds[key] = retail;
+        return retail;
     }
     // First sight of this model name: look at its header outside the lock (this reads the archives).
     uint32_t magic = 0, size = 0;
@@ -571,12 +598,38 @@ bool LocalSource::Read(const char* name, std::vector<uint8_t>& bytes, std::strin
         success = ref.owner ? (StripAnimationChunk(bytes, error) &&
             ValidateAnimation(bytes, ref.owner->bytes, ref.animation, ref.variation, error)) :
             Fail(error, "open the Retail model before its animation");
+    } else if (ext == ".wmo" && IsWmoGroupName(key)) {
+        WmoGroup group;
+        success = PrepareWmoGroup(bytes, group, error);
+        if (success) {
+            for (const auto& note : group.notes) Blizzard::Log::Printf(1, kLog, "%s: %s\n", key.c_str(), note.c_str());
+            bytes.swap(group.bytes);
+        }
+    } else if (ext == ".wmo") {
+        // A retail root: rebuilt in 3.3.5's order, and its groups published under their conventional names
+        // (<root>_NNN.wmo), found by their FileDataIDs (GFID) first.
+        WmoRoot root;
+        success = PrepareWmoRoot(bytes, [this](uint32_t id, std::string& path) { return PathOf(id, path); }, root, error);
+        if (success) {
+            for (const auto& note : root.notes) Blizzard::Log::Printf(1, kLog, "%s: %s\n", key.c_str(), note.c_str());
+            const auto base = Stem(key);
+            std::lock_guard<std::mutex> lock(s.mutex);
+            for (size_t i = 0; i < root.groupFiles.size(); ++i) {
+                char suffix[16];
+                std::snprintf(suffix, sizeof(suffix), "_%03u.wmo", static_cast<unsigned>(i));
+                Reference file;
+                file.id = root.groupFiles[i];
+                file.path = base + suffix;
+                s.dependencies[base + suffix] = file;
+            }
+            bytes.swap(root.bytes);
+        }
     } else if (ext == ".blp") {
         // BLP2 format version 1 is the client's native texture format.
         success = bytes.size() >= 148 && std::memcmp(bytes.data(), "BLP2\1\0\0\0", 8) == 0;
         if (!success) error = "texture is not a supported BLP2 file";
     } else {
-        success = Fail(error, "Retail models reference only M2, SKIN, ANIM and BLP files");
+        success = Fail(error, "Retail models reference only M2, SKIN, ANIM, BLP and WMO files");
     }
 
     if (!success) {

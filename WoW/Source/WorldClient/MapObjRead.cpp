@@ -616,7 +616,9 @@ void CMapObjGroup::Create() {
         this->m_unkLoadedFlag |= 0x2;
     }
 
-    if (!SStrCmp(this->m_groupName, "antiportal", STORM_MAX_STR)) {
+    // SXC: retail marks an antiportal with group flag 0x4000000 (3.3.5 knows it only by the group's name, and
+    // the flag is unused there).
+    if (!SStrCmp(this->m_groupName, "antiportal", STORM_MAX_STR) || (this->m_flags & 0x4000000)) {
         this->HandleAntiportal();
     }
 

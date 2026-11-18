@@ -9,6 +9,7 @@ if (WOWDECOMP_RETAIL_MODELS)
     target_sources(BlizzardCore PRIVATE
         ${CMAKE_SOURCE_DIR}/Engine/Source/Retail/LocalSource.cpp
         ${CMAKE_SOURCE_DIR}/Engine/Source/Retail/RetailModel.cpp
+        ${CMAKE_SOURCE_DIR}/Engine/Source/Retail/RetailWmo.cpp
     )
 endif()
 
