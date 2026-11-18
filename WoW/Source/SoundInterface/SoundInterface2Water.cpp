@@ -12,6 +12,8 @@
 #include "WoW/Source/SoundInterface/SoundInterface2.h"
 #include "WoW/Source/Ui/GameUI.h"
 #include "WoW/Source/WorldClient/World.h"
+#include "Engine/Source/Storm/H/storm.h"  // SXC: SStrPrintf
+#include "SXC/Log.h"                      // SXC: liquid types LiquidType.dbc lacks
 
 static const float FADEINTIME = 1.0f;
 static const float FADEOUTTIME = 1.0f;
@@ -130,6 +132,14 @@ int32_t SI2::HandleWaterSounds(const void* data, void* param) {
 
     for (uint32_t i = 0; i < results.Count(); i++) {
         LiquidTypeRec* liquidType = g_liquidTypeDB.GetRecord(results[i].m_liquidType);
+
+        // SXC: a liquid type LiquidType.dbc lacks (a retail map's water, Kul Tiras, 2026-11-19) has no sound.
+        if (!liquidType) {
+            char key[64];
+            SStrPrintf(key, sizeof key, "water-sound-liquid %d", results[i].m_liquidType);
+            SXC::LogOnce(key, "water sounds: liquid type %d isn't in LiquidType.dbc; no sound for it", results[i].m_liquidType);
+            continue;
+        }
 
         if (!(liquidType->m_flags & 0x80) || !entity || !World::QueryObjectInside(entity)) {
             C3Vector offset = results[i].m_offset;
