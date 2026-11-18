@@ -358,14 +358,22 @@ bool PrepareWmoGroup(const std::vector<uint8_t>& raw, WmoGroup& group, std::stri
         w.Copy(Find(chunks, Tag("MOBN")), Tag("MOBN"));
         w.Copy(Find(chunks, Tag("MOBR")), Tag("MOBR"));
     }
-    if (keep(kHasColors, Find(chunks, Tag("MOCV")) != nullptr)) w.Copy(Find(chunks, Tag("MOCV")), Tag("MOCV"));
+    // Vertex colours: with flag 0x1000000 but not 0x4 a group's only MOCV is the second set (whose alpha blends
+    // the two-layer shaders' textures); 3.3.5 reads that case too (base colour, second set).
+    const Chunk* colors = Find(chunks, Tag("MOCV"));
+    const Chunk* colors2 = Find(chunks, Tag("MOCV"), 1);
+    if (!(flags & kHasColors) && (flags & kHasColors2)) {
+        colors2 = colors;
+        colors = nullptr;
+    }
+    if (keep(kHasColors, colors != nullptr)) w.Copy(colors, Tag("MOCV"));
     if (keep(kHasLiquid, Find(chunks, Tag("MLIQ")) != nullptr)) w.Copy(Find(chunks, Tag("MLIQ")), Tag("MLIQ"));
     if (keep(kHasStrips, Find(chunks, Tag("MORI")) && Find(chunks, Tag("MORB")))) {
         w.Copy(Find(chunks, Tag("MORI")), Tag("MORI"));
         w.Copy(Find(chunks, Tag("MORB")), Tag("MORB"));
     }
     if (keep(kHasUv2, Find(chunks, Tag("MOTV"), 1) != nullptr)) w.Copy(Find(chunks, Tag("MOTV"), 1), Tag("MOTV"));
-    if (keep(kHasColors2, Find(chunks, Tag("MOCV"), 1) != nullptr)) w.Copy(Find(chunks, Tag("MOCV"), 1), Tag("MOCV"));
+    if (keep(kHasColors2, colors2 != nullptr)) w.Copy(colors2, Tag("MOCV"));
     Put32(header.data() + 8, flags);
 
     group.bytes.clear();
