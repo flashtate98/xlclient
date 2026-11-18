@@ -472,6 +472,9 @@ bool LocalSource::Exists(const char* name, std::string& error) {
     {
         std::lock_guard<std::mutex> lock(m_impl->mutex);
         if (m_impl->preparedSizes.count(key)) return true;
+        // A retail root's group always exists: a missing file is served as an empty group (Read), since a
+        // WMO file that fails to open is fatal (CMap::SafeOpen).
+        if (IsWmoGroupName(key) && m_impl->dependencies.count(key)) return true;
         if (!m_impl->Resolve(key, ref, error)) return false;
         paths = m_impl->Candidates(ref);
     }
@@ -526,9 +529,16 @@ bool LocalSource::Read(const char* name, std::vector<uint8_t>& bytes, std::strin
         std::lock_guard<std::mutex> lock(s.mutex);
         if (!s.Resolve(key, ref, error)) return false;
     }
-    if (!s.Fetch(ref, bytes, error)) return false;
-
     const auto ext = Extension(key);
+    if (!s.Fetch(ref, bytes, error)) {
+        if (ext != ".wmo" || !IsWmoGroupName(key)) return false;
+        Blizzard::Log::Printf(1, kLog, "%s: a group its root lists is missing (%s); drawn empty\n", key.c_str(), error.c_str());
+        EmptyWmoGroup(bytes);
+        std::lock_guard<std::mutex> lock(s.mutex);
+        s.preparedSizes[key] = static_cast<uint32_t>(bytes.size());
+        return true;
+    }
+
     bool success = true;
     if (ext == ".m2" || ext == ".mdx") {
         auto model = std::make_shared<Model>();
@@ -599,18 +609,24 @@ bool LocalSource::Read(const char* name, std::vector<uint8_t>& bytes, std::strin
             ValidateAnimation(bytes, ref.owner->bytes, ref.animation, ref.variation, error)) :
             Fail(error, "open the Retail model before its animation");
     } else if (ext == ".wmo" && IsWmoGroupName(key)) {
+        // A WMO that can't be prepared is served as it is, as 3.3.5 would have read it: a failed open is fatal
+        // for a WMO (CMap::SafeOpen), and the stock reader got through many damaged retroports.
         WmoGroup group;
-        success = PrepareWmoGroup(bytes, group, error);
-        if (success) {
+        if (PrepareWmoGroup(bytes, group, error)) {
             for (const auto& note : group.notes) Blizzard::Log::Printf(1, kLog, "%s: %s\n", key.c_str(), note.c_str());
             bytes.swap(group.bytes);
+        } else {
+            Blizzard::Log::Printf(1, kLog, "%s: not prepared, served as it is: %s\n", key.c_str(), error.c_str());
         }
     } else if (ext == ".wmo") {
         // A retail root: rebuilt in 3.3.5's order, and its groups published under their conventional names
-        // (<root>_NNN.wmo), found by their FileDataIDs (GFID) first.
+        // (<root>_NNN.wmo), found by their FileDataIDs (GFID) first. Served as it is when that fails (above).
         WmoRoot root;
         success = PrepareWmoRoot(bytes, [this](uint32_t id, std::string& path) { return PathOf(id, path); }, root, error);
-        if (success) {
+        if (!success) {
+            Blizzard::Log::Printf(1, kLog, "%s: not prepared, served as it is: %s\n", key.c_str(), error.c_str());
+            success = true;
+        } else {
             for (const auto& note : root.notes) Blizzard::Log::Printf(1, kLog, "%s: %s\n", key.c_str(), note.c_str());
             const auto base = Stem(key);
             std::lock_guard<std::mutex> lock(s.mutex);

@@ -34,5 +34,8 @@ struct WmoGroup {
 
 bool PrepareWmoGroup(const std::vector<uint8_t>& raw, WmoGroup& group, std::string& error);
 
+// A group with no geometry, for a group file its root lists but that can't be found.
+void EmptyWmoGroup(std::vector<uint8_t>& bytes);
+
 }
 #endif

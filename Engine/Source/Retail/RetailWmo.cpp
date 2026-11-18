@@ -33,12 +33,25 @@ uint16_t U16(const uint8_t* p) { uint16_t v; std::memcpy(&v, p, 2); return v; }
 void Put32(uint8_t* p, uint32_t v) { std::memcpy(p, &v, 4); }
 void Put16(uint8_t* p, uint16_t v) { std::memcpy(p, &v, 2); }
 
-bool Walk(const uint8_t* data, size_t size, std::vector<Chunk>& chunks, std::string& error) {
+// With `notes`, a chunk whose size runs past the end is cut at the end, as 3.3.5's positional reader in
+// effect does (a retroported group whose MOGP size was 96 bytes too large loaded in 3.3.5, 2026-11-18).
+bool Walk(const uint8_t* data, size_t size, std::vector<Chunk>& chunks, std::string& error, std::vector<std::string>* notes = nullptr) {
     for (size_t p = 0; p < size;) {
-        if (size - p < 8) return Fail(error, "truncated chunk header at " + std::to_string(p));
-        const uint32_t tag = U32(data + p), length = U32(data + p + 4);
+        if (size - p < 8) {
+            if (notes && !chunks.empty()) {
+                notes->push_back(std::to_string(size - p) + " stray bytes at the end ignored");
+                return true;
+            }
+            return Fail(error, "truncated chunk header at " + std::to_string(p));
+        }
+        const uint32_t tag = U32(data + p);
+        uint32_t length = U32(data + p + 4);
         p += 8;
-        if (length > size - p) return Fail(error, TagName(tag) + " runs past the end of the file");
+        if (length > size - p) {
+            if (!notes) return Fail(error, TagName(tag) + " runs past the end of the file");
+            notes->push_back(TagName(tag) + " says " + std::to_string(length) + " bytes, " + std::to_string(size - p) + " are there; cut at the end");
+            length = uint32_t(size - p);
+        }
         chunks.push_back({tag, data + p, length});
         p += length;
     }
@@ -128,12 +141,13 @@ constexpr uint32_t kHasLights = 0x200, kHasDoodads = 0x800, kHasBsp = 0x1, kHasM
 bool IsRetailWmoRoot(const std::vector<uint8_t>& bytes) {
     std::vector<Chunk> chunks;
     std::string error;
-    return Walk(bytes.data(), bytes.size(), chunks, error) && Find(chunks, Tag("MOHD")) && Find(chunks, Tag("GFID"));
+    std::vector<std::string> notes;
+    return Walk(bytes.data(), bytes.size(), chunks, error, &notes) && Find(chunks, Tag("MOHD")) && Find(chunks, Tag("GFID"));
 }
 
 bool PrepareWmoRoot(const std::vector<uint8_t>& raw, const PathOfFileDataId& pathOf, WmoRoot& root, std::string& error) {
     std::vector<Chunk> chunks;
-    if (!Walk(raw.data(), raw.size(), chunks, error)) return false;
+    if (!Walk(raw.data(), raw.size(), chunks, error, &root.notes)) return false;
     const Chunk* mohd = Find(chunks, Tag("MOHD"));
     const Chunk* momt = Find(chunks, Tag("MOMT"));
     const Chunk* mogi = Find(chunks, Tag("MOGI"));
@@ -231,13 +245,25 @@ bool PrepareWmoRoot(const std::vector<uint8_t>& raw, const PathOfFileDataId& pat
     return true;
 }
 
+void EmptyWmoGroup(std::vector<uint8_t>& bytes) {
+    bytes.clear();
+    Writer out{bytes};
+    const uint32_t version = 17;
+    out.Chunk(Tag("MVER"), &version, 4);
+    const size_t at = out.Begin(Tag("MOGP"));
+    const std::vector<uint8_t> header(0x44, 0);
+    out.Bytes(header.data(), header.size());
+    for (const uint32_t tag : {Tag("MOPY"), Tag("MOVI"), Tag("MOVT"), Tag("MONR"), Tag("MOTV"), Tag("MOBA")}) out.Chunk(tag, nullptr, 0);
+    out.End(at);
+}
+
 bool PrepareWmoGroup(const std::vector<uint8_t>& raw, WmoGroup& group, std::string& error) {
     std::vector<Chunk> top;
-    if (!Walk(raw.data(), raw.size(), top, error)) return false;
+    if (!Walk(raw.data(), raw.size(), top, error, &group.notes)) return false;
     const Chunk* mogp = Find(top, Tag("MOGP"));
     if (!mogp || mogp->size < 0x44) return Fail(error, "no MOGP");
     std::vector<Chunk> chunks;
-    if (!Walk(mogp->data + 0x44, mogp->size - 0x44, chunks, error)) return false;
+    if (!Walk(mogp->data + 0x44, mogp->size - 0x44, chunks, error, &group.notes)) return false;
     NoteLeftOut(chunks, kGroupCarried, group.notes);
 
     std::vector<uint8_t> header(mogp->data, mogp->data + 0x44);
@@ -257,7 +283,8 @@ bool PrepareWmoGroup(const std::vector<uint8_t>& raw, WmoGroup& group, std::stri
         }
         if (clamped) group.notes.push_back(std::to_string(clamped) + " faces with a material past 254 drawn with material 0");
     } else {
-        return Fail(error, "no MOPY or MPY2");
+        // A group without geometry (only portals, MOPL): written with empty geometry chunks.
+        group.notes.push_back("no faces (a group without geometry)");
     }
 
     // Indices: MOVX (32-bit) where a group has more than 65,536 vertices; 3.3.5 indexes with 16 bits.
@@ -271,13 +298,12 @@ bool PrepareWmoGroup(const std::vector<uint8_t>& raw, WmoGroup& group, std::stri
             indices.push_back(uint8_t(index));
             indices.push_back(uint8_t(index >> 8));
         }
-    } else {
-        return Fail(error, "no MOVI or MOVX");
     }
 
     const Chunk* movt = Find(chunks, Tag("MOVT"));
-    if (!movt || movt->size % 12) return Fail(error, "no MOVT");
-    const size_t vertexCount = movt->size / 12;
+    if (movt && movt->size % 12) return Fail(error, "MOVT is not 12-byte vertices");
+    const size_t vertexCount = movt ? movt->size / 12 : 0;
+    if (faces.size() / 2 != indices.size() / 6) return Fail(error, std::to_string(faces.size() / 2) + " faces for " + std::to_string(indices.size() / 6) + " triangles");
     if (vertexCount > 0x10000) return Fail(error, std::to_string(vertexCount) + " vertices; 3.3.5 groups index with 16 bits");
 
     // Batches: since Legion the first 10 bytes are no bounding box and a material past 255 sits at byte 10
