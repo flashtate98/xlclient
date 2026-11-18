@@ -99,7 +99,9 @@ void main()
     }
     else if (kShader == 11 || kShader == 12)
     {
-        outTex1 = normalize(reflect(eye, n) + vec3(0.0, 0.0, 1.0)).xy * 0.5 + 0.5;   // T1_Env_T2: a sphere map
+        // T1_Env_T2: a sphere map of the reflection back toward the eye (Cataclysm's MapObjUDiffuse_T1_Env_T2:
+        // -reflect; +reflect mirrored the map: bright and dark swapped with the view).
+        outTex1 = normalize(-reflect(eye, n) + vec3(0.0, 0.0, 1.0)).xy * 0.5 + 0.5;
         outTex2 = uv1;
     }
     else
