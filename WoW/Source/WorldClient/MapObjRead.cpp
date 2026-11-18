@@ -14,6 +14,7 @@
 #include "WoW/Source/WorldClient/Map.h"
 #include "WoW/Source/WorldClient/MapObj.h"
 #include "WoW/Source/WorldClient/MapObjGroup.h"
+#include "WoW/Source/DB/DBClient/DBClient.h"  // SXC: retail liquid types checked against LiquidType.dbc
 #include "WarcraftXL/Seams.h"
 
 // STATIC: 0x00ADFC4C
@@ -606,6 +607,17 @@ void CMapObjGroup::Create() {
         this->m_liquidType = this->GetLiquidType(header->m_groupLiquid);
     } else {
         this->m_liquidType = this->GetLiquidType(header->m_groupLiquid == 15 ? 0 : header->m_groupLiquid + 1);
+    }
+
+    // SXC: a retail WMO names liquid types past 3.3.5's LiquidType.dbc (with MOHD 0x4 the id as it is), and the
+    // liquid code reads the record unchecked (CMapObjGroup::QueryLiquid crashed in Kul Tiras, 2026-11-19). An
+    // id the table lacks is dropped: the liquid's tiles then give the basic kind (WMO water, ocean, magma,
+    // slime: CreateOptionalDataPointers), as for a 3.3.5 WMO. TODO(modern-wmos): retail's liquid types.
+    if (this->m_liquidType && !g_liquidTypeDB.GetRecord(this->m_liquidType)) {
+        char key[300];
+        SStrPrintf(key, sizeof key, "wmo-liquid %s %d", parent->m_wmoName, this->m_liquidType);
+        SXC::LogOnce(key, "WMO %s: liquid type %d isn't in LiquidType.dbc; its tiles' basic kind stands in", parent->m_wmoName, this->m_liquidType);
+        this->m_liquidType = 0;
     }
 
     this->CreateDataPointers(reinterpret_cast<SIffChunk*>(header + 1));
