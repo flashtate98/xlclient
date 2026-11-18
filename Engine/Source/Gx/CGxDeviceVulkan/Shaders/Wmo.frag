@@ -185,6 +185,16 @@ void main()
         material = mix(texture(s1, inTex1).rgb, t0.rgb, blend);                 // TwoLayerDiffuseOpaque
         alpha = inColor.a;
     }
+    else if (kShader == 15)
+    {
+        vec4 t1 = texture(s1, inTex1);                                           // TwoLayerDiffuseEmissive:
+        material = mix(t1.rgb * (1.0 - t1.a), t0.rgb, blend);                   // the second layer's alpha
+        added = t1.rgb * t1.a * (1.0 - blend);                                   // glows where it shows
+    }
+    else if (kShader == 19)
+    {
+        material = mix(t0.rgb, t0.rgb * texture(s1, inTex1).rgb * 2.0, blend);  // TwoLayerDiffuseMod2xNA
+    }
 
     // The alpha test (the stock's alpha-test permutations: the reference in p2.w).
     if (regs.p[2].w > 0.0 && alpha < regs.p[2].w)

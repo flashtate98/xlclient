@@ -8,6 +8,7 @@
 #include "SXC/Api/sxc_world.h"
 #include "SXC/ThirdParty/imgui/imgui.h"
 #include "SXC/World/World.h"
+#include "SXC/Wmo/Wmo.h"
 #include "WoW/Source/WorldClient/Map.h"
 #include "WoW/Source/WorldClient/MapObj.h"
 #include "WoW/Source/WorldClient/MapObjDef.h"
@@ -163,13 +164,17 @@ namespace {
             const uint32_t fileShader = note.known ? note.retail : material.m_shader;
             Line(out, "shader in the file: %u %s", fileShader, WmoShaderName(fileShader));
 
-            if (unified && MapObjCata::Drawn(material.m_shader)) {
+            const uint32_t ours = MapObjCata::OurShaderId(material, material.m_shader);
+
+            if (unified && SXC::Wmo::OurShader() && SXC::Wmo::Covers(ours)) {
+                Line(out, "drawn with: our WMO shader, id %u %s", ours, WmoShaderName(ours));
+            } else if (unified && MapObjCata::Drawn(material.m_shader)) {
                 Line(out, "drawn with: Cataclysm's effect %u (MapObjU%s)", material.m_shader, WmoShaderName(material.m_shader));
             } else {
                 Line(out, "drawn with: 3.3.5's %s effect %u %s", unified ? "unified" : "classic", material.m_shader, WmoShaderName(material.m_shader));
             }
 
-            if (note.reason) {
+            if (note.reason && ours == material.m_shader) {
                 Line(out, "  why: %s", note.reason);
             }
 

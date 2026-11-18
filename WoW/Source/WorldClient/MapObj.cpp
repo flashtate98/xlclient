@@ -114,6 +114,17 @@ void MapObjCata::ClearNote(const SMOMaterial& material) {
     s_shaderNotes.erase(&material);
 }
 
+uint32_t MapObjCata::OurShaderId(const SMOMaterial& material, uint32_t shader) {
+    if (!SXC::Wmo::OurShader()) {
+        return shader;
+    }
+
+    // Only the ids past Cataclysm's (CreateMaterial's "we don't have it yet" fallbacks): a lower id drawn as
+    // another lost a texture its shader samples and stays as drawn.
+    const ShaderNote note = Note(material);
+    return note.known && note.retail >= 15 && SXC::Wmo::Covers(note.retail) ? note.retail : shader;
+}
+
 bool MapObjCata::Drawn(uint32_t shader) {
     return shader >= 7 && shader < 14 && kCataShaders[shader].textures && CMapObj::s_unifiedShaders[shader];
 }
@@ -1152,7 +1163,7 @@ void CMapObj::UnifiedRender(CMapObjGroup* group, uint32_t index) {
             draw.m_count = batch.m_indexCount;
             draw.m_minIndex = batch.m_vertexStart;
             draw.m_maxIndex = batch.m_vertexEnd;
-            SXC::Wmo::BeginDraw(shader);   // SXC: our WMO shader may draw it (kb: our-shaders)
+            SXC::Wmo::BeginDraw(MapObjCata::OurShaderId(material, shader));   // SXC: our WMO shader may draw it (kb: our-shaders)
             g_theGxDevicePtr->Draw(&draw, 1);
             SXC::Wmo::EndDraw();
             continue;
@@ -1182,7 +1193,7 @@ void CMapObj::UnifiedRender(CMapObjGroup* group, uint32_t index) {
             draw.m_count = batch.m_indexCount;
             draw.m_minIndex = batch.m_vertexStart;
             draw.m_maxIndex = batch.m_vertexEnd;
-            SXC::Wmo::BeginDraw(shader);
+            SXC::Wmo::BeginDraw(MapObjCata::OurShaderId(material, shader));
             g_theGxDevicePtr->Draw(&draw, 1);
             SXC::Wmo::EndDraw();
 
@@ -1208,7 +1219,7 @@ void CMapObj::UnifiedRender(CMapObjGroup* group, uint32_t index) {
             draw2.m_count = batch.m_indexCount;
             draw2.m_minIndex = batch.m_vertexStart;
             draw2.m_maxIndex = batch.m_vertexEnd;
-            SXC::Wmo::BeginDraw(shader);
+            SXC::Wmo::BeginDraw(MapObjCata::OurShaderId(material, shader));
             g_theGxDevicePtr->Draw(&draw2, 1);
             SXC::Wmo::EndDraw();
             continue;

@@ -337,6 +337,9 @@ namespace MapObjCata {
     ShaderNote Note(const SMOMaterial& material);
     void SetNote(const SMOMaterial& material, uint32_t retail, const char* reason);
     void ClearNote(const SMOMaterial& material);
+    // The id a batch announces to our WMO shader (SXC::Wmo): the file's own where our shader draws it
+    // natively although CreateMaterial gave it a fallback for the translated path (15, 19), else `shader`.
+    uint32_t OurShaderId(const SMOMaterial& material, uint32_t shader);
 }
 
 struct SMOPortal {

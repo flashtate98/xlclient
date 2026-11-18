@@ -34,8 +34,9 @@ namespace SXC::Wmo {
     }
 
     bool Covers(uint32_t shader) {
-        // The liquid windows (10, 14) aren't ported yet; 15 on are drawn as one of 0-13 by CreateMaterial's
-        // fallbacks for now.
-        return shader <= 13 && shader != 10;
+        // The liquid windows (10, 14) aren't ported yet. Past Cataclysm's: 15 and 19 (two UV sets, two
+        // textures, as their fallback 6 loads them); 18 and 20 want a third UV set the reader drops, 23 the
+        // extra textures, 22 a tangent-space view, 16 the terrain under it; 21 is the LOD groups'.
+        return (shader <= 13 && shader != 10) || shader == 15 || shader == 19;
     }
 }
