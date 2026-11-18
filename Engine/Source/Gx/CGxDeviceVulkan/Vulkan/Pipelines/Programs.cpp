@@ -5,6 +5,7 @@
 #include "Engine/Source/Gx/CGxDeviceVulkan/Shaders/Spirv.inc"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Shaders/TerrainSpirv.inc"  // SXC: our terrain shader
 #include "Engine/Source/Gx/CGxDeviceVulkan/Shaders/WaterSpirv.inc"    // SXC: our water
+#include "Engine/Source/Gx/CGxDeviceVulkan/Shaders/WmoSpirv.inc"      // SXC: our WMO shader
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"         // SXC: which set of its pixel modules
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/DeviceCaps.hpp"
 
@@ -120,6 +121,10 @@ namespace gxvk::vk::pipelines::detail
         if (!CreateModule(kWaterVert, sizeof kWaterVert, s.vert[static_cast<uint32_t>(VertexProgram::Water)], "Water.vert")
             || !CreateModule(kWaterFrag, sizeof kWaterFrag, s.frag[static_cast<uint32_t>(FragmentProgram::Water)], "Water.frag"))
             return false;
+        // Our WMO shader (kb: our-shaders), in the generic slots.
+        if (!CreateModule(kWmoVert, sizeof kWmoVert, s.vert[static_cast<uint32_t>(VertexProgram::Wmo)], "Wmo.vert")
+            || !CreateModule(kWmoFrag, sizeof kWmoFrag, s.frag[static_cast<uint32_t>(FragmentProgram::Wmo)], "Wmo.frag"))
+            return false;
         // The bindless set (SPIR-V 1.5) only where the device is 1.2 with non-uniform indexing.
         const bool bindless = (context::Caps().enabled & gxvk::vk::kCapSampledArrayNonUniform) != 0;
         for (uint32_t b = 0; b < (bindless ? 2u : 1u); ++b)
@@ -149,8 +154,20 @@ namespace gxvk::vk::pipelines::detail
 
     // Vertex constants 0..5 (the record's options), 6 the underlay, 7 big alpha; the evaluation stage of
     // a raised chunk takes the same.
+    // SXC: our WMO shader's constants, the same for both stages: 0 the retail shader id, 1 lit, 2 the shadow
+    // mode, 3 a second vertex colour and UV set, 4 a third texture.
+    const VkSpecializationInfo* WmoSpecialization(const Key& k, TerrainSpecialization& storage)
+    {
+        const uint32_t o = k.wmoOptions;
+        const uint32_t values[5] = {
+            wmo::Shader(o), (o & wmo::kLit) ? 1u : 0u, wmo::ShadowMode(o), (o & wmo::kSecondSet) ? 1u : 0u, (o & wmo::kThirdTexture) ? 1u : 0u,
+        };
+        return Specialize(storage, values, 5);
+    }
+
     const VkSpecializationInfo* VertexSpecialization(const Key& k, TerrainSpecialization& storage)
     {
+        if (k.vertex == static_cast<uint32_t>(VertexProgram::Wmo)) return WmoSpecialization(k, storage);
         if (k.vertex != static_cast<uint32_t>(VertexProgram::Terrain)) return nullptr;
         const uint32_t o = k.terrainVertex;
         const uint32_t values[8] = {
@@ -178,6 +195,7 @@ namespace gxvk::vk::pipelines::detail
 
     const VkSpecializationInfo* FragmentSpecialization(const Key& k, TerrainSpecialization& storage)
     {
+        if (k.fragment == static_cast<uint32_t>(FragmentProgram::Wmo)) return WmoSpecialization(k, storage);
         if (k.fragment != static_cast<uint32_t>(FragmentProgram::Terrain)) return nullptr;
         // 3: the underlay of a raised chunk (its pixels don't write the covers' surface grid); 4: a second
         // view's copy (Vulkan/View.cpp: nor do its, they aren't the screen's).

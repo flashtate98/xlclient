@@ -71,6 +71,7 @@ namespace gxvk::vk::pipelines
         Terrain       = 4,   // SXC:
         Decal         = 5,   // SXC: projected textures on the raised covers (step 5e)
         Water         = 6,   // SXC: our water (SXC/Water)
+        Wmo           = 7,   // SXC: our WMO shader (kb: our-shaders)
         Count
     };
 
@@ -84,8 +85,28 @@ namespace gxvk::vk::pipelines
         Terrain       = 5,   // SXC:
         Decal         = 6,   // SXC: projected textures on the raised covers (step 5e)
         Water         = 7,   // SXC: our water (SXC/Water)
+        Wmo           = 8,   // SXC: our WMO shader (kb: our-shaders)
         Count
     };
+
+    // SXC: our WMO shader's options, packed (Shaders/Wmo.vert, Wmo.frag; kb: our-shaders). The same word
+    // for both stages: bits 0-4 the material's retail shader id (0-31), 5 lit (the stock lighting mode
+    // isn't 0), 6-7 the shadow mode (CShaderEffect::s_shadowValue: 0 none, 1 one cascade, 2-3 all), 8 a
+    // second vertex colour and UV set in the vertex (PNC2T2), 9 a third texture (Cataclysm's three-texture
+    // shaders).
+    namespace wmo
+    {
+        constexpr uint32_t kShaderMask = 0x1Fu, kLit = 1u << 5, kShadowShift = 6, kSecondSet = 1u << 8, kThirdTexture = 1u << 9;
+        inline uint32_t Shader(uint32_t o) { return o & kShaderMask; }
+        inline uint32_t ShadowMode(uint32_t o) { return (o >> kShadowShift) & 3u; }
+        /// The samplers the pixel module declares: the material's textures (0, 1, 2) and the stock
+        /// shadow cascades (4; 4-7 in modes 2 and 3).
+        inline uint32_t SamplerMask(uint32_t o)
+        {
+            const uint32_t mode = ShadowMode(o);
+            return 0x7u | (mode >= 1 ? 1u << 4 : 0u) | (mode >= 2 ? 0xEu << 4 : 0u);
+        }
+    }
 
     // SXC: our terrain shader's options, packed (Shaders/Terrain.vert, Terrain.frag).
     namespace terrain
@@ -193,6 +214,7 @@ namespace gxvk::vk::pipelines
         uint32_t terrainVertex   = 0;   ///< SXC: with VertexProgram::Terrain, terrain::kVertex* options
         uint32_t terrainFragment = 0;   ///< SXC: with FragmentProgram::Terrain, terrain::kFragment* options
         bool     terrainUnderlay = false; ///< SXC: a raised terrain chunk: draw it flat and lowered first (kVertexSunk)
+        uint32_t wmoOptions      = 0;     ///< SXC: with VertexProgram::Wmo, wmo::k* options (both stages)
         uint32_t lightsSurface = 0;       ///< SXC: which of our lights a lit translated module takes (lights::Surface: any, outdoor, indoor, off)
 
         /// The push constants (Shaders/Push.glsl): the transform (the row-major matrix, or c0..c3),

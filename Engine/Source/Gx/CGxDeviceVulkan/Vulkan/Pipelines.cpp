@@ -248,6 +248,8 @@ namespace gxvk::vk::pipelines
             samplerMask = terrain::SamplerMask(draw.terrainFragment);  // SXC: what the module declares
             cubeMask    = (draw.terrainFragment & terrain::kFragmentCube) ? 1u : 0u;
         }
+        else if (draw.fragment == FragmentProgram::Wmo)
+            samplerMask = wmo::SamplerMask(draw.wmoOptions);  // SXC: what our WMO pixel module declares
         else if (draw.fragment == FragmentProgram::FixedFunction || draw.fragment == FragmentProgram::FixedFunctionTranslated
                  || draw.fragment == FragmentProgram::Decal)
             samplerMask = 3u;
@@ -257,7 +259,8 @@ namespace gxvk::vk::pipelines
         // The instanced grass reads the ground marks there (its vertex stage).
         const bool cover = draw.fragment == FragmentProgram::Terrain || draw.fragment == FragmentProgram::Decal
                            || (draw.vertex == VertexProgram::Translated && draw.vertexRecord && draw.vertexRecord->grass);
-        const bool lit = draw.fragment == FragmentProgram::Translated && draw.fragmentRecord && draw.fragmentRecord->lights;
+        const bool lit = (draw.fragment == FragmentProgram::Translated && draw.fragmentRecord && draw.fragmentRecord->lights)
+                         || draw.fragment == FragmentProgram::Wmo;   // SXC: our WMO shader takes our lights
         // Our water (SXC/Water): the scene behind it in set 2, the lights' set 3.
         const bool water = draw.fragment == FragmentProgram::Water;
         if (!LayoutFor(samplerMask, cover ? kExtraCover : (water ? kExtraWater : (lit ? kExtraLights : kExtraNone)), layoutIndex))
@@ -293,6 +296,7 @@ namespace gxvk::vk::pipelines
         k.instanceStreams = draw.instanceStreams;   // SXC: the instanced grass
         k.plantStream     = draw.plantStream >= 0 ? static_cast<uint32_t>(draw.plantStream) + 1u : 0u;
         k.copyStream      = draw.copyStream >= 0 ? static_cast<uint32_t>(draw.copyStream) + 1u : 0u;
+        k.wmoOptions      = draw.vertex == VertexProgram::Wmo ? draw.wmoOptions : 0u;   // SXC: our WMO shader
 
         const Entry* entry = Lookup(k);
         if (!entry || entry->pipeline == VK_NULL_HANDLE)

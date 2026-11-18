@@ -26,6 +26,7 @@
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"  // SXC: our terrain shader's covers
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Lights.hpp" // SXC: and its point lights
 #include "SXC/Lights/Lights.h"
+#include "SXC/Wmo/Wmo.h"  // SXC: our WMO shader's seam
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Frame.hpp"  // SXC:
 
 namespace {
@@ -175,6 +176,7 @@ namespace {
     };
     std::unordered_map<const CGxShader*, TerrainDecode> g_terrainDecodes;
     uint64_t g_terrainDraws = 0, g_terrainStock = 0;
+    uint64_t g_wmoDraws = 0;   // SXC: our WMO shader's draws
 
     // "Family:n" -> family, n (n = 0 when the name has no permutation).
     bool SplitName(const char* name, char* family, size_t size, uint32_t& n) {
@@ -526,6 +528,38 @@ uint32_t CGxDeviceVulkan::IShaderPrograms(pipelines::Draw& draw) {
             char key[96];
             SStrPrintf(key, sizeof(key), "gxvk-terrain|%s|%s", vsShader->m_key.m_str, psShader->m_key.m_str);
             SXC::LogOnce(key, "vulkan: our terrain shader doesn't cover %s / %s yet; the stock shaders draw it", vsShader->m_key.m_str, psShader->m_key.m_str);
+        }
+    }
+
+    // SXC: our WMO shader (Shaders/Wmo.vert, Wmo.frag; kb: our-shaders) for a unified WMO batch it covers,
+    // when Wmo/OurShader is on. The batch's shader id comes from SXC::Wmo (CMapObj::UnifiedRender); lit from
+    // the vertex record's permutation (MapObjU*:n, n = lit + 2 (fog + 15 shadow), CMapObj::SelectWorldShaders),
+    // the shadow mode from the pixel record's (m mod 4: CShaderEffect::SelectShadowShader; the vertex side
+    // stops at 2). It reads the lights' set 3 and the vertex registers up to the shadow matrices (c235).
+    uint32_t wmoShader = 0;
+    if (vsTranslated && psTranslated && SXC::Wmo::OurShader() && SXC::Wmo::Drawing(wmoShader) && SXC::Wmo::Covers(wmoShader)
+        && gxvk::vk::lights::Ready()) {
+        const CGxShader* vsShader = static_cast<const CGxShader*>(this->m_appRenderStates[GxRs_VertexShader].m_value.m_data.p);
+        const CGxShader* psShader = static_cast<const CGxShader*>(this->m_appRenderStates[GxRs_PixelShader].m_value.m_data.p);
+        char vsFamily[64], psFamily[64];
+        uint32_t n = 0, m = 0;
+
+        if (SplitName(vsShader->m_key.m_str, vsFamily, sizeof(vsFamily), n) && SplitName(psShader->m_key.m_str, psFamily, sizeof(psFamily), m)
+            && !SStrCmpI(vsFamily, "MapObjU", 7) && !SStrCmpI(psFamily, "MapObj", 6) && n < 90) {
+            namespace wmo = pipelines::wmo;
+            draw.vertex = pipelines::VertexProgram::Wmo;
+            draw.fragment = pipelines::FragmentProgram::Wmo;
+            draw.vertexRecord = vs->record;
+            draw.wmoOptions = wmoShader | ((n & 1u) ? wmo::kLit : 0u) | ((m % 4u) << wmo::kShadowShift);
+            draw.vertexRows = pipelines::kVertexRowsLarge;
+            const uint32_t used = s_vertexRowsWritten < 256 ? s_vertexRowsWritten : 256;
+            draw.vertexRowsUsed = used < draw.vertexRows ? used : draw.vertexRows;
+
+            if (g_wmoDraws++ == 0) {
+                SXC::LogOnce("gxvk-wmo-on", "vulkan: our WMO shader draws unified WMOs (first: shader %u, %s / %s)", wmoShader, vsShader->m_key.m_str, psShader->m_key.m_str);
+            }
+
+            return wmo::SamplerMask(draw.wmoOptions);
         }
     }
 

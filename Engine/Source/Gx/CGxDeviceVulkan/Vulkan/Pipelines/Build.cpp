@@ -246,6 +246,22 @@ namespace
                 AddAttribute(k, in, 2, kAttribTexCoord1, VK_FORMAT_R32G32_SFLOAT, kConstantTexcoordOffset);
                 return true;
 
+            // SXC: our WMO shader (Shaders/Wmo.vert) reads position0, normal0, color0, color1, texcoord0 and
+            // texcoord1; a group without vertex colours or a second UV set reads white and zero.
+            case VertexProgram::Wmo:
+                if (!(k.attribMask & (1u << kAttribNormal)))
+                {
+                    why = "the WMO vertex has no normal";
+                    return false;
+                }
+                AddAttribute(k, in, 0, kAttribPosition, VK_FORMAT_R32G32B32_SFLOAT, 0);
+                AddAttribute(k, in, 1, kAttribNormal, VK_FORMAT_R32G32B32_SFLOAT, 0);
+                AddAttribute(k, in, 2, kAttribColor0, VK_FORMAT_B8G8R8A8_UNORM, kConstantColourOffset);
+                AddAttribute(k, in, 3, kAttribColor1, VK_FORMAT_B8G8R8A8_UNORM, kConstantColourOffset);
+                AddAttribute(k, in, 4, kAttribTexCoord0, VK_FORMAT_R32G32_SFLOAT, kConstantTexcoordOffset);
+                AddAttribute(k, in, 5, kAttribTexCoord1, VK_FORMAT_R32G32_SFLOAT, kConstantTexcoordOffset);
+                return true;
+
             case VertexProgram::Translated:
             {
                 const manifest::Record* r = manifest::At(k.vertexRecord);
@@ -365,6 +381,13 @@ namespace
             return false;
         }
         if (v == VertexProgram::Water) return true;
+        // SXC: and our WMO shader's.
+        if ((v == VertexProgram::Wmo) != (f == FragmentProgram::Wmo))
+        {
+            why = "our WMO shader is paired with another program";
+            return false;
+        }
+        if (v == VertexProgram::Wmo) return true;
 
         uint32_t outputs = 0xFFFFFFFFu;
         if (v == VertexProgram::Translated)

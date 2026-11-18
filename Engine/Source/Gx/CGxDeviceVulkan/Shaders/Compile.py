@@ -88,6 +88,11 @@ OUTPUTS = [
         ("WaterQuery.comp", "kWaterQueryComp"),  # the surface under each swimmer (SXC/Water/Ride.cpp)
         ("RippleStep.comp", "kRippleStepComp"),  # the ripple field (Vulkan/Ripples.cpp)
     ]),
+    # SXC: our WMO shader (kb: our-shaders), in place of the translated WMO records when Wmo/OurShader is on.
+    ("WmoSpirv.inc", [
+        ("Wmo.vert", "kWmoVert"),
+        ("Wmo.frag", "kWmoFrag"),
+    ]),
 ]
 
 

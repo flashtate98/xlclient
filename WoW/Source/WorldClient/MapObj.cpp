@@ -62,6 +62,7 @@
 #include "Engine/Source/ConsoleBase/ConsoleVar.h"
 #include "Engine/Source/Gx/CGxMatrixStack.h"
 #include "SXC/Lights/Lights.h"  // SXC: indoor / outdoor surfaces for our lights
+#include "SXC/Wmo/Wmo.h"        // SXC: our WMO shader's seam
 #include <mutex>
 #include <unordered_map>
 
@@ -1151,7 +1152,9 @@ void CMapObj::UnifiedRender(CMapObjGroup* group, uint32_t index) {
             draw.m_count = batch.m_indexCount;
             draw.m_minIndex = batch.m_vertexStart;
             draw.m_maxIndex = batch.m_vertexEnd;
+            SXC::Wmo::BeginDraw(shader);   // SXC: our WMO shader may draw it (kb: our-shaders)
             g_theGxDevicePtr->Draw(&draw, 1);
+            SXC::Wmo::EndDraw();
             continue;
         }
 
@@ -1179,7 +1182,9 @@ void CMapObj::UnifiedRender(CMapObjGroup* group, uint32_t index) {
             draw.m_count = batch.m_indexCount;
             draw.m_minIndex = batch.m_vertexStart;
             draw.m_maxIndex = batch.m_vertexEnd;
+            SXC::Wmo::BeginDraw(shader);
             g_theGxDevicePtr->Draw(&draw, 1);
+            SXC::Wmo::EndDraw();
 
             CMapObjGroup::SetLighting(group, 3);
             SetShaderFogFromDayNight((material.m_flags & 0x2) == 0 ? fogMode : 0);
@@ -1203,7 +1208,9 @@ void CMapObj::UnifiedRender(CMapObjGroup* group, uint32_t index) {
             draw2.m_count = batch.m_indexCount;
             draw2.m_minIndex = batch.m_vertexStart;
             draw2.m_maxIndex = batch.m_vertexEnd;
+            SXC::Wmo::BeginDraw(shader);
             g_theGxDevicePtr->Draw(&draw2, 1);
+            SXC::Wmo::EndDraw();
             continue;
         }
 

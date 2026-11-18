@@ -1,0 +1,23 @@
+#pragma once
+
+#include <cstdint>
+
+// Our WMO shader (kb: our-shaders): the seam between the map object code and the Vulkan device. CMapObj::
+// UnifiedRender announces the batch it draws (its material's shader id); the device draws it with our own
+// WMO program pair (Shaders/Wmo.vert, Wmo.frag) instead of the translated records when the setting is on
+// and the program covers that id. Main thread.
+namespace SXC::Wmo {
+    // The setting Wmo/OurShader (off until our shader matches the look of the translated ones).
+    bool OurShader();
+
+    // Around one draw of a unified WMO batch: the shader id the material is drawn with (after
+    // CMapObj::CreateMaterial's fallbacks).
+    void BeginDraw(uint32_t shader);
+    void EndDraw();
+
+    // The batch being drawn now, if any: its shader id.
+    bool Drawing(uint32_t& shader);
+
+    // Whether our program draws this shader id (the ids not covered yet stay with the translated records).
+    bool Covers(uint32_t shader);
+}
