@@ -129,6 +129,12 @@ void main()
     float blend = inBlend;
 
     // The material per retail shader id (retail's MapObj* pixel shaders).
+    if (kShader == 1 || kShader == 2 || kShader == 4)
+    {
+        // Specular, Metal, Opaque: the stock takes the vertex's alpha alone (the texture's is the shine mask).
+        alpha = inColor.a;
+    }
+
     if (kShader == 3)
     {
         added = texture(s1, inTex1).rgb * t0.a;                                   // Env
@@ -151,6 +157,10 @@ void main()
         material = layered.rgb;
         added = layered.rgb * layered.a * texture(s2, inTex2).rgb;
         alpha = inColor.a;
+    }
+    else if (kShader == 8)
+    {
+        material = mix(texture(s1, inTex1).rgb, t0.rgb, blend);                 // TwoLayerTerrain
     }
     else if (kShader == 9)
     {
@@ -183,7 +193,24 @@ void main()
     }
 
     // Times the sun shadow's 0.7..1.
-    float shade = SunShadow() * 0.3 + 0.7;
+    float sunShadow = SunShadow();
+    float shade = sunShadow * 0.3 + 0.7;
+
+    // Retail's sun highlight on Specular, Metal and TwoLayerTerrain (3.3.5 computed one in the vertex and
+    // never used it): 1.25 (N.H)^8, a Fresnel term toward 1 by the texture's mask (TwoLayerTerrain: the
+    // terrain texture's alpha where it shows), the direct light (v11: none indoors) where the surface faces
+    // the sun, the shadow's share.
+    if (kShader == 1 || kShader == 2 || kShader == 8)
+    {
+        vec3 n = normalize(inNormal);
+        vec3 l = -normalize(regs.v[12].xyz);
+        vec3 h = normalize(l + normalize(-inView));
+        float spec = 1.25 * pow(clamp(dot(n, h), 0.0, 1.0), 8.0);
+        float mask = kShader == 1 ? t0.a : kShader == 2 ? t0.r * 4.0 * t0.a : texture(s1, inTex1).a * (1.0 - blend);
+        float fresnel = mix(pow(1.0 - clamp(dot(l, h), 0.0, 1.0), 5.0), 1.0, mask);
+        added += fresnel * spec * regs.v[11].xyz * clamp(dot(n, l), 0.0, 1.0) * shade;
+    }
+
     vec3 colour = light.rgb * shade * 2.0 * material + added;
 
     // The stock fog: toward the fog colour as the factor falls.

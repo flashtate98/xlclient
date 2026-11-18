@@ -45,7 +45,7 @@ layout(std140, set = 1, binding = 0) uniform Regs {
 float DxPow(float x, float y) { return x == 0.0 ? 0.0 : exp2(y * log2(abs(x))); }
 
 // Cataclysm's effects read texture matrices c6..c9 (the stock ones read the coordinates as they are).
-bool CataMatrices() { return kShader == 7 || kShader == 9 || kShader == 11 || kShader == 12 || kShader == 13; }
+bool CataMatrices() { return kShader >= 7 && kShader <= 13 && kShader != 10; }
 
 vec2 Matrix(int row, vec2 uv)
 {
@@ -88,6 +88,13 @@ void main()
     if (kShader == 3 || kShader == 5)
     {
         outTex1 = reflection;                                     // T1_Refl
+        outTex2 = vec2(0.0);
+    }
+    else if (kShader == 8)
+    {
+        // Comp_Terrain: the second (terrain) texture from the view position through the texgen rows v8, v9
+        // (MapObjCata::ApplyMatrices), scaled by -0.24, u and v swapped (Cataclysm's and retail's).
+        outTex1 = vec2(dot(regs.v[9] * -0.24, view), dot(regs.v[8] * -0.24, view));
         outTex2 = vec2(0.0);
     }
     else if (kShader == 11 || kShader == 12)

@@ -34,8 +34,8 @@ namespace SXC::Wmo {
     }
 
     bool Covers(uint32_t shader) {
-        // 8 (TwoLayerTerrain's texgen) and the liquid windows (10, 14) aren't ported yet; 15 on are drawn as
-        // one of 0-13 by CreateMaterial's fallbacks for now.
-        return shader <= 13 && shader != 8 && shader != 10;
+        // The liquid windows (10, 14) aren't ported yet; 15 on are drawn as one of 0-13 by CreateMaterial's
+        // fallbacks for now.
+        return shader <= 13 && shader != 10;
     }
 }
