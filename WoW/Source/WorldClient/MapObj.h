@@ -325,9 +325,12 @@ namespace MapObjCata {
     bool SecondVertexSet(uint32_t shader);
     CTexture* ThirdTexture(const SMOMaterial& material);
     void SetThirdTexture(const SMOMaterial& material, CTexture* texture);
-    // Before drawing a batch with Cataclysm's effect: its third texture, the wrap of the other two, and the
-    // texture matrices its vertex shader reads (CMapObjRender::ApplyMaterial there).
+    // Before drawing a batch with Cataclysm's effect: its third texture and the wrap of the other two
+    // (CMapObjRender::ApplyMaterial there).
     void Apply(const SMOMaterial& material, uint32_t shader);
+    // The texture matrices its vertex shader reads, right before each draw (after the lighting, which
+    // writes c9).
+    void ApplyMatrices(uint32_t shader);
     // The shader the file names and why the material is drawn with another (nullptr: it isn't), kept from
     // CreateMaterial, which overwrites m_shader with the one that draws it; for the Ray panel's surface readout.
     struct ShaderNote { uint32_t retail = 0; const char* reason = nullptr; bool known = false; };

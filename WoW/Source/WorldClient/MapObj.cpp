@@ -159,9 +159,13 @@ void MapObjCata::Apply(const SMOMaterial& material, uint32_t shader) {
     }
 
     g_theGxDevicePtr->RsSet(GxRs_Texture2, third);
+}
 
+void MapObjCata::ApplyMatrices(uint32_t shader) {
     // 3.3.5's WMO vertex shaders never read the texture matrices; Cataclysm's do: identity, a texgen from
-    // the view position for TwoLayerTerrain's second texture, a slow scroll for MaskedEnvMetal's.
+    // the view position for TwoLayerTerrain's second texture, a slow scroll for MaskedEnvMetal's. Set right
+    // before the draw: CMapObjGroup::SetLighting writes the ambient colour into c9 too, the second matrix's
+    // V row (3.3.5's shaders don't read it), which slid the second texture with the time of day.
     CShaderEffect::SetTexMtx_Identity(0);
 
     if (shader == 8) {
@@ -1136,6 +1140,11 @@ void CMapObj::UnifiedRender(CMapObjGroup* group, uint32_t index) {
             GxRsSet(GxRs_BlendingMode, static_cast<int32_t>(material.m_blendMode));
             CShaderEffect::SetAlphaRefDefault();
             CMapObj::SelectWorldShaders();
+
+            if (MapObjCata::Drawn(shader)) {
+                MapObjCata::ApplyMatrices(shader);   // SXC: after the lighting (it writes c9)
+            }
+
             CGxBatch draw;
             draw.m_primType = GxPrim_Triangles;
             draw.m_start = batch.m_indexStart;
@@ -1159,6 +1168,11 @@ void CMapObj::UnifiedRender(CMapObjGroup* group, uint32_t index) {
             GxRsSet(GxRs_BlendingMode, static_cast<int32_t>(9));
             CShaderEffect::SetAlphaRefDefault();
             CMapObj::SelectWorldShaders();
+
+            if (MapObjCata::Drawn(shader)) {
+                MapObjCata::ApplyMatrices(shader);
+            }
+
             CGxBatch draw;
             draw.m_primType = GxPrim_Triangles;
             draw.m_start = batch.m_indexStart;
@@ -1178,6 +1192,11 @@ void CMapObj::UnifiedRender(CMapObjGroup* group, uint32_t index) {
             GxRsSet(GxRs_BlendingMode, static_cast<int32_t>(7));
             CShaderEffect::SetAlphaRefDefault();
             CMapObj::SelectWorldShaders();
+
+            if (MapObjCata::Drawn(shader)) {
+                MapObjCata::ApplyMatrices(shader);
+            }
+
             CGxBatch draw2;
             draw2.m_primType = GxPrim_Triangles;
             draw2.m_start = batch.m_indexStart;
