@@ -1163,7 +1163,7 @@ void CMapObj::UnifiedRender(CMapObjGroup* group, uint32_t index) {
             draw.m_count = batch.m_indexCount;
             draw.m_minIndex = batch.m_vertexStart;
             draw.m_maxIndex = batch.m_vertexEnd;
-            SXC::Wmo::BeginDraw(MapObjCata::OurShaderId(material, shader));   // SXC: our WMO shader may draw it (kb: our-shaders)
+            SXC::Wmo::BeginDraw(MapObjCata::OurShaderId(material, shader), material.m_blendMode);   // SXC: our WMO shader may draw it (kb: our-shaders)
             g_theGxDevicePtr->Draw(&draw, 1);
             SXC::Wmo::EndDraw();
             continue;
@@ -1193,7 +1193,7 @@ void CMapObj::UnifiedRender(CMapObjGroup* group, uint32_t index) {
             draw.m_count = batch.m_indexCount;
             draw.m_minIndex = batch.m_vertexStart;
             draw.m_maxIndex = batch.m_vertexEnd;
-            SXC::Wmo::BeginDraw(MapObjCata::OurShaderId(material, shader));
+            SXC::Wmo::BeginDraw(MapObjCata::OurShaderId(material, shader), material.m_blendMode);
             g_theGxDevicePtr->Draw(&draw, 1);
             SXC::Wmo::EndDraw();
 
@@ -1219,7 +1219,7 @@ void CMapObj::UnifiedRender(CMapObjGroup* group, uint32_t index) {
             draw2.m_count = batch.m_indexCount;
             draw2.m_minIndex = batch.m_vertexStart;
             draw2.m_maxIndex = batch.m_vertexEnd;
-            SXC::Wmo::BeginDraw(MapObjCata::OurShaderId(material, shader));
+            SXC::Wmo::BeginDraw(MapObjCata::OurShaderId(material, shader), material.m_blendMode);
             g_theGxDevicePtr->Draw(&draw2, 1);
             SXC::Wmo::EndDraw();
             continue;

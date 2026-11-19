@@ -536,8 +536,8 @@ uint32_t CGxDeviceVulkan::IShaderPrograms(pipelines::Draw& draw) {
     // the vertex record's permutation (MapObjU*:n, n = lit + 2 (fog + 15 shadow), CMapObj::SelectWorldShaders),
     // the shadow mode from the pixel record's (m mod 4: CShaderEffect::SelectShadowShader; the vertex side
     // stops at 2). It reads the lights' set 3 and the vertex registers up to the shadow matrices (c235).
-    uint32_t wmoShader = 0;
-    if (vsTranslated && psTranslated && SXC::Wmo::OurShader() && SXC::Wmo::Drawing(wmoShader) && SXC::Wmo::Covers(wmoShader)
+    uint32_t wmoShader = 0, wmoBlend = 0;
+    if (vsTranslated && psTranslated && SXC::Wmo::OurShader() && SXC::Wmo::Drawing(wmoShader, wmoBlend) && SXC::Wmo::Covers(wmoShader)
         && gxvk::vk::lights::Ready()) {
         const CGxShader* vsShader = static_cast<const CGxShader*>(this->m_appRenderStates[GxRs_VertexShader].m_value.m_data.p);
         const CGxShader* psShader = static_cast<const CGxShader*>(this->m_appRenderStates[GxRs_PixelShader].m_value.m_data.p);
@@ -550,8 +550,10 @@ uint32_t CGxDeviceVulkan::IShaderPrograms(pipelines::Draw& draw) {
             draw.vertex = pipelines::VertexProgram::Wmo;
             draw.fragment = pipelines::FragmentProgram::Wmo;
             draw.vertexRecord = vs->record;
+            // The alpha key by the material's blend mode, not the draw's: a transition batch draws in two passes
+            // with blend modes 9 and 7 whatever the material's (Kul Tiras' roots kept their background there).
             draw.wmoOptions = wmoShader | ((n & 1u) ? wmo::kLit : 0u) | ((m % 4u) << wmo::kShadowShift) |
-                              (draw.blend == GxBlend_AlphaKey ? wmo::kAlphaKey : 0u);
+                              (wmoBlend == GxBlend_AlphaKey ? wmo::kAlphaKey : 0u);
             draw.vertexRows = pipelines::kVertexRowsLarge;
             const uint32_t used = s_vertexRowsWritten < 256 ? s_vertexRowsWritten : 256;
             draw.vertexRowsUsed = used < draw.vertexRows ? used : draw.vertexRows;
@@ -559,6 +561,12 @@ uint32_t CGxDeviceVulkan::IShaderPrograms(pipelines::Draw& draw) {
             if (g_wmoDraws++ == 0) {
                 SXC::LogOnce("gxvk-wmo-on", "vulkan: our WMO shader draws unified WMOs (first: shader %u, %s / %s)", wmoShader, vsShader->m_key.m_str, psShader->m_key.m_str);
             }
+
+            // What our WMO shader is given, once per shader id and blend mode (kb: our-shaders).
+            char key[64];
+            SStrPrintf(key, sizeof(key), "gxvk-wmo %u %u %u", wmoShader, static_cast<uint32_t>(draw.blend), wmoBlend);
+            SXC::LogOnce(key, "vulkan: our WMO shader: shader %u, blend mode %u (the material's %u), options 0x%03x (%s / %s)", wmoShader,
+                         static_cast<uint32_t>(draw.blend), wmoBlend, draw.wmoOptions, vsShader->m_key.m_str, psShader->m_key.m_str);
 
             return wmo::SamplerMask(draw.wmoOptions);
         }

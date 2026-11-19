@@ -5,6 +5,7 @@
 namespace {
     bool s_drawing = false;
     uint32_t s_shader = 0;
+    uint32_t s_materialBlend = 0;
 
     SXC::Settings::Bool& Setting() {
         static SXC::Settings::Bool s_setting("Wmo", "OurShader", false, "Our WMO shader (Vulkan)",
@@ -19,17 +20,19 @@ namespace SXC::Wmo {
         return Setting().Get();
     }
 
-    void BeginDraw(uint32_t shader) {
+    void BeginDraw(uint32_t shader, uint32_t materialBlend) {
         s_drawing = true;
         s_shader = shader;
+        s_materialBlend = materialBlend;
     }
 
     void EndDraw() {
         s_drawing = false;
     }
 
-    bool Drawing(uint32_t& shader) {
+    bool Drawing(uint32_t& shader, uint32_t& materialBlend) {
         shader = s_shader;
+        materialBlend = s_materialBlend;
         return s_drawing;
     }
 

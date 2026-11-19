@@ -11,12 +11,13 @@ namespace SXC::Wmo {
     bool OurShader();
 
     // Around one draw of a unified WMO batch: the shader id the material is drawn with (after
-    // CMapObj::CreateMaterial's fallbacks).
-    void BeginDraw(uint32_t shader);
+    // CMapObj::CreateMaterial's fallbacks) and the material's own blend mode (a transition batch is drawn in
+    // two passes with fixed blend modes 9 and 7, whatever the material's: an alpha-key one is cut all the same).
+    void BeginDraw(uint32_t shader, uint32_t materialBlend);
     void EndDraw();
 
-    // The batch being drawn now, if any: its shader id.
-    bool Drawing(uint32_t& shader);
+    // The batch being drawn now, if any: its shader id and the material's blend mode.
+    bool Drawing(uint32_t& shader, uint32_t& materialBlend);
 
     // Whether our program draws this shader id (the ids not covered yet stay with the translated records).
     bool Covers(uint32_t shader);
