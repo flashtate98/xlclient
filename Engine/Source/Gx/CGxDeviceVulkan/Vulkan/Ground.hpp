@@ -23,10 +23,12 @@ namespace gxvk::vk::ground
     struct Frame
     {
         float           viewInv[12] = {};      ///< the view back to the world, a row per world axis
-        float           light[12] = {};        ///< the terrain's light: toward the sun (world), ambient, diffuse (xyz, w 0)
+        float           light[16] = {};        ///< the terrain's light: toward the sun (world), ambient, diffuse (xyz, w 0), highlight (colour, exponent)
         int32_t         firstI = 0, firstJ = 0; ///< the window's first map chunk
         const uint32_t* grid = nullptr;        ///< kGrid x kGrid: entry + 1
+        const uint32_t* holes = nullptr;       ///< kGrid x kGrid: each cell's holes (4 x 4 bits)
         const uint32_t* colours = nullptr;     ///< kGrid x kGrid x kColours: each cell's vertex colours (D3DCOLOR)
+        const float*    heights = nullptr;     ///< kGrid x kGrid x kColours: each cell's vertex heights (world z)
         const void*     entries = nullptr;     ///< kEntryBytes each
         uint32_t        entryCount = 0;
         pipelines::Texture textures[kSlots];   ///< slot k (entries name k + 1); view null: white

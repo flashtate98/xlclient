@@ -42,10 +42,13 @@ namespace SXC::Ground {
 
     struct Frame {
         float viewInv[12] = {};   // the world scene's view back to the world, a row per world axis
-        float light[12] = {};     // the terrain's light as last drawn: toward the sun (world), the ambient, the sun's diffuse (xyz each, w 0)
+        float light[16] = {};     // the terrain's light as last drawn: toward the sun (world), the ambient, the sun's diffuse (xyz each,
+                                  // w 0), the sun's highlight colour (0 with terrain specular off) and exponent (v27)
         int32_t firstI = 0, firstJ = 0;   // the window's first map chunk (i along world x, j along y, from the map's corner)
         uint32_t grid[kGrid * kGrid] = {};    // [j * kGrid + i]: entry + 1 (0: no chunk known)
+        uint32_t holes[kGrid * kGrid] = {};   // per cell its map chunk's holes (MCNK's 4 x 4 bits: (row / 2) * 4 + column / 2)
         uint32_t colours[kGrid * kGrid * kColours] = {};   // per cell its map chunk's vertex colours (D3DCOLOR, 0x7F7F7F neutral)
+        float heights[kGrid * kGrid * kColours] = {};      // per cell its map chunk's vertex heights (world z), as the colours
         Entry entries[kMaxEntries] = {};
         uint32_t entryCount = 0;
         Texture textures[kMaxTextures];
@@ -68,10 +71,14 @@ namespace SXC::Ground {
         uint32_t flags = 0;
         float centres[2][2] = {};
         const uint32_t* shading[2] = {};   // each map chunk's vertex colours (kColours; null: none)
+        const float* heights[2] = {};      // its vertex heights (kColours, from baseZ; null: none)
+        float baseZ[2] = {};
+        uint16_t holes[2] = {};
         uint32_t centreCount = 0;
         float sunDir[3] = {};    // the terrain's light at this draw: toward the sun (view space, v24),
         float ambient[3] = {};   // the ambient (v25),
         float diffuse[3] = {};   // the sun's diffuse colour (v26)
+        float specular[4] = {};  // the sun's highlight colour and exponent (v27; colour 0 with terrain specular off)
     };
     void NoteChunk(const CMapRenderChunk* chunk, const Note& note);
 

@@ -17,21 +17,27 @@ layout(std430, set = 2, binding = 1) readonly buffer GroundTable {
     vec4  groundViewInv[3];   // the world scene's view back to the world, a row per world axis
     ivec4 groundWindow;       // the window's first map chunk (i along world x, j along y), chunks per side, entries
     vec4  groundGrid;         // a map chunk's size, the map's corner from its middle
-    vec4  groundLight[3];     // the terrain's light as last drawn: toward the sun (world), the ambient, the sun's diffuse
+    vec4  groundLight[4];     // the terrain's light as last drawn: toward the sun (world), the ambient, the sun's diffuse,
+                              // the sun's highlight (colour, 0 with terrain specular off; exponent)
     uint  groundCells[1024];  // [j * side + i]: entry + 1 (0: none)
+    uint  groundHoles[1024];  // per cell its map chunk's holes (4 x 4 bits: (row / 2) * 4 + column / 2)
     uint  groundColours[1024 * 145];   // per cell its map chunk's vertex colours (MCCV, D3DCOLOR): 9 x 9 corners, 8 x 8 centres, by rows
+    float groundHeights[1024 * 145];   // and its vertex heights (world z), alike
     GroundChunk groundChunks[];
 };
 
-// The vertex colour at world xy in window cell c (MCCV; 0.5 is neutral), as the terrain's mesh interpolates it: four
-// triangles a quad around its centre vertex (CMapChunk::CreateVerticesWorld: rows run along world x, columns along y).
-vec3 GroundVertexColour(vec2 xy, ivec2 c)
+// The terrain mesh's triangle at world xy in window cell c: four triangles a quad around its centre vertex
+// (CMapChunk::CreateVerticesWorld: rows run along world x, columns along y; CreateIndices): its three vertices'
+// indices into the cell's per-vertex arrays and their weights. `hole`: the quad is left out of the mesh.
+void GroundTriangle(vec2 xy, ivec2 c, out uvec3 at, out vec3 w, out bool hole)
 {
     ivec2 global = c + groundWindow.xy;
     vec2 q = (vec2(groundGrid.y) - xy) / groundGrid.x * 8.0 - vec2(global) * 8.0;
     ivec2 rc = clamp(ivec2(floor(q)), ivec2(0), ivec2(7));
     vec2 f = clamp(q - vec2(rc), 0.0, 1.0);
-    uint base = uint(c.y * groundWindow.z + c.x) * 145u;
+    uint cell = uint(c.y * groundWindow.z + c.x);
+    hole = (groundHoles[cell] & (1u << uint((rc.x >> 1) * 4 + (rc.y >> 1)))) != 0u;
+    uint base = cell * 145u;
     uint corner = base + uint(rc.x * 17 + rc.y);       // the quad's corner (row, column)
     uint centre = base + uint(rc.x * 17 + 9 + rc.y);   // its centre vertex
     // The triangle whose outer edge is nearest, and the weights of its two corners and the centre.
@@ -45,9 +51,57 @@ vec3 GroundVertexColour(vec2 xy, ivec2 c)
     else if (edge == left)   { a = corner;       b = corner + 17u; wb = f.x - left; }
     else                     { a = corner + 1u;  b = corner + 18u; wb = f.x - right; }
 
-    float wc = 2.0 * edge, wa = 1.0 - wb - wc;
-    vec3 ca = unpackUnorm4x8(groundColours[a]).zyx, cb = unpackUnorm4x8(groundColours[b]).zyx, cc = unpackUnorm4x8(groundColours[centre]).zyx;
-    return ca * wa + cb * wb + cc * wc;
+    float wc = 2.0 * edge;
+    at = uvec3(a, b, centre);
+    w = vec3(1.0 - wb - wc, wb, wc);
+}
+
+// The vertex colour at world xy in window cell c (MCCV; 0.5 is neutral), as the terrain's mesh interpolates it.
+vec3 GroundVertexColour(vec2 xy, ivec2 c)
+{
+    uvec3 at;
+    vec3 w;
+    bool hole;
+    GroundTriangle(xy, c, at, w, hole);
+    return unpackUnorm4x8(groundColours[at.x]).zyx * w.x + unpackUnorm4x8(groundColours[at.y]).zyx * w.y +
+           unpackUnorm4x8(groundColours[at.z]).zyx * w.z;
+}
+
+// The terrain's surface height at world xy (as its mesh lies), or false where there's none: outside the window, a chunk
+// not drawn yet, a hole.
+bool GroundHeight(vec2 xy, out float z)
+{
+    z = 0.0;
+    ivec2 c = ivec2(floor((vec2(groundGrid.y) - xy) / groundGrid.x)) - groundWindow.xy;
+
+    if (any(lessThan(c, ivec2(0))) || any(greaterThanEqual(c, ivec2(groundWindow.z))) || groundCells[c.y * groundWindow.z + c.x] == 0u)
+    {
+        return false;
+    }
+
+    uvec3 at;
+    vec3 w;
+    bool hole;
+    GroundTriangle(xy, c, at, w, hole);
+    z = groundHeights[at.x] * w.x + groundHeights[at.y] * w.y + groundHeights[at.z] * w.z;
+    return !hole;
+}
+
+// The terrain's share by nearness (16's proximity blend; SXC::Wmo::TerrainBlendParams' fourth column: on, the fade above
+// the terrain, the ceiling): all terrain where the surface lies under the terrain, fading out over `above` yd above it,
+// and out again toward `ceiling` yd under it (terrain that high is a roof, not the ground at a seam). None over a hole.
+float GroundProximity(vec3 world, float above, float ceiling)
+{
+    float z;
+
+    if (!GroundHeight(world.xy, z))
+    {
+        return 0.0;
+    }
+
+    float d = world.z - z;   // + above the terrain, - under it
+    return d >= 0.0 ? 1.0 - smoothstep(0.0, max(above, 1e-3), d)
+                    : 1.0 - smoothstep(max(ceiling - 0.5, 0.0), max(ceiling, 1e-3), -d);
 }
 
 layout(set = 2, binding = 2) uniform sampler2D groundTex[2048];
@@ -65,6 +119,21 @@ vec3 GroundLight(vec3 viewNormal)
 {
     vec3 n = normalize(vec3(dot(groundViewInv[0].xyz, viewNormal), dot(groundViewInv[1].xyz, viewNormal), dot(groundViewInv[2].xyz, viewNormal)));
     return min(groundLight[2].xyz * clamp(dot(groundLight[0].xyz, n), 0.0, 1.0) + groundLight[1].xyz, vec3(1.0));
+}
+
+// The terrain's sun highlight at a view-space position and normal, as its vertex shader computes it (TerrainLight's
+// kSpecular: Blinn-Phong toward the sun, v27's exponent and colour), here in the world; the gloss is the caller's.
+vec3 GroundHighlight(vec3 viewPos, vec3 viewNormal)
+{
+    if (all(equal(groundLight[3].xyz, vec3(0.0))))
+    {
+        return vec3(0.0);
+    }
+
+    vec3 n = normalize(vec3(dot(groundViewInv[0].xyz, viewNormal), dot(groundViewInv[1].xyz, viewNormal), dot(groundViewInv[2].xyz, viewNormal)));
+    vec3 toEye = normalize(vec3(dot(groundViewInv[0].xyz, -viewPos), dot(groundViewInv[1].xyz, -viewPos), dot(groundViewInv[2].xyz, -viewPos)));
+    vec3 h = normalize(toEye + groundLight[0].xyz);
+    return pow(max(dot(h, n), 0.0), max(groundLight[3].w, 1.0)) * groundLight[3].xyz;
 }
 
 // The window cell at world xy, and the entry of its chunk, or -1 (outside the window, or a chunk not drawn yet).
@@ -91,9 +160,10 @@ vec4 GroundSample(uint slot, vec2 uv, vec2 dx, vec2 dy, vec4 none)
 // False where there's no chunk.
 // `view` (Wmo/TerrainBlendDebug): 4 the alpha map (layers 1..3 in r, g, b), 5 the final weights (layer 0 red,
 // 1 green, 2 blue, 3 yellow), 6 the vertex colour (0.5 grey neutral); else the colour.
-bool GroundColour(vec2 xy, vec2 dx, vec2 dy, int view, out vec3 colour, out int entry)
+bool GroundColour(vec2 xy, vec2 dx, vec2 dy, int view, out vec3 colour, out float gloss, out int entry)
 {
     colour = vec3(0.0);
+    gloss = 0.0;
     ivec2 cell;
     entry = GroundChunkAt(xy, cell);
 
@@ -123,12 +193,12 @@ bool GroundColour(vec2 xy, vec2 dx, vec2 dy, int view, out vec3 colour, out int 
         }
     }
 
-    vec3 layer[4];
+    vec4 layer[4];   // rgb, and the alpha: the gloss where the terrain shines (the _s tileset textures)
     vec4 h = vec4(0.0);
 
     for (int k = 0; k < 4; k++)
     {
-        layer[k] = vec3(0.0);
+        layer[k] = vec4(0.0);
 
         if (k >= layers)
         {
@@ -137,7 +207,7 @@ bool GroundColour(vec2 xy, vec2 dx, vec2 dy, int view, out vec3 colour, out int 
         }
 
         float s = g.layerScale[k];
-        layer[k] = GroundSample(g.layerTex[k], r * s, rx * s, ry * s, vec4(0.5)).rgb;
+        layer[k] = GroundSample(g.layerTex[k], r * s, rx * s, ry * s, vec4(0.5, 0.5, 0.5, 0.0));
         // A layer without a height texture counts as 1: the terrain binds the white image in its place (Pipelines'
         // height slots), so its height blend weighs it fully (read as 0, snow with heights hid the stone beside it).
         h[k] = GroundSample(g.heightTex[k], r * s, rx * s, ry * s, vec4(1.0)).a;
@@ -159,10 +229,12 @@ bool GroundColour(vec2 xy, vec2 dx, vec2 dy, int view, out vec3 colour, out int 
     }
 
     w /= max(dot(w, vec4(1.0)), 1e-5);
+    vec4 mixed = layer[0] * w.x + layer[1] * w.y + layer[2] * w.z + layer[3] * w.w;
+    gloss = mixed.a;
     colour = view == 6 ? ((g.misc.z & 4u) != 0u ? GroundVertexColour(xy, cell) : vec3(0.5))
            : view == 4 ? alpha.rgb
            : view == 5 ? vec3(1.0, 0.0, 0.0) * w.x + vec3(0.0, 1.0, 0.0) * w.y + vec3(0.0, 0.0, 1.0) * w.z + vec3(1.0, 1.0, 0.0) * w.w
-                       : layer[0] * w.x + layer[1] * w.y + layer[2] * w.z + layer[3] * w.w;
+                       : mixed.rgb;
 
     // The vertex colours tint it as they scale the terrain's light (0.5 neutral: x 2), where the map's vertices
     // carry them (else 0.5, as our terrain shader's kVertexColor).

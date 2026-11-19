@@ -484,6 +484,12 @@ static void SxcNoteGround(CMapRenderChunk* chunk) {
     note.sunDir[0] = consts.m_sunDir.x, note.sunDir[1] = consts.m_sunDir.y, note.sunDir[2] = consts.m_sunDir.z;
     note.ambient[0] = consts.m_sunAmbient.x, note.ambient[1] = consts.m_sunAmbient.y, note.ambient[2] = consts.m_sunAmbient.z;
     note.diffuse[0] = consts.m_sunDiffuse.x, note.diffuse[1] = consts.m_sunDiffuse.y, note.diffuse[2] = consts.m_sunDiffuse.z;
+    // The sun's highlight where the terrain draws one (its vertex shader's specular permutation: SetVertexShader).
+    const bool specular = CMap::enableSpecularTerrain != 0;
+    note.specular[0] = specular ? consts.m_sunSpecular.x : 0.0f;
+    note.specular[1] = specular ? consts.m_sunSpecular.y : 0.0f;
+    note.specular[2] = specular ? consts.m_sunSpecular.z : 0.0f;
+    note.specular[3] = consts.m_sunSpecularW;
 
     for (uint32_t i = 0; i < layers; i++) {
         CMapRenderChunkLayer& layer = SxcLayerParams(chunk->m_layers[i]);
@@ -500,6 +506,9 @@ static void SxcNoteGround(CMapRenderChunk* chunk) {
             note.centres[note.centreCount][0] = (map->m_bbox.b.x + map->m_bbox.t.x) * 0.5f;
             note.centres[note.centreCount][1] = (map->m_bbox.b.y + map->m_bbox.t.y) * 0.5f;
             note.shading[note.centreCount] = map->m_vertexShading;   // D3DCOLOR, as CreateVerticesWorld reads it
+            note.heights[note.centreCount] = map->m_height;          // from m_topLeftCoords.z, as it reads them
+            note.baseZ[note.centreCount] = map->m_topLeftCoords.z;
+            note.holes[note.centreCount] = map->m_header ? map->m_header->m_holes : 0;   // as CreateIndices leaves them out
             note.centreCount++;
         }
     }

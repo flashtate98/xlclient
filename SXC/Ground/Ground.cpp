@@ -18,10 +18,12 @@ namespace {
         SXC::Ground::Note note;
         int32_t cells[2][2] = {};   // (i, j) of its map chunks
         uint32_t colours[2][SXC::Ground::kColours] = {};   // their vertex colours, copied
+        float heights[2][SXC::Ground::kColours] = {};      // their vertex heights (world z), copied
+        uint32_t holes[2] = {};
     };
 
     std::unordered_map<const CMapRenderChunk*, Known> s_known;
-    float s_light[12] = {};   // the terrain's light at its last draw (Frame::light)
+    float s_light[16] = {};   // the terrain's light at its last draw (Frame::light)
     char s_status[160] = "no terrain noted yet";
 
     int32_t Cell(float world) {
@@ -40,10 +42,15 @@ namespace SXC::Ground {
 
             for (uint32_t v = 0; v < kColours; v++) {
                 k.colours[c][v] = note.shading[c] ? note.shading[c][v] : 0xFF7F7F7Fu;
+                // Without heights the chunk counts as all holes for the proximity (far below anything).
+                k.heights[c][v] = note.heights[c] ? note.baseZ[c] + note.heights[c][v] : -1.0e9f;
             }
+
+            k.holes[c] = note.heights[c] ? note.holes[c] : 0xFFFFu;
         }
 
         k.note.shading[0] = k.note.shading[1] = nullptr;   // not kept: the chunk owns them
+        k.note.heights[0] = k.note.heights[1] = nullptr;
 
         // The light, its direction turned into the world with this frame's view (the WMOs drawn next frame turn it
         // back with theirs: no lag when the camera turns).
@@ -58,6 +65,10 @@ namespace SXC::Ground {
         for (int i = 0; i < 3; i++) {
             s_light[4 + i] = note.ambient[i];
             s_light[8 + i] = note.diffuse[i];
+        }
+
+        for (int i = 0; i < 4; i++) {
+            s_light[12 + i] = note.specular[i];
         }
     }
 
@@ -80,6 +91,9 @@ namespace SXC::Ground {
 
         for (int i = 0; i < 12; i++) {
             out.viewInv[i] = rows[i];
+        }
+
+        for (int i = 0; i < 16; i++) {
             out.light[i] = s_light[i];
         }
 
@@ -163,6 +177,8 @@ namespace SXC::Ground {
                 if (i >= 0 && j >= 0 && i < static_cast<int32_t>(kGrid) && j < static_cast<int32_t>(kGrid)) {
                     out.grid[j * kGrid + i] = out.entryCount;
                     std::memcpy(&out.colours[(j * kGrid + i) * kColours], k.colours[c], sizeof k.colours[c]);
+                    std::memcpy(&out.heights[(j * kGrid + i) * kColours], k.heights[c], sizeof k.heights[c]);
+                    out.holes[j * kGrid + i] = k.holes[c];
                 }
             }
         }

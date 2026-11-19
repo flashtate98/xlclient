@@ -48,7 +48,8 @@ namespace SXC::Wmo {
     void ParallaxParams(float out[16]);
 
     // 16's terrain blend (ours: the terrain's layers under the WMO from SXC::Ground, mixed in by the blend colour's
-    // alpha): the push block's third column for Wmo.frag - the debug view, read inverted, on, the strength
+    // alpha, and by nearness where it lies at or under the terrain): the push block's third and fourth columns for
+    // Wmo.frag - the debug view, read inverted, on, the strength; the nearness blend on, its fade above, its ceiling
     // (Wmo/TerrainBlend*).
-    void TerrainBlendParams(float out[4]);
+    void TerrainBlendParams(float out[8]);
 }

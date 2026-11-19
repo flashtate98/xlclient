@@ -27,11 +27,16 @@ namespace
     using gxvk::log::Error;
 
     constexpr uint32_t     kSlotsInFlight = frame::kFramesInFlight;
-    constexpr VkDeviceSize kHeaderBytes   = 128;  ///< viewInv (3 vec4), the window (ivec4), (chunk size, the map's half, 0, 0), the light (3 vec4)
+    constexpr VkDeviceSize kHeaderBytes   = 144;  ///< viewInv (3 vec4), the window (ivec4), (chunk size, the map's half, 0, 0), the light (4 vec4)
+    // The table: the header, the grid, the holes, the vertex colours, the vertex heights, the entries (Ground.glsl).
     constexpr VkDeviceSize kGridBytes     = kGrid * kGrid * 4;
     constexpr VkDeviceSize kColourBytes   = static_cast<VkDeviceSize>(kGrid) * kGrid * kColours * 4;
-    constexpr VkDeviceSize kTableBytes    = kHeaderBytes + kGridBytes + kColourBytes + static_cast<VkDeviceSize>(kMaxEntries) * kEntryBytes;
-    static_assert((kHeaderBytes + kGridBytes + kColourBytes) % 16 == 0, "the entries must start on 16 bytes (std430)");
+    constexpr VkDeviceSize kHolesAt       = kHeaderBytes + kGridBytes;
+    constexpr VkDeviceSize kColoursAt     = kHolesAt + kGridBytes;
+    constexpr VkDeviceSize kHeightsAt     = kColoursAt + kColourBytes;
+    constexpr VkDeviceSize kEntriesAt     = kHeightsAt + kColourBytes;
+    constexpr VkDeviceSize kTableBytes    = kEntriesAt + static_cast<VkDeviceSize>(kMaxEntries) * kEntryBytes;
+    static_assert(kEntriesAt % 16 == 0, "the entries must start on 16 bytes (std430)");
     constexpr float        kChunk         = 533.33333f / 16.0f;
     constexpr float        kHalf          = 32.0f * 533.33333f;
 
@@ -114,7 +119,7 @@ namespace gxvk::vk::ground
 
         // The table: the header, the grid, the entries (none: every cell empty, the shader keeps the WMO's own).
         uint8_t* out = static_cast<uint8_t*>(slot.table.block.mapped);
-        float header[32] = {};
+        float header[36] = {};
         std::memcpy(header, f.viewInv, sizeof f.viewInv);
         const int32_t window[4] = { f.firstI, f.firstJ, static_cast<int32_t>(kGrid), static_cast<int32_t>(entries) };
         std::memcpy(header + 12, window, sizeof window);
@@ -126,8 +131,10 @@ namespace gxvk::vk::ground
             std::memcpy(out + kHeaderBytes, f.grid, kGridBytes);
         else
             std::memset(out + kHeaderBytes, 0, kGridBytes);
-        if (on && f.colours) std::memcpy(out + kHeaderBytes + kGridBytes, f.colours, kColourBytes);
-        if (entries) std::memcpy(out + kHeaderBytes + kGridBytes + kColourBytes, f.entries, static_cast<size_t>(entries) * kEntryBytes);
+        if (on && f.holes) std::memcpy(out + kHolesAt, f.holes, kGridBytes);
+        if (on && f.colours) std::memcpy(out + kColoursAt, f.colours, kColourBytes);
+        if (on && f.heights) std::memcpy(out + kHeightsAt, f.heights, kColourBytes);
+        if (entries) std::memcpy(out + kEntriesAt, f.entries, static_cast<size_t>(entries) * kEntryBytes);
         memory::FlushHost(slot.table.block);
 
         // The textures: only the elements whose image or sampler changed since this slot's last write; empty ones

@@ -56,11 +56,21 @@ namespace {
             "1: the alpha as painted; retail's baked blend meshes may read it differently (unknown)."};
         SXC::Settings::Bool invert{"Wmo", "TerrainBlendInvert", false, "WMOs: terrain blend read inverted",
             "Off: the blend alpha's 1 is the WMO's texture, 0 the terrain (as the two-layer shaders read it). On: the other way round."};
-        SXC::Settings::Int debug{"Wmo", "TerrainBlendDebug", 0, 0, 6, "WMOs: terrain blend debug view",
+        SXC::Settings::Int debug{"Wmo", "TerrainBlendDebug", 0, 0, 7, "WMOs: terrain blend debug view",
             "Recolours the WMO's shader-16 surfaces only (the terrain itself stays as it is): 0 normal; 1 the terrain's colour "
-            "alone (magenta: no terrain chunk known there); 2 the terrain's share as grey; 3 the terrain chunk under each spot, "
-            "one colour per chunk; 4 that chunk's alpha map (layers 1-3 as red, green, blue); 5 the layers' final weights "
-            "(layer 0 red, 1 green, 2 blue, 3 yellow); 6 the terrain's vertex colour (mid grey: neutral)."};
+            "alone (magenta: no terrain chunk known there); 2 the terrain's share as grey (authored and proximity together); "
+            "3 the terrain chunk under each spot, one colour per chunk; 4 that chunk's alpha map (layers 1-3 as red, green, blue); "
+            "5 the layers' final weights (layer 0 red, 1 green, 2 blue, 3 yellow); 6 the terrain's vertex colour (mid grey: "
+            "neutral); 7 the proximity share alone."};
+        SXC::Settings::Bool proximity{"Wmo", "TerrainBlendProximity", true, "WMOs: terrain blend by nearness",
+            "Also blend the terrain in wherever the shader-16 surface lies at or under the terrain (not over its holes), on top "
+            "of the authored blend: soft seams where a WMO is sunk deeper than its authored blend reaches."};
+        SXC::Settings::Float above{"Wmo", "TerrainBlendAbove", 0.2f, 0.0f, 3.0f, "WMOs: nearness fade above the terrain (yd)",
+            "Over how many yards above the terrain the nearness blend fades out (0.2 yd is about 18 cm). Longer fades reach the "
+            "edge of the shader-16 material on badly placed WMOs (Seyri, 2026-11-20: 0.5 did)."};
+        SXC::Settings::Float ceiling{"Wmo", "TerrainBlendCeiling", 3.0f, 0.5f, 20.0f, "WMOs: nearness ceiling (yd)",
+            "Terrain more than this far above the surface is a roof, not ground at a seam: no nearness blend under it (fading "
+            "over its last half yard). 3 yd is about 2.7 m, room for a character."};
     };
 
     TerrainBlendSettings& TerrainBlend() {
@@ -121,12 +131,16 @@ namespace SXC::Wmo {
         for (int i = 0; i < 16; i++) out[i] = values[i];
     }
 
-    void TerrainBlendParams(float out[4]) {
+    void TerrainBlendParams(float out[8]) {
         const TerrainBlendSettings& t = TerrainBlend();
         out[0] = static_cast<float>(t.debug.Get());
         out[1] = t.invert.Get() ? 1.0f : 0.0f;
         out[2] = t.on.Get() ? 1.0f : 0.0f;
         out[3] = t.strength.Get();
+        out[4] = t.proximity.Get() ? 1.0f : 0.0f;
+        out[5] = t.above.Get();
+        out[6] = t.ceiling.Get();
+        out[7] = 0.0f;
     }
 
     void SetGroupExtra(const void* group, uint32_t vertices, const float* uv3, uint32_t uv3Count, const float* uv4, uint32_t uv4Count,
