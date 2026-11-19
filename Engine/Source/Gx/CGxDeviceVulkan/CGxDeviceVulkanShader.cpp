@@ -563,6 +563,14 @@ uint32_t CGxDeviceVulkan::IShaderPrograms(pipelines::Draw& draw) {
             const bool extra = gxvk::vk::wmoextra::Offset(wmoGroup, extraIndex);
             draw.xform[0] = static_cast<float>(extraIndex);
             draw.xform[1] = extra ? 1.0f : 0.0f;
+
+            // Parallax (22) reads no extra vertex data: the push block's four columns carry its parameters
+            // instead (retail's pc_genericParams[0..3], SXC::Wmo::ParallaxParams).
+            if (wmoShader == 22) {
+                SXC::Wmo::ParallaxParams(draw.xform);
+            } else if (wmoShader == 23) {
+                draw.xform[2] = static_cast<float>(SXC::Wmo::DrawingLayers());   // which layers and heights it has
+            }
             const uint32_t used = s_vertexRowsWritten < 256 ? s_vertexRowsWritten : 256;
             draw.vertexRowsUsed = used < draw.vertexRows ? used : draw.vertexRows;
 

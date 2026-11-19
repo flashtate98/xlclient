@@ -157,6 +157,25 @@ void CMapObj::Load() {
     }
 }
 
+// SXC: the further texture names of retail's shaders 22 and 23 (Retail::PrepareWmoRoot's SXMT, after everything
+// 3.3.5 reads): six offsets into MOTX per material, color_3, flags_3 and runTimeData[0..3], 0 for none.
+static const uint32_t* ExtraTextureNames(const CMapObj* mapObj, uint32_t material) {
+    const uint8_t* at = static_cast<const uint8_t*>(mapObj->m_pWmoData);
+    const uint8_t* end = at + mapObj->m_wmoFileSize;
+
+    while (at + 8 <= end) {
+        const SIffChunk* chunk = reinterpret_cast<const SIffChunk*>(at);
+
+        if (chunk->m_token == 0x53584D54) {   // 'SXMT'
+            return (material + 1) * 24 <= chunk->m_size ? reinterpret_cast<const uint32_t*>(&chunk->m_data) + material * 6 : nullptr;
+        }
+
+        at += 8 + chunk->m_size;
+    }
+
+    return nullptr;
+}
+
 // VERIFY: 4e3ee2fd auto
 // OFFSET: 0x007D7710
 void CMapObj::CreateMaterial(uint8_t texture) {
@@ -171,6 +190,12 @@ void CMapObj::CreateMaterial(uint8_t texture) {
     const uint32_t fileShader = material.m_shader;   // SXC: for the Ray panel (MapObjCata::Note)
     const char* fallback = nullptr;
 
+    // SXC: Dragonflight's 23 leaves texture_1 empty or a stand-in; drawn by a fallback, its first layer
+    // (texture_2) shows instead of the missing-texture green.
+    if (fileShader == 23 && !*texture1) {
+        texture1 = texture2;
+    }
+
     if (!*texture1) {
         texture1 = "createcrappygreentexture.blp";
     }
@@ -182,6 +207,22 @@ void CMapObj::CreateMaterial(uint8_t texture) {
     // SXC: Cataclysm's unified shaders 7-13 draw with its own effects (MapObjCata) in a unified WMO when they
     // are deployed; as Cataclysm does, a material missing a texture its shader samples becomes opaque (4).
     const char* texture3 = &this->m_textureNameList[material.m_texture3];
+
+    // SXC: retail's 22 and 23 take further textures (color_3, flags_3, runTimeData[0..3]; Retail's SXMT), kept
+    // beside the material for our WMO shader's stages 8-13 (MapObjCata::SetExtraTextures).
+    if (fileShader == 22 || fileShader == 23) {
+        if (const uint32_t* extra = ExtraTextureNames(this, texture)) {
+            CTexture* extras[6] = {};
+            bool any = false;
+            for (int k = 0; k < 6; k++) {
+                const char* name = &this->m_textureNameList[extra[k]];
+                extras[k] = extra[k] && *name ? CMap::LoadTexture(name) : nullptr;
+                any = any || extras[k];
+            }
+            if (any) MapObjCata::SetExtraTextures(material, extras);
+        }
+    }
+
     bool cata = (this->m_header->m_flags & 0x2) && MapObjCata::Drawn(material.m_shader);
 
     if (cata) {
@@ -217,6 +258,8 @@ void CMapObj::CreateMaterial(uint8_t texture) {
             6,  // 18 TwoLayerDiffuseMod2x
             6,  // 19 TwoLayerDiffuseMod2xNA
             6,  // 20 TwoLayerDiffuseAlpha
+            0,  // 21 Lod
+            0,  // 22 Parallax: the window alone
         };
         const uint32_t retail = material.m_shader - 7;
         const uint32_t ours = retail < sizeof kRetail ? kRetail[retail] : 0;
@@ -246,7 +289,11 @@ void CMapObj::CreateMaterial(uint8_t texture) {
         case 1:
         case 2:
         case 4:
-            texture2 = nullptr;
+            // SXC: retail's Parallax (22) and Dragonflight's 23, drawn as 0 on the translated path, keep their
+            // second texture (the glass's shine; 23's first layer) for our WMO shader; 0 doesn't sample it.
+            if (fileShader != 22 && fileShader != 23) {
+                texture2 = nullptr;
+            }
             break;
 
         default:
@@ -275,8 +322,9 @@ void CMapObj::CreateMaterial(uint8_t texture) {
     // SXC: the third texture of Cataclysm's three-texture shaders, kept beside the material (MapObjCata).
     if (cata && MapObjCata::TextureCount(material.m_shader) > 2) {
         MapObjCata::SetThirdTexture(material, CMap::LoadTexture(texture3));
-    } else if ((fileShader == 18 || fileShader == 20) && *texture3) {
-        // SXC: retail's 18 and 20 read a third texture too (through the third UV set); our WMO shader draws them.
+    } else if ((fileShader == 18 || fileShader == 20 || fileShader == 23) && *texture3) {
+        // SXC: retail's 18 and 20 read a third texture too (through the third UV set), 23 its second layer; our
+        // WMO shader draws them.
         MapObjCata::SetThirdTexture(material, CMap::LoadTexture(texture3));
     }
 
@@ -626,16 +674,17 @@ void CMapObjGroup::Create() {
 
     this->CreateDataPointers(reinterpret_cast<SIffChunk*>(header + 1));
 
-    // SXC: our WMO shader's extra vertex data, after everything 3.3.5 reads (Retail::PrepareWmoGroup: SXT3 the
-    // third UV set, SXC2 Dragonflight's MOC2), handed to SXC::Wmo (kb: our-shaders).
+    // SXC: our WMO shader's extra vertex data, after everything 3.3.5 reads (Retail::PrepareWmoGroup: SXT3 and
+    // SXT4 the third and fourth UV sets, SXC2 Dragonflight's MOC2), handed to SXC::Wmo (kb: our-shaders).
     {
         const uint8_t* file = static_cast<const uint8_t*>(this->m_filePtr);
         const uint8_t* end = file + 20 + *reinterpret_cast<const uint32_t*>(file + 16);
         end = end < file + this->m_fileSize ? end : file + this->m_fileSize;
         const uint8_t* at = reinterpret_cast<const uint8_t*>(header + 1);
         const float* uv3 = nullptr;
+        const float* uv4 = nullptr;
         const uint32_t* weights = nullptr;
-        uint32_t uv3Count = 0, weightCount = 0;
+        uint32_t uv3Count = 0, uv4Count = 0, weightCount = 0;
 
         while (at + 8 <= end) {
             const uint32_t token = *reinterpret_cast<const uint32_t*>(at);
@@ -648,6 +697,9 @@ void CMapObjGroup::Create() {
             if (token == 0x53585433) {   // 'SXT3'
                 uv3 = reinterpret_cast<const float*>(at + 8);
                 uv3Count = size / 8;
+            } else if (token == 0x53585434) {   // 'SXT4'
+                uv4 = reinterpret_cast<const float*>(at + 8);
+                uv4Count = size / 8;
             } else if (token == 0x53584332) {   // 'SXC2'
                 weights = reinterpret_cast<const uint32_t*>(at + 8);
                 weightCount = size / 4;
@@ -656,7 +708,7 @@ void CMapObjGroup::Create() {
             at += 8 + size;
         }
 
-        SXC::Wmo::SetGroupExtra(this, static_cast<uint32_t>(this->m_vertexListCount), uv3, uv3Count, weights, weightCount);
+        SXC::Wmo::SetGroupExtra(this, static_cast<uint32_t>(this->m_vertexListCount), uv3, uv3Count, uv4, uv4Count, weights, weightCount);
     }
 
     CMapObj* mapObj = this->m_parent;

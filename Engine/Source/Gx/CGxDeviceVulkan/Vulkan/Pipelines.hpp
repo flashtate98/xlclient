@@ -100,12 +100,14 @@ namespace gxvk::vk::pipelines
         constexpr uint32_t kAlphaKey = 1u << 10;
         inline uint32_t Shader(uint32_t o) { return o & kShaderMask; }
         inline uint32_t ShadowMode(uint32_t o) { return (o >> kShadowShift) & 3u; }
-        /// The samplers the pixel module declares: the material's textures (0, 1, 2) and the stock
-        /// shadow cascades (4; 4-7 in modes 2 and 3).
+        /// The samplers the pixel module declares: the material's textures (0, 1, 2), the stock shadow
+        /// cascades (4; 4-7 in modes 2 and 3), and for retail's 22 and 23 their further textures (8-13:
+        /// color_3, flags_3, runTimeData[0..3]; MapObjCata::Apply).
         inline uint32_t SamplerMask(uint32_t o)
         {
             const uint32_t mode = ShadowMode(o);
-            return 0x7u | (mode >= 1 ? 1u << 4 : 0u) | (mode >= 2 ? 0xEu << 4 : 0u);
+            const bool extra = Shader(o) == 22 || Shader(o) == 23;
+            return 0x7u | (mode >= 1 ? 1u << 4 : 0u) | (mode >= 2 ? 0xEu << 4 : 0u) | (extra ? 0x3Fu << 8 : 0u);
         }
     }
 

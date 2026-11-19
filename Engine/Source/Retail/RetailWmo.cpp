@@ -166,8 +166,14 @@ bool PrepareWmoRoot(const std::vector<uint8_t>& raw, const PathOfFileDataId& pat
 
     // Materials: since Legion the three texture fields are FileDataIDs and there is no MOTX. 3.3.5 wants
     // offsets into a name table.
+    // Shaders 22 (Parallax) and 23 take further textures from fields that are a colour, flags and run-time
+    // words elsewhere (color_3, flags_3, runTimeData[0..3]); 3.3.5 keeps its texture pointers in the run-time
+    // words. Their names go into the same table, their offsets into SXMT (six per material, 0 for none) after
+    // everything 3.3.5 reads (CMapObj::CreateMaterial).
     std::vector<uint8_t> materials(momt->data, momt->data + momt->size);
     std::vector<uint8_t> textureNames;
+    std::vector<uint32_t> extraNames(materials.size() / 64 * 6, 0);
+    bool anyExtra = false;
     if (const Chunk* motx = Find(chunks, Tag("MOTX"))) {
         textureNames.assign(motx->data, motx->data + motx->size);
     } else {
@@ -176,8 +182,16 @@ bool PrepareWmoRoot(const std::vector<uint8_t>& raw, const PathOfFileDataId& pat
             for (size_t field : {size_t(0x0C), size_t(0x18), size_t(0x24)}) {
                 Put32(materials.data() + m + field, names.Add(resolve(U32(materials.data() + m + field), "texture")));
             }
-            // TODO(modern-wmos): shader 23's further textures (run-time data words) aren't read; 3.3.5 keeps its
-            // texture pointers in those words.
+            const uint32_t shader = U32(materials.data() + m + 0x04);
+            if (shader != 22 && shader != 23) continue;
+            for (size_t k = 0; k < 6; k++) {
+                const uint32_t id = U32(materials.data() + m + 0x28 + 4 * k);
+                if (!id) continue;
+                const std::string name = resolve(id, "texture");
+                if (name.empty()) continue;
+                extraNames[m / 64 * 6 + k] = names.Add(name);
+                anyExtra = true;
+            }
         }
         textureNames = std::move(names.bytes);
     }
@@ -242,6 +256,7 @@ bool PrepareWmoRoot(const std::vector<uint8_t>& raw, const PathOfFileDataId& pat
     w.Chunk(Tag("MODD"), doodadDefs);
     w.Copy(Find(chunks, Tag("MFOG")), Tag("MFOG"));
     if (const Chunk* mcvp = Find(chunks, Tag("MCVP"))) w.Copy(mcvp, Tag("MCVP"));
+    if (anyExtra) w.Chunk(Tag("SXMT"), extraNames.data(), extraNames.size() * 4);
     return true;
 }
 
@@ -377,8 +392,10 @@ bool PrepareWmoGroup(const std::vector<uint8_t>& raw, WmoGroup& group, std::stri
 
     // Our WMO shader's extra vertex data (kb: our-shaders), after everything 3.3.5 reads: it walks the
     // optional chunks by flag and stops, so these are never seen there. The third UV set (shaders 18, 20,
-    // 23) as SXT3, Dragonflight's MOC2 (23's weights) as SXC2; CMapObjGroup::Create hands them to SXC::Wmo.
+    // 23) as SXT3, the fourth (23's fourth layer) as SXT4, Dragonflight's MOC2 (23's weights) as SXC2;
+    // CMapObjGroup::Create hands them to SXC::Wmo.
     if ((U32(mogp->data + 8) & kHasUv3) && Find(chunks, Tag("MOTV"), 2)) w.Copy(Find(chunks, Tag("MOTV"), 2), Tag("SXT3"));
+    if (const Chunk* motv4 = Find(chunks, Tag("MOTV"), 3)) w.Copy(motv4, Tag("SXT4"));
     if (const Chunk* moc2 = Find(chunks, Tag("MOC2"))) w.Copy(moc2, Tag("SXC2"));
     Put32(header.data() + 8, flags);
 

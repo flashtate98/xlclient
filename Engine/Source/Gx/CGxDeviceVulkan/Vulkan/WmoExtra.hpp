@@ -1,6 +1,7 @@
-// SXC: our WMO shader's vertex data past 3.3.5's formats (kb: our-shaders): a group's third UV set and
-// Dragonflight's MOC2, which the reader keeps (Retail::PrepareWmoGroup) and SXC::Wmo holds per group. One
-// persistent storage buffer, a vec4 a vertex (u, v of the third set; MOC2 as uint bits; 1 where present),
+// SXC: our WMO shader's vertex data past 3.3.5's formats (kb: our-shaders): a group's third and fourth UV sets
+// and Dragonflight's MOC2, which the reader keeps (Retail::PrepareWmoGroup) and SXC::Wmo holds per group. One
+// persistent storage buffer, two vec4 a vertex ((u, v of the third set; MOC2 as uint bits; 1), (u, v of the
+// fourth set; 0, 0)),
 // each group written once into a fresh region (never over one a frame in flight may read); when it's full it
 // starts over and the groups upload again at their next draw. Set 2 of our WMO pipelines (the vertex stage).
 #pragma once

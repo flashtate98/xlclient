@@ -35,6 +35,8 @@ layout(location = 7) out vec4 outShadow0; // the cascades' coordinates (w: the f
 layout(location = 8) out vec4 outShadow1;
 layout(location = 9) out vec4 outShadow2;
 layout(location = 10) out float outFog;   // 1 clear, 0 all fog
+layout(location = 11) out vec2 outTex3;    // 23: the fourth UV set
+layout(location = 12) out vec4 outWeights; // 23: MOC2, its bytes in file order (B, G, R, A)
 
 layout(std140, set = 1, binding = 0) uniform Regs {
     vec4 p[16];
@@ -42,8 +44,9 @@ layout(std140, set = 1, binding = 0) uniform Regs {
     vec4 v[256];
 } regs;
 
-// The group's vertex data past 3.3.5's formats (Vulkan/WmoExtra): per vertex the third UV set (xy) and
-// Dragonflight's MOC2 (z, as uint bits); where the group's starts in pc.xform[0].x, whether it has any in .y.
+// The group's vertex data past 3.3.5's formats (Vulkan/WmoExtra): two vec4 per vertex, the third UV set (xy)
+// and Dragonflight's MOC2 (z, as uint bits), then the fourth UV set (xy); where the group's starts in
+// pc.xform[0].x, whether it has any in .y.
 layout(std430, set = 2, binding = 0) readonly buffer WmoExtra {
     vec4 extra[];
 };
@@ -93,6 +96,10 @@ void main()
     vec2 uv0 = CataMatrices() ? Matrix(6, inTex0) : inTex0;
     vec2 uv1 = CataMatrices() ? Matrix(8, inTex1) : inTex1;
     outTex0 = uv0;
+    outTex3 = vec2(0.0);
+    outWeights = vec4(0.0);
+    bool hasExtra = pc.xform[0].y > 0.5 && kShader != 22;   // 22's push block carries its parameters instead
+    uint extraAt = uint(pc.xform[0].x) + 2u * uint(gl_VertexIndex);
 
     if (kShader == 3 || kShader == 5)
     {
@@ -110,10 +117,21 @@ void main()
     {
         // Comp plus the third UV set as it is (retail's MapObjDiffuse_CompAlpha: out_tc2 = in_tc2).
         outTex1 = uv1;
-        outTex2 = pc.xform[0].y > 0.5 ? extra[uint(pc.xform[0].x) + uint(gl_VertexIndex)].xy : vec2(0.0);
+        outTex2 = hasExtra ? extra[extraAt].xy : vec2(0.0);
     }
-    else if (kShader == 11 || kShader == 12)
+    else if (kShader == 23)
     {
+        // Our reconstruction of Dragonflight's 23 (wow.export's MapObjDFShader): four layers on the four UV
+        // sets, weighted by MOC2.
+        outTex1 = uv1;
+        outTex2 = hasExtra ? extra[extraAt].xy : vec2(0.0);
+        outTex3 = hasExtra ? extra[extraAt + 1u].xy : vec2(0.0);
+        outWeights = hasExtra ? unpackUnorm4x8(floatBitsToUint(extra[extraAt].z)) : vec4(0.0);
+    }
+    else if (kShader == 11 || kShader == 12 || kShader == 22)
+    {
+        // (22, the goblin windows: the shine on the glass the same way, as retail's current MapObjParallax
+        // takes its sphere-map coordinate.)
         // T1_Env_T2: a sphere map of the reflection back toward the eye (Cataclysm's MapObjUDiffuse_T1_Env_T2:
         // -reflect; +reflect mirrored the map: bright and dark swapped with the view).
         outTex1 = normalize(-reflect(eye, n) + vec3(0.0, 0.0, 1.0)).xy * 0.5 + 0.5;

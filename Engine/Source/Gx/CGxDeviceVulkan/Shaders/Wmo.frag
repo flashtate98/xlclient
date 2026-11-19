@@ -27,6 +27,8 @@ layout(location = 7) in vec4 inShadow0;
 layout(location = 8) in vec4 inShadow1;
 layout(location = 9) in vec4 inShadow2;
 layout(location = 10) in float inFog;
+layout(location = 11) in vec2 inTex3;     // 23: the fourth UV set
+layout(location = 12) in vec4 inWeights;  // 23: MOC2, bytes in file order
 
 layout(location = 0) out vec4 oC0;
 
@@ -37,6 +39,13 @@ layout(set = 0, binding = 4) uniform sampler2D s4;
 layout(set = 0, binding = 5) uniform sampler2D s5;
 layout(set = 0, binding = 6) uniform sampler2D s6;
 layout(set = 0, binding = 7) uniform sampler2D s7;
+// Retail's 22 and 23: the material's further textures (color_3, flags_3, runTimeData[0..3]; MapObjCata::Apply).
+layout(set = 0, binding = 8) uniform sampler2D s8;
+layout(set = 0, binding = 9) uniform sampler2D s9;
+layout(set = 0, binding = 10) uniform sampler2D s10;
+layout(set = 0, binding = 11) uniform sampler2D s11;
+layout(set = 0, binding = 12) uniform sampler2D s12;
+layout(set = 0, binding = 13) uniform sampler2D s13;
 
 layout(std140, set = 1, binding = 0) uniform Regs {
     vec4 p[16];
@@ -45,6 +54,22 @@ layout(std140, set = 1, binding = 0) uniform Regs {
 } regs;
 
 #include "Lights.glsl"
+#include "Push.glsl"
+
+// Parallax (22): the view in the surface's tangent space, as retail's MapObjParallax vertex shader computes it
+// from its generated tangents (out_viewTS = the view position x (tangent, bitangent, normal)); here from the
+// pixel's derivatives (a cotangent frame along +u and +v), exact on the flat windows it draws.
+vec3 ViewInTangentSpace(vec3 n, vec2 uv)
+{
+    vec3 dp1 = dFdx(inView), dp2 = dFdy(inView);
+    vec2 duv1 = dFdx(uv), duv2 = dFdy(uv);
+    vec3 dp2perp = cross(dp2, n), dp1perp = cross(n, dp1);
+    vec3 t = dp2perp * duv1.x + dp1perp * duv2.x;
+    vec3 b = dp2perp * duv1.y + dp1perp * duv2.y;
+    t = dot(t, t) > 0.0 ? normalize(t) : vec3(1.0, 0.0, 0.0);
+    b = dot(b, b) > 0.0 ? normalize(b) : vec3(0.0, 1.0, 0.0);
+    return vec3(dot(inView, t), dot(inView, b), dot(inView, n));
+}
 
 // One cascade's lit share: the centre and the taps (p5, p7, p9, p11; or p5..p12 with nine), each 1 where
 // the map's depth is at or beyond the pixel's, summed (MapObjDiffuse's shadow permutations).
@@ -212,6 +237,59 @@ void main()
     else if (kShader == 19)
     {
         material = mix(t0.rgb, t0.rgb * texture(s1, inTex1).rgb * 2.0, blend);  // TwoLayerDiffuseMod2xNA
+    }
+    else if (kShader == 22)
+    {
+        // The goblin city's windows: OUR RECONSTRUCTION. Retail draws them with a 22 that takes six textures;
+        // its program isn't in any file we can name (retail's MapObjParallax binds three; kb: our-shaders).
+        // From the material's textures and retail's parallax: the glass (texture_1, its alpha how much it
+        // hides) with the shine reflected in it (texture_2, sphere-mapped); behind it the curtains (flags_3's
+        // fabric where color_3's alpha says, at the first depth) and the lit room between them (runTimeData[0]
+        // at the second depth). Depths, scales, the mask's sense and the glow from the push block (SXC::Wmo::
+        // ParallaxParams).
+        vec3 viewTS = ViewInTangentSpace(normalize(inNormal), inTex0);
+        vec2 shift = viewTS.xy / (abs(viewTS.z) < 1.0e-4 ? -1.0e-4 : viewTS.z);
+        vec4 glass = texture(s0, inTex0 * pc.xform[1].xy);
+        int glassMode = int(pc.xform[1].z + 0.5);
+        vec2 curtainUv = (inTex0 - shift * pc.xform[0].x) * pc.xform[2].xy + pc.xform[2].zw;
+        float curtain = texture(s8, curtainUv).a;
+        curtain = pc.xform[0].z > 0.5 ? 1.0 - curtain : curtain;
+        vec3 fabric = texture(s9, curtainUv).rgb;
+        vec3 room = texture(s10, (inTex0 - shift * pc.xform[0].y) * pc.xform[3].xy + pc.xform[3].zw).rgb;
+        // How the glass sits over what's behind it (Wmo/ParallaxGlassMode, retail's unknown): 0 its alpha covers
+        // (retail's parallax), 1 its alpha is how much shows through, 2 the glass added over all of it.
+        float cover = glassMode == 0 ? glass.a : glassMode == 1 ? 1.0 - glass.a : 0.0;
+        float through = glassMode == 2 ? 1.0 : 1.0 - cover;
+        float glowShare = clamp(pc.xform[0].w, 0.0, 1.0);
+        vec3 roomSeen = room * (1.0 - curtain) * through;
+        material = (glassMode == 2 ? glass.rgb : glass.rgb * cover) + fabric * curtain * through + roomSeen * (1.0 - glowShare);
+        added = roomSeen * pc.xform[0].w + texture(s1, inTex1).rgb * (glassMode == 2 ? glass.a : cover);
+        alpha = inColor.a;
+    }
+    else if (kShader == 23)
+    {
+        // Dragonflight's 23: OUR RECONSTRUCTION, after wow.export's MapObjDFShader (retail's program isn't in
+        // any file we can name; kb: our-shaders). Four layers (texture_2, texture_3, color_3, flags_3 on the
+        // four UV sets) weighted by MOC2 (bytes 2, 1, 0; the fourth takes the rest) times each layer's height
+        // (the alpha of runTimeData[0..3], its _s map), blended as retail's terrain: the highest wins with a
+        // soft edge. MOC2's alpha darkens. texture_1 is a stand-in for older clients and isn't read.
+        // The layers and heights the material has (MapObjCata::LayerMask in pc.xform[0].z): an empty layer gets no
+        // weight (its stage would read the device's white default), a missing height counts as neutral (1).
+        uint layers = uint(pc.xform[0].z + 0.5);
+        vec4 has = vec4((layers & 1u) != 0u, (layers & 2u) != 0u, (layers & 4u) != 0u, (layers & 8u) != 0u);
+        vec4 hasHeight = vec4((layers & 16u) != 0u, (layers & 32u) != 0u, (layers & 64u) != 0u, (layers & 128u) != 0u);
+        vec4 l0 = texture(s1, inTex0), l1 = texture(s2, inTex1), l2 = texture(s8, inTex2), l3 = texture(s9, inTex3);
+        vec4 h = vec4(texture(s10, inTex0).a, texture(s11, inTex1).a, texture(s12, inTex2).a, texture(s13, inTex3).a);
+        h = max(mix(vec4(1.0), h, hasHeight), 0.004);
+        vec4 w = vec4(inWeights.zyx, 1.0 - clamp(dot(inWeights.zyx, vec3(1.0)), 0.0, 1.0)) * has;
+        w = dot(w, vec4(1.0)) > 0.0 ? w : has;
+        vec4 a = w * h;
+        float top = max(max(a.x, a.y), max(a.z, a.w));
+        vec4 a2 = (1.0 - clamp(vec4(top) - a, 0.0, 1.0)) * a;
+        a2 /= max(dot(a2, vec4(1.0)), 1.0e-5);
+        vec4 mixed = l0 * a2.x + l1 * a2.y + l2 * a2.z + l3 * a2.w;
+        material = mix(mixed.rgb, vec3(0.0), inWeights.w);
+        alpha = inColor.a;
     }
 
     // The alpha test. An alpha-key material (blend mode 1) as retail cuts it: texture 0's alpha below 128/255,

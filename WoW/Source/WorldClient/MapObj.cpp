@@ -96,6 +96,47 @@ namespace {
     std::mutex s_thirdTexturesMutex;
     std::unordered_map<const SMOMaterial*, CTexture*> s_thirdTextures;
     std::unordered_map<const SMOMaterial*, MapObjCata::ShaderNote> s_shaderNotes;   // under s_thirdTexturesMutex
+    struct ExtraTextures { CTexture* textures[6]; };
+    std::unordered_map<const SMOMaterial*, ExtraTextures> s_extraTextures;      // under s_thirdTexturesMutex
+}
+
+void MapObjCata::SetExtraTextures(const SMOMaterial& material, CTexture* const (&textures)[6]) {
+    std::lock_guard<std::mutex> lock(s_thirdTexturesMutex);
+    ExtraTextures& e = s_extraTextures[&material];
+    for (int i = 0; i < 6; i++) e.textures[i] = textures[i];
+}
+
+bool MapObjCata::HasExtraTextures(const SMOMaterial& material) {
+    std::lock_guard<std::mutex> lock(s_thirdTexturesMutex);
+    return s_extraTextures.count(&material) != 0;
+}
+
+uint32_t MapObjCata::LayerMask(const SMOMaterial& material) {
+    uint32_t mask = const_cast<SMOMaterial&>(material).Textures()[1] ? 1u : 0u;
+    std::lock_guard<std::mutex> lock(s_thirdTexturesMutex);
+    const auto third = s_thirdTextures.find(&material);
+    mask |= third != s_thirdTextures.end() && third->second ? 2u : 0u;
+    const auto found = s_extraTextures.find(&material);
+    if (found != s_extraTextures.end()) {
+        for (int k = 0; k < 6; k++) {
+            if (found->second.textures[k]) mask |= 4u << k;
+        }
+    }
+    return mask;
+}
+
+void MapObjCata::ReleaseExtraTextures(const SMOMaterial& material) {
+    ExtraTextures e;
+    {
+        std::lock_guard<std::mutex> lock(s_thirdTexturesMutex);
+        const auto found = s_extraTextures.find(&material);
+        if (found == s_extraTextures.end()) return;
+        e = found->second;
+        s_extraTextures.erase(found);
+    }
+    for (CTexture* texture : e.textures) {
+        if (texture) HandleClose(reinterpret_cast<HOBJECT>(texture));
+    }
 }
 
 MapObjCata::ShaderNote MapObjCata::Note(const SMOMaterial& material) {
@@ -171,6 +212,25 @@ void MapObjCata::Apply(const SMOMaterial& material, uint32_t shader) {
     }
 
     g_theGxDevicePtr->RsSet(GxRs_Texture2, third);
+
+    // Retail's 22 and 23 under our shader: their further textures on stages 8-13 (Shaders/Wmo.frag s8..s13).
+    if (!SXC::Wmo::OurShader()) {
+        return;
+    }
+
+    ExtraTextures e;
+    {
+        std::lock_guard<std::mutex> lock(s_thirdTexturesMutex);
+        const auto found = s_extraTextures.find(&material);
+        if (found == s_extraTextures.end()) return;
+        e = found->second;
+    }
+
+    for (int k = 0; k < 6; k++) {
+        CGxTex* gxTex = e.textures[k] ? TextureGetGxTex(e.textures[k], 0, nullptr) : nullptr;
+        if (gxTex) GxTexSetWrap(gxTex, wrapU, wrapV);
+        g_theGxDevicePtr->RsSet(static_cast<EGxRenderState>(GxRs_Texture8 + k), gxTex);
+    }
 }
 
 void MapObjCata::ApplyMatrices(uint32_t shader) {
@@ -1119,8 +1179,8 @@ void CMapObj::UnifiedRender(CMapObjGroup* group, uint32_t index) {
         g_theGxDevicePtr->RsSet(GxRs_Texture1, gxTex1);
         effect->SetCurrent();
 
-        if (MapObjCata::Drawn(shader) || MapObjCata::ThirdTexture(material)) {
-            MapObjCata::Apply(material, shader);   // SXC: Cataclysm's effects 7-13; retail's 18 and 20's third texture
+        if (MapObjCata::Drawn(shader) || MapObjCata::ThirdTexture(material) || MapObjCata::HasExtraTextures(material)) {
+            MapObjCata::Apply(material, shader);   // SXC: Cataclysm's effects 7-13; retail's 18 and 20's third texture, 22 and 23's further ones
         }
 
         if (i >= group->m_transparencyBatchesCount) {
@@ -1163,7 +1223,7 @@ void CMapObj::UnifiedRender(CMapObjGroup* group, uint32_t index) {
             draw.m_count = batch.m_indexCount;
             draw.m_minIndex = batch.m_vertexStart;
             draw.m_maxIndex = batch.m_vertexEnd;
-            SXC::Wmo::BeginDraw(MapObjCata::OurShaderId(material, shader), material.m_blendMode, group);   // SXC: our WMO shader may draw it (kb: our-shaders)
+            SXC::Wmo::BeginDraw(MapObjCata::OurShaderId(material, shader), material.m_blendMode, group, MapObjCata::LayerMask(material));   // SXC: our WMO shader may draw it (kb: our-shaders)
             g_theGxDevicePtr->Draw(&draw, 1);
             SXC::Wmo::EndDraw();
             continue;
@@ -1193,7 +1253,7 @@ void CMapObj::UnifiedRender(CMapObjGroup* group, uint32_t index) {
             draw.m_count = batch.m_indexCount;
             draw.m_minIndex = batch.m_vertexStart;
             draw.m_maxIndex = batch.m_vertexEnd;
-            SXC::Wmo::BeginDraw(MapObjCata::OurShaderId(material, shader), material.m_blendMode, group);
+            SXC::Wmo::BeginDraw(MapObjCata::OurShaderId(material, shader), material.m_blendMode, group, MapObjCata::LayerMask(material));
             g_theGxDevicePtr->Draw(&draw, 1);
             SXC::Wmo::EndDraw();
 
@@ -1219,7 +1279,7 @@ void CMapObj::UnifiedRender(CMapObjGroup* group, uint32_t index) {
             draw2.m_count = batch.m_indexCount;
             draw2.m_minIndex = batch.m_vertexStart;
             draw2.m_maxIndex = batch.m_vertexEnd;
-            SXC::Wmo::BeginDraw(MapObjCata::OurShaderId(material, shader), material.m_blendMode, group);
+            SXC::Wmo::BeginDraw(MapObjCata::OurShaderId(material, shader), material.m_blendMode, group, MapObjCata::LayerMask(material));
             g_theGxDevicePtr->Draw(&draw2, 1);
             SXC::Wmo::EndDraw();
             continue;
@@ -2028,6 +2088,7 @@ void CMapObj::Clear() {
             MapObjCata::SetThirdTexture(this->m_materialList[i], nullptr);
         }
 
+        MapObjCata::ReleaseExtraTextures(this->m_materialList[i]);
         MapObjCata::ClearNote(this->m_materialList[i]);
     }
 

@@ -325,6 +325,16 @@ namespace MapObjCata {
     bool SecondVertexSet(uint32_t shader);
     CTexture* ThirdTexture(const SMOMaterial& material);
     void SetThirdTexture(const SMOMaterial& material, CTexture* texture);
+    // Retail's 22 and 23 (from Dragonflight on) name up to six further textures in fields that are a colour,
+    // flags and run-time words elsewhere: color_3, flags_3, runTimeData[0..3] (null where none). Kept beside
+    // the material, bound to texture stages 8-13 when our WMO shader draws it (Apply). Set takes the
+    // references; Release closes them.
+    void SetExtraTextures(const SMOMaterial& material, CTexture* const (&textures)[6]);
+    bool HasExtraTextures(const SMOMaterial& material);
+    // Which of 23's layers and heights the material has: bits 0-3 the layers (texture_2, texture_3, color_3,
+    // flags_3), bits 4-7 the heights (runTimeData[0..3]).
+    uint32_t LayerMask(const SMOMaterial& material);
+    void ReleaseExtraTextures(const SMOMaterial& material);
     // Before drawing a batch with Cataclysm's effect: its third texture and the wrap of the other two
     // (CMapObjRender::ApplyMaterial there).
     void Apply(const SMOMaterial& material, uint32_t shader);

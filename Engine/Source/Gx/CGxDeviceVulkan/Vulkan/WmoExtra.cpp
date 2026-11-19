@@ -126,7 +126,10 @@ namespace gxvk::vk::wmoextra
     {
         const SXC::Wmo::GroupExtra* extra = s.ready ? SXC::Wmo::Extra(group) : nullptr;
 
-        if (!extra || !extra->vertices || extra->vertices > kVec4s)
+        // Two vec4 a vertex: (the third UV set, MOC2's bits, 1), (the fourth UV set, 0, 0).
+        const uint32_t vec4s = extra ? 2u * extra->vertices : 0u;
+
+        if (!extra || !extra->vertices || vec4s > kVec4s)
         {
             return false;
         }
@@ -140,7 +143,7 @@ namespace gxvk::vk::wmoextra
         }
 
         // A fresh region; when the buffer is full, start over (the groups upload again at their next draw).
-        if (s.cursor + extra->vertices > kVec4s)
+        if (s.cursor + vec4s > kVec4s)
         {
             if (s.restarts++ == 0)
             {
@@ -153,22 +156,26 @@ namespace gxvk::vk::wmoextra
 
         Entry& fresh = s.groups[group];
         float* out = reinterpret_cast<float*>(static_cast<uint8_t*>(s.buffer.block.mapped) + static_cast<size_t>(s.cursor) * 16);
-        const size_t uv3 = extra->uv3.size() / 2;
+        const size_t uv3 = extra->uv3.size() / 2, uv4 = extra->uv4.size() / 2;
 
-        for (uint32_t v = 0; v < extra->vertices; ++v, out += 4)
+        for (uint32_t v = 0; v < extra->vertices; ++v, out += 8)
         {
-            const bool hasUv = v < uv3;
+            const bool hasUv = v < uv3, hasUv4 = v < uv4;
             const uint32_t weights = v < extra->weights.size() ? extra->weights[v] : 0u;
             out[0] = hasUv ? extra->uv3[2 * static_cast<size_t>(v)] : 0.0f;
             out[1] = hasUv ? extra->uv3[2 * static_cast<size_t>(v) + 1] : 0.0f;
             std::memcpy(&out[2], &weights, sizeof weights);
             out[3] = 1.0f;
+            out[4] = hasUv4 ? extra->uv4[2 * static_cast<size_t>(v)] : 0.0f;
+            out[5] = hasUv4 ? extra->uv4[2 * static_cast<size_t>(v) + 1] : 0.0f;
+            out[6] = 0.0f;
+            out[7] = 0.0f;
         }
 
         memory::FlushHost(s.buffer.block);
         fresh.serial = extra->serial;
         fresh.index = s.cursor;
-        s.cursor += extra->vertices;
+        s.cursor += vec4s;
         vec4Index = fresh.index;
         return true;
     }
