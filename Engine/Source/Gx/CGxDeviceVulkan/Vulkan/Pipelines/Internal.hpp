@@ -303,6 +303,7 @@ namespace gxvk::vk::pipelines::detail
     // Layouts.cpp
     bool CreateRegsLayout();
     constexpr uint32_t kExtraNone = 0, kExtraCover = 1, kExtraLights = 2, kExtraWater = 3;  // SXC: LayoutEntry::extra
+    constexpr uint32_t kExtraWmo = 4;   // SXC: our WMO shader: set 2 its extra vertex data (Vulkan/WmoExtra), set 3 the lights'
     bool LayoutFor(uint32_t samplerMask, uint32_t extra, uint32_t& index);
     void DestroyLayouts();
 

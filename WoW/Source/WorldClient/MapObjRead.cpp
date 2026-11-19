@@ -15,6 +15,7 @@
 #include "WoW/Source/WorldClient/MapObj.h"
 #include "WoW/Source/WorldClient/MapObjGroup.h"
 #include "WoW/Source/DB/DBClient/DBClient.h"  // SXC: retail liquid types checked against LiquidType.dbc
+#include "SXC/Wmo/Wmo.h"                       // SXC: our WMO shader's extra vertex data
 #include "WarcraftXL/Seams.h"
 
 // STATIC: 0x00ADFC4C
@@ -273,6 +274,9 @@ void CMapObj::CreateMaterial(uint8_t texture) {
 
     // SXC: the third texture of Cataclysm's three-texture shaders, kept beside the material (MapObjCata).
     if (cata && MapObjCata::TextureCount(material.m_shader) > 2) {
+        MapObjCata::SetThirdTexture(material, CMap::LoadTexture(texture3));
+    } else if ((fileShader == 18 || fileShader == 20) && *texture3) {
+        // SXC: retail's 18 and 20 read a third texture too (through the third UV set); our WMO shader draws them.
         MapObjCata::SetThirdTexture(material, CMap::LoadTexture(texture3));
     }
 
@@ -621,6 +625,39 @@ void CMapObjGroup::Create() {
     }
 
     this->CreateDataPointers(reinterpret_cast<SIffChunk*>(header + 1));
+
+    // SXC: our WMO shader's extra vertex data, after everything 3.3.5 reads (Retail::PrepareWmoGroup: SXT3 the
+    // third UV set, SXC2 Dragonflight's MOC2), handed to SXC::Wmo (kb: our-shaders).
+    {
+        const uint8_t* file = static_cast<const uint8_t*>(this->m_filePtr);
+        const uint8_t* end = file + 20 + *reinterpret_cast<const uint32_t*>(file + 16);
+        end = end < file + this->m_fileSize ? end : file + this->m_fileSize;
+        const uint8_t* at = reinterpret_cast<const uint8_t*>(header + 1);
+        const float* uv3 = nullptr;
+        const uint32_t* weights = nullptr;
+        uint32_t uv3Count = 0, weightCount = 0;
+
+        while (at + 8 <= end) {
+            const uint32_t token = *reinterpret_cast<const uint32_t*>(at);
+            const uint32_t size = *reinterpret_cast<const uint32_t*>(at + 4);
+
+            if (size > static_cast<size_t>(end - at - 8)) {
+                break;
+            }
+
+            if (token == 0x53585433) {   // 'SXT3'
+                uv3 = reinterpret_cast<const float*>(at + 8);
+                uv3Count = size / 8;
+            } else if (token == 0x53584332) {   // 'SXC2'
+                weights = reinterpret_cast<const uint32_t*>(at + 8);
+                weightCount = size / 4;
+            }
+
+            at += 8 + size;
+        }
+
+        SXC::Wmo::SetGroupExtra(this, static_cast<uint32_t>(this->m_vertexListCount), uv3, uv3Count, weights, weightCount);
+    }
 
     CMapObj* mapObj = this->m_parent;
 

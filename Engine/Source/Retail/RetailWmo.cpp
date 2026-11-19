@@ -374,6 +374,12 @@ bool PrepareWmoGroup(const std::vector<uint8_t>& raw, WmoGroup& group, std::stri
     }
     if (keep(kHasUv2, Find(chunks, Tag("MOTV"), 1) != nullptr)) w.Copy(Find(chunks, Tag("MOTV"), 1), Tag("MOTV"));
     if (keep(kHasColors2, colors2 != nullptr)) w.Copy(colors2, Tag("MOCV"));
+
+    // Our WMO shader's extra vertex data (kb: our-shaders), after everything 3.3.5 reads: it walks the
+    // optional chunks by flag and stops, so these are never seen there. The third UV set (shaders 18, 20,
+    // 23) as SXT3, Dragonflight's MOC2 (23's weights) as SXC2; CMapObjGroup::Create hands them to SXC::Wmo.
+    if ((U32(mogp->data + 8) & kHasUv3) && Find(chunks, Tag("MOTV"), 2)) w.Copy(Find(chunks, Tag("MOTV"), 2), Tag("SXT3"));
+    if (const Chunk* moc2 = Find(chunks, Tag("MOC2"))) w.Copy(moc2, Tag("SXC2"));
     Put32(header.data() + 8, flags);
 
     group.bytes.clear();

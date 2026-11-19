@@ -87,6 +87,7 @@
 #include "WoW/Source/Game/GameClient/ProjectTex.h"
 #include "WoW/Source/DB/Rec/TerrainTypeRec.h"
 #include "SXC/Water/Ripples.h"  // SXC: our water ripples itself
+#include "SXC/Wmo/Wmo.h"         // SXC: our WMO shader's extra vertex data, released with a group
 
 static const int32_t MAXALPHA = 127;
 static const float FOOTPRINT_FADEOUT_RATE = 0.00016666666f;
@@ -3114,6 +3115,7 @@ CMapObjGroup* CMap::AllocMapObjGroup() {
 // VERIFY: 13962642 manual
 // OFFSET: 0x007C0030
 void CMap::FreeMapObjGroup(CMapObjGroup* mapObjGroup) {
+    SXC::Wmo::ReleaseGroup(mapObjGroup);   // SXC: our WMO shader's extra vertex data
     mapObjGroup->m_asyncLoadLink.Unlink();
     mapObjGroup->~CMapObjGroup();
     ObjectFree(*CMap::mapObjGroupHeap, mapObjGroup->m_objectIndex);

@@ -25,6 +25,7 @@
 #include "SXC/Settings/Settings.h"  // SXC: [Terrain] OurShader
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"  // SXC: our terrain shader's covers
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Lights.hpp" // SXC: and its point lights
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/WmoExtra.hpp" // SXC: our WMO shader's extra vertex data
 #include "SXC/Lights/Lights.h"
 #include "SXC/Wmo/Wmo.h"  // SXC: our WMO shader's seam
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Frame.hpp"  // SXC:
@@ -537,8 +538,9 @@ uint32_t CGxDeviceVulkan::IShaderPrograms(pipelines::Draw& draw) {
     // the shadow mode from the pixel record's (m mod 4: CShaderEffect::SelectShadowShader; the vertex side
     // stops at 2). It reads the lights' set 3 and the vertex registers up to the shadow matrices (c235).
     uint32_t wmoShader = 0, wmoBlend = 0;
-    if (vsTranslated && psTranslated && SXC::Wmo::OurShader() && SXC::Wmo::Drawing(wmoShader, wmoBlend) && SXC::Wmo::Covers(wmoShader)
-        && gxvk::vk::lights::Ready()) {
+    const void* wmoGroup = nullptr;
+    if (vsTranslated && psTranslated && SXC::Wmo::OurShader() && SXC::Wmo::Drawing(wmoShader, wmoBlend, wmoGroup) && SXC::Wmo::Covers(wmoShader)
+        && gxvk::vk::lights::Ready() && gxvk::vk::wmoextra::Ready()) {
         const CGxShader* vsShader = static_cast<const CGxShader*>(this->m_appRenderStates[GxRs_VertexShader].m_value.m_data.p);
         const CGxShader* psShader = static_cast<const CGxShader*>(this->m_appRenderStates[GxRs_PixelShader].m_value.m_data.p);
         char vsFamily[64], psFamily[64];
@@ -555,6 +557,12 @@ uint32_t CGxDeviceVulkan::IShaderPrograms(pipelines::Draw& draw) {
             draw.wmoOptions = wmoShader | ((n & 1u) ? wmo::kLit : 0u) | ((m % 4u) << wmo::kShadowShift) |
                               (wmoBlend == GxBlend_AlphaKey ? wmo::kAlphaKey : 0u);
             draw.vertexRows = pipelines::kVertexRowsLarge;
+            // The group's extra vertex data (Vulkan/WmoExtra): where it starts, and whether it has any, in the
+            // push block's first column (Wmo.vert; translated pairs leave xform alone after this).
+            uint32_t extraIndex = 0;
+            const bool extra = gxvk::vk::wmoextra::Offset(wmoGroup, extraIndex);
+            draw.xform[0] = static_cast<float>(extraIndex);
+            draw.xform[1] = extra ? 1.0f : 0.0f;
             const uint32_t used = s_vertexRowsWritten < 256 ? s_vertexRowsWritten : 256;
             draw.vertexRowsUsed = used < draw.vertexRows ? used : draw.vertexRows;
 

@@ -1,4 +1,5 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 // SXC: our WMO vertex shader (Vulkan/Pipelines: VertexProgram::Wmo; kb: our-shaders), in place of the
 // translated stock and Cataclysm WMO vertex records for a unified WMO batch. One shader for every material
 // shader id, chosen by specialization constants; the engine's registers read here and in Wmo.frag only
@@ -40,6 +41,14 @@ layout(std140, set = 1, binding = 0) uniform Regs {
     vec4 misc;
     vec4 v[256];
 } regs;
+
+// The group's vertex data past 3.3.5's formats (Vulkan/WmoExtra): per vertex the third UV set (xy) and
+// Dragonflight's MOC2 (z, as uint bits); where the group's starts in pc.xform[0].x, whether it has any in .y.
+layout(std430, set = 2, binding = 0) readonly buffer WmoExtra {
+    vec4 extra[];
+};
+
+#include "Push.glsl"
 
 // D3D9's pow: 0 at 0.
 float DxPow(float x, float y) { return x == 0.0 ? 0.0 : exp2(y * log2(abs(x))); }
@@ -96,6 +105,12 @@ void main()
         // (MapObjCata::ApplyMatrices), scaled by -0.24, u and v swapped (Cataclysm's and retail's).
         outTex1 = vec2(dot(regs.v[9] * -0.24, view), dot(regs.v[8] * -0.24, view));
         outTex2 = vec2(0.0);
+    }
+    else if (kShader == 18 || kShader == 20)
+    {
+        // Comp plus the third UV set as it is (retail's MapObjDiffuse_CompAlpha: out_tc2 = in_tc2).
+        outTex1 = uv1;
+        outTex2 = pc.xform[0].y > 0.5 ? extra[uint(pc.xform[0].x) + uint(gl_VertexIndex)].xy : vec2(0.0);
     }
     else if (kShader == 11 || kShader == 12)
     {

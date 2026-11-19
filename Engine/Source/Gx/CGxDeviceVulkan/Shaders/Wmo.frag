@@ -192,6 +192,23 @@ void main()
         material = mix(t1.rgb * (1.0 - t1.a), t0.rgb, blend);                   // the second layer's alpha
         added = t1.rgb * t1.a * (1.0 - blend);                                   // glows where it shows
     }
+    else if (kShader == 18)
+    {
+        // TwoLayerDiffuseMod2x: the second layer over the first by its alpha, the first back by the blend,
+        // times twice the third texture (through the third UV set).
+        vec4 t1 = texture(s1, inTex1);
+        vec4 t2 = texture(s2, inTex2);
+        vec3 layered = mix(mix(t0.rgb, t1.rgb, t1.a), t0.rgb, blend);
+        material = layered * t2.rgb * 2.0;
+    }
+    else if (kShader == 20)
+    {
+        // TwoLayerDiffuseAlpha: as 18, but the third texture's alpha brings the first layer back.
+        vec4 t1 = texture(s1, inTex1);
+        vec4 t2 = texture(s2, inTex2);
+        vec3 layered = mix(mix(t0.rgb, t1.rgb, t1.a), t0.rgb, t2.a);
+        material = layered * t2.rgb * 2.0;
+    }
     else if (kShader == 19)
     {
         material = mix(t0.rgb, t0.rgb * texture(s1, inTex1).rgb * 2.0, blend);  // TwoLayerDiffuseMod2xNA

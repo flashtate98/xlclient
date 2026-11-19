@@ -3,6 +3,7 @@
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"  // SXC:
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Lights.hpp" // SXC:
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Water.hpp"  // SXC:
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/WmoExtra.hpp"  // SXC: our WMO shader's set 2
 
 #include <cstdio>
 #include <cstring>
@@ -136,6 +137,7 @@ namespace gxvk::vk::pipelines
         }
         gxvk::vk::cover::Init();  // SXC: optional; without it the terrain stays on the stock shaders
         gxvk::vk::lights::Init(); // SXC: our terrain shader needs it too (its set 3)
+        gxvk::vk::wmoextra::Init();   // SXC: our WMO shader's set 2
 
         // The set-1 sets, one per uniform chunk, for the session.
         VkDescriptorPoolSize size = {};
@@ -198,6 +200,7 @@ namespace gxvk::vk::pipelines
         DestroyLayouts();
         gxvk::vk::cover::Shutdown();  // SXC: after the pipeline layouts over its set layout
         gxvk::vk::lights::Shutdown();
+        gxvk::vk::wmoextra::Shutdown();   // SXC: after the pipeline layouts over its set layout
         memory::DestroyBuffer(s.constant);
         if (s.cache != VK_NULL_HANDLE)
         {
@@ -263,7 +266,9 @@ namespace gxvk::vk::pipelines
                          || draw.fragment == FragmentProgram::Wmo;   // SXC: our WMO shader takes our lights
         // Our water (SXC/Water): the scene behind it in set 2, the lights' set 3.
         const bool water = draw.fragment == FragmentProgram::Water;
-        if (!LayoutFor(samplerMask, cover ? kExtraCover : (water ? kExtraWater : (lit ? kExtraLights : kExtraNone)), layoutIndex))
+        // SXC: our WMO shader: its extra vertex data in set 2 (Vulkan/WmoExtra), the lights' set 3.
+        const bool wmo = draw.fragment == FragmentProgram::Wmo;
+        if (!LayoutFor(samplerMask, cover ? kExtraCover : (water ? kExtraWater : (wmo ? kExtraWmo : (lit ? kExtraLights : kExtraNone))), layoutIndex))
         {
             ++s.stats.skipped;
             return false;
@@ -339,6 +344,7 @@ namespace gxvk::vk::pipelines
         // SXC: set 2, the covers' (written and uploaded at the frame's first terrain draw).
         const VkDescriptorSet set2 = cover ? gxvk::vk::cover::FrameSet(slot, serial)
                                      : water ? gxvk::vk::water::FrameSet(slot, serial)
+                                     : wmo   ? gxvk::vk::wmoextra::Set()   // SXC: our WMO shader's extra vertex data
                                              : VK_NULL_HANDLE;
         // SXC: set 3, the lights' (filled at the frame's first use), for the draw's surface class: the
         // terrain outdoor; a lit module as the device found it (a WMO group indoor or outdoor, models
@@ -346,7 +352,7 @@ namespace gxvk::vk::pipelines
         const VkDescriptorSet set3 = cover ? gxvk::vk::lights::FrameSet(slot, serial, gxvk::vk::lights::kSurfaceOutdoor)
                                      : (lit || water) ? gxvk::vk::lights::FrameSet(slot, serial, draw.lightsSurface)
                                            : VK_NULL_HANDLE;
-        if (((cover || water) && set2 == VK_NULL_HANDLE) || ((cover || lit || water) && set3 == VK_NULL_HANDLE))
+        if (((cover || water || wmo) && set2 == VK_NULL_HANDLE) || ((cover || lit || water) && set3 == VK_NULL_HANDLE))
         {
             ++s.stats.skipped;
             return false;
@@ -392,7 +398,7 @@ namespace gxvk::vk::pipelines
             b.offset1 = offset1;
             b.have1   = true;
         }
-        if ((cover || water) && b.set2 != set2)  // SXC:
+        if ((cover || water || wmo) && b.set2 != set2)  // SXC:
         {
             d.CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout.layout, 2, 1, &set2, 0, nullptr);
             b.set2 = set2;
