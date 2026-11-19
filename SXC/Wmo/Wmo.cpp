@@ -45,6 +45,28 @@ namespace {
         static ParallaxSettings s_parallax;
         return s_parallax;
     }
+
+    // 16's terrain blend (our own; kb: our-shaders): the terrain's layers under the WMO (SXC::Ground).
+    struct TerrainBlendSettings {
+        SXC::Settings::Bool on{"Wmo", "TerrainBlend", true, "WMOs: blend into the terrain (shader 16)",
+            "Where a WMO's material is DiffuseTerrain (16), mix in the terrain's own layers under it by the blend colour's "
+            "alpha, the way retail's baked blend meshes join cave mouths and ruins to the ground. Off: the WMO's texture alone."};
+        SXC::Settings::Float strength{"Wmo", "TerrainBlendStrength", 1.0f, 0.0f, 8.0f, "WMOs: terrain blend strength",
+            "How strongly the terrain shows, as a multiple of the share the blend colour's alpha gives it (capped at all terrain). "
+            "1: the alpha as painted; retail's baked blend meshes may read it differently (unknown)."};
+        SXC::Settings::Bool invert{"Wmo", "TerrainBlendInvert", false, "WMOs: terrain blend read inverted",
+            "Off: the blend alpha's 1 is the WMO's texture, 0 the terrain (as the two-layer shaders read it). On: the other way round."};
+        SXC::Settings::Int debug{"Wmo", "TerrainBlendDebug", 0, 0, 6, "WMOs: terrain blend debug view",
+            "Recolours the WMO's shader-16 surfaces only (the terrain itself stays as it is): 0 normal; 1 the terrain's colour "
+            "alone (magenta: no terrain chunk known there); 2 the terrain's share as grey; 3 the terrain chunk under each spot, "
+            "one colour per chunk; 4 that chunk's alpha map (layers 1-3 as red, green, blue); 5 the layers' final weights "
+            "(layer 0 red, 1 green, 2 blue, 3 yellow); 6 the terrain's vertex colour (mid grey: neutral)."};
+    };
+
+    TerrainBlendSettings& TerrainBlend() {
+        static TerrainBlendSettings s_blend;
+        return s_blend;
+    }
 }
 
 namespace SXC::Wmo {
@@ -81,9 +103,10 @@ namespace SXC::Wmo {
         // CreateMaterial loads it, Vulkan/WmoExtra carries the set); 23 wants its extra textures, 22 a
         // tangent-space view, 16 the terrain under it; 21 is the LOD groups'. 22 and 23 (our reconstructions):
         // their further textures on stages 8-13 (CreateMaterial loads them from SXMT); 22 its tangent space from
-        // the pixel's derivatives, 23 the fourth UV set and MOC2 from Vulkan/WmoExtra.
-        return (shader <= 13 && shader != 10) || (shader >= 15 && shader <= 20 && shader != 16 && shader != 17) || shader == 22 ||
-               shader == 23;
+        // the pixel's derivatives, 23 the fourth UV set and MOC2 from Vulkan/WmoExtra. 16: retail's effect is
+        // Diffuse's (mapobj.wfx), its terrain blend came from the ADT's baked meshes; ours draws it as 0 until
+        // our own blend with the terrain under it.
+        return (shader <= 13 && shader != 10) || (shader >= 15 && shader <= 20 && shader != 17) || shader == 22 || shader == 23;
     }
 
     void ParallaxParams(float out[16]) {
@@ -96,6 +119,14 @@ namespace SXC::Wmo {
             s2, s2, 0.0f, 0.0f,
         };
         for (int i = 0; i < 16; i++) out[i] = values[i];
+    }
+
+    void TerrainBlendParams(float out[4]) {
+        const TerrainBlendSettings& t = TerrainBlend();
+        out[0] = static_cast<float>(t.debug.Get());
+        out[1] = t.invert.Get() ? 1.0f : 0.0f;
+        out[2] = t.on.Get() ? 1.0f : 0.0f;
+        out[3] = t.strength.Get();
     }
 
     void SetGroupExtra(const void* group, uint32_t vertices, const float* uv3, uint32_t uv3Count, const float* uv4, uint32_t uv4Count,

@@ -46,4 +46,9 @@ namespace SXC::Wmo {
     // and the room's depths, whether the curtain mask is inverted, the room's glow; 1: the glass's UV scale and
     // how it sits over the rest (Wmo/ParallaxGlassMode); 2: the curtains' UV scale and offset; 3: the room's. From settings (Wmo/Parallax*), retail's values unknown.
     void ParallaxParams(float out[16]);
+
+    // 16's terrain blend (ours: the terrain's layers under the WMO from SXC::Ground, mixed in by the blend colour's
+    // alpha): the push block's third column for Wmo.frag - the debug view, read inverted, on, the strength
+    // (Wmo/TerrainBlend*).
+    void TerrainBlendParams(float out[4]);
 }

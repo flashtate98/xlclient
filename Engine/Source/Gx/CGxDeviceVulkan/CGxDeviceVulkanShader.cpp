@@ -570,6 +570,8 @@ uint32_t CGxDeviceVulkan::IShaderPrograms(pipelines::Draw& draw) {
                 SXC::Wmo::ParallaxParams(draw.xform);
             } else if (wmoShader == 23) {
                 draw.xform[2] = static_cast<float>(SXC::Wmo::DrawingLayers());   // which layers and heights it has
+            } else if (wmoShader == 16) {
+                SXC::Wmo::TerrainBlendParams(draw.xform + 8);   // the terrain blend's view, sense and switch (third column)
             }
             const uint32_t used = s_vertexRowsWritten < 256 ? s_vertexRowsWritten : 256;
             draw.vertexRowsUsed = used < draw.vertexRows ? used : draw.vertexRows;

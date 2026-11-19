@@ -344,7 +344,7 @@ namespace gxvk::vk::pipelines
         // SXC: set 2, the covers' (written and uploaded at the frame's first terrain draw).
         const VkDescriptorSet set2 = cover ? gxvk::vk::cover::FrameSet(slot, serial)
                                      : water ? gxvk::vk::water::FrameSet(slot, serial)
-                                     : wmo   ? gxvk::vk::wmoextra::Set()   // SXC: our WMO shader's extra vertex data
+                                     : wmo   ? gxvk::vk::wmoextra::FrameSet(slot, serial)   // SXC: our WMO shader's extra vertex data, the terrain's table
                                              : VK_NULL_HANDLE;
         // SXC: set 3, the lights' (filled at the frame's first use), for the draw's surface class: the
         // terrain outdoor; a lit module as the device found it (a WMO group indoor or outdoor, models

@@ -8,6 +8,7 @@
 #include "Engine/Source/Gx/CGxDeviceVulkan/Shaders/WmoSpirv.inc"      // SXC: our WMO shader
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"         // SXC: which set of its pixel modules
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/DeviceCaps.hpp"
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Ground.hpp"       // SXC: which WMO pixel module
 
 namespace
 {
@@ -121,9 +122,12 @@ namespace gxvk::vk::pipelines::detail
         if (!CreateModule(kWaterVert, sizeof kWaterVert, s.vert[static_cast<uint32_t>(VertexProgram::Water)], "Water.vert")
             || !CreateModule(kWaterFrag, sizeof kWaterFrag, s.frag[static_cast<uint32_t>(FragmentProgram::Water)], "Water.frag"))
             return false;
-        // Our WMO shader (kb: our-shaders), in the generic slots.
+        // Our WMO shader (kb: our-shaders), in the generic slots: its pixel module with the terrain's table (16's
+        // terrain blend; SPIR-V 1.5) where the device can take it (Vulkan/Ground; WMO set 2 follows the same test).
+        const bool ground = gxvk::vk::ground::Possible();
         if (!CreateModule(kWmoVert, sizeof kWmoVert, s.vert[static_cast<uint32_t>(VertexProgram::Wmo)], "Wmo.vert")
-            || !CreateModule(kWmoFrag, sizeof kWmoFrag, s.frag[static_cast<uint32_t>(FragmentProgram::Wmo)], "Wmo.frag"))
+            || !(ground ? CreateModule(kWmoFragGround, sizeof kWmoFragGround, s.frag[static_cast<uint32_t>(FragmentProgram::Wmo)], "Wmo.frag (ground)")
+                        : CreateModule(kWmoFrag, sizeof kWmoFrag, s.frag[static_cast<uint32_t>(FragmentProgram::Wmo)], "Wmo.frag")))
             return false;
         // The bindless set (SPIR-V 1.5) only where the device is 1.2 with non-uniform indexing.
         const bool bindless = (context::Caps().enabled & gxvk::vk::kCapSampledArrayNonUniform) != 0;

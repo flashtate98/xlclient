@@ -31,6 +31,7 @@
 #include "Engine/Source/Storm/H/storm.h"
 #include "SXC/Fog/Fog.h"  // SXC: volumetric fog
 #include "SXC/Cover/Cover.h"  // SXC: surface covers
+#include "SXC/Ground/Ground.h"  // SXC: the terrain's table
 #include "SXC/Lights/Lights.h" // SXC: point lights
 #include "SXC/Log.h"
 #include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler
@@ -266,6 +267,7 @@ void CGxDeviceVulkan::ICreateDrawPath() {
         gxvk::vk::cover::SetProvider(&CGxDeviceVulkan::SxcCoverFrame);                  // SXC: surface covers
         SXC::Cover::SetDevice(gxvk::vk::cover::Ready(), gxvk::vk::cover::TextureSlots(), &gxvk::vk::cover::Status);
         gxvk::vk::lights::SetProvider(&CGxDeviceVulkan::SxcLightsFrame);                // SXC: point lights
+        gxvk::vk::ground::SetProvider(&CGxDeviceVulkan::SxcGroundFrame);                // SXC: the terrain's table
         gxvk::vk::lights::SetShadowReport(&SXC::Lights::ShadowsDrawn);
         SXC::Lights::SetDevice(gxvk::vk::cover::Ready() && gxvk::vk::lights::Ready(), &gxvk::vk::lights::Status);
         SXC::Lights::SetShadowDevice(gxvk::vk::shadows::Ready() ? gxvk::vk::shadows::Slots() : 0, gxvk::vk::shadows::kMaxVertices);
@@ -489,6 +491,43 @@ bool CGxDeviceVulkan::SxcLightsFrame(gxvk::vk::lights::Frame& out) {
 
     out.shadowJobs = jobs.empty() ? nullptr : jobs.data();
     out.shadowJobCount = in.shadowJobCount;
+    return true;
+}
+
+// SXC: the terrain under the camera as a table (SXC/Ground), once per frame at the first WMO draw: the window, the
+// entries, the textures they name resolved to this device's images (one not on the GPU yet stays white).
+bool CGxDeviceVulkan::SxcGroundFrame(gxvk::vk::ground::Frame& out) {
+    static_assert(gxvk::vk::ground::kSlots == SXC::Ground::kMaxTextures && gxvk::vk::ground::kGrid == SXC::Ground::kGrid &&
+                  gxvk::vk::ground::kMaxEntries == SXC::Ground::kMaxEntries && gxvk::vk::ground::kEntryBytes == sizeof(SXC::Ground::Entry) &&
+                  gxvk::vk::ground::kColours == SXC::Ground::kColours,
+                  "SXC::Ground and Vulkan/Ground disagree");
+    CGxDeviceVulkan* device = static_cast<CGxDeviceVulkan*>(g_theGxDevicePtr);
+    static SXC::Ground::Frame in;   // ~130 KB: off the stack
+
+    if (!device || !device->m_drawPath || !SXC::Ground::Build(in)) {
+        return false;
+    }
+
+    std::memcpy(out.viewInv, in.viewInv, sizeof out.viewInv);
+    std::memcpy(out.light, in.light, sizeof out.light);
+    out.firstI = in.firstI;
+    out.firstJ = in.firstJ;
+    out.grid = in.grid;
+    out.colours = in.colours;
+    out.entries = in.entries;
+    out.entryCount = in.entryCount;
+    out.textureCount = in.textureCount;
+    static pipelines::Draw scratch;  // ITexResolve writes a draw's stage; one is reused
+
+    for (uint32_t k = 0; k < in.textureCount; k++) {
+        out.textures[k] = pipelines::Texture();
+        scratch.textureMask = 0;
+
+        if (in.textures[k].gx && device->ITexResolve(in.textures[k].gx, 0, scratch) && !scratch.textures[0].cube) {
+            out.textures[k] = scratch.textures[0];
+        }
+    }
+
     return true;
 }
 

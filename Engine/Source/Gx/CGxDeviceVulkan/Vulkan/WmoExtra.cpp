@@ -2,6 +2,8 @@
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/WmoExtra.hpp"
 
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Context.hpp"
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Frame.hpp"
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Ground.hpp"   // SXC: the terrain's table, bindings 1 and 2
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Loader.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Log.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Memory.hpp"
@@ -31,15 +33,19 @@ namespace
         uint32_t index  = 0;
     };
 
+    constexpr uint32_t kSets = gxvk::vk::frame::kFramesInFlight;
+
     struct State
     {
         bool                  ready  = false;
         bool                  failed = false;
+        bool                  ground = false;   ///< the set carries the terrain's table (Vulkan/Ground)
         VkDevice              device = nullptr;
         const loader::Device* dapi   = nullptr;
         VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
         VkDescriptorPool      pool      = VK_NULL_HANDLE;
-        VkDescriptorSet       set       = VK_NULL_HANDLE;
+        VkDescriptorSet       sets[kSets] = {};     ///< one per frame slot (the table changes each frame)
+        uint64_t              serials[kSets] = {};
         memory::Buffer        buffer;
         uint32_t              cursor = 0;
         uint32_t              restarts = 0;
@@ -59,8 +65,20 @@ namespace
 namespace gxvk::vk::wmoextra
 {
     bool Ready() { return s.ready; }
+    bool Ground() { return s.ready && s.ground; }
     VkDescriptorSetLayout SetLayout() { return s.setLayout; }
-    VkDescriptorSet Set() { return s.set; }
+
+    VkDescriptorSet FrameSet(uint32_t slot, uint64_t serial)
+    {
+        if (!s.ready || slot >= kSets) return VK_NULL_HANDLE;
+        // The terrain's table once per frame, at the frame's first WMO draw (a failed fill keeps the last).
+        if (s.ground && s.serials[slot] != serial)
+        {
+            gxvk::vk::ground::Fill(slot, s.sets[slot]);
+            s.serials[slot] = serial;
+        }
+        return s.sets[slot];
+    }
 
     bool Init()
     {
@@ -72,33 +90,46 @@ namespace gxvk::vk::wmoextra
         s.dapi   = h->dapi;
         const loader::Device& d = *s.dapi;
 
-        VkDescriptorSetLayoutBinding binding = {};
-        binding.binding         = 0;
-        binding.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        binding.descriptorCount = 1;
-        binding.stageFlags      = VK_SHADER_STAGE_VERTEX_BIT;
+        // Binding 0 the extra vertex data; with the terrain's table (where the device can take it, the same test
+        // that chose the WMO pixel module) 1 the table and 2 its textures, for the pixel stage.
+        s.ground = gxvk::vk::ground::Possible();
+        if (s.ground && !gxvk::vk::ground::Init())
+        {
+            // The pixel module was chosen to read the table: without it the set can't match it (our WMO shader off).
+            Write(Error, "vulkan: WMO extra data: the terrain's table could not be made; our WMO shader stays off");
+            s.failed = true;
+            return false;
+        }
+        VkDescriptorSetLayoutBinding bindings[3] = {};
+        bindings[0].binding         = 0;
+        bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[0].descriptorCount = 1;
+        bindings[0].stageFlags      = VK_SHADER_STAGE_VERTEX_BIT;
+        bindings[1].binding         = gxvk::vk::ground::kTableBinding;
+        bindings[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[1].descriptorCount = 1;
+        bindings[1].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings[2].binding         = gxvk::vk::ground::kTexturesBinding;
+        bindings[2].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[2].descriptorCount = gxvk::vk::ground::kSlots;
+        bindings[2].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
         VkDescriptorSetLayoutCreateInfo layout = {};
         layout.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        layout.bindingCount = 1;
-        layout.pBindings    = &binding;
+        layout.bindingCount = s.ground ? 3u : 1u;
+        layout.pBindings    = bindings;
         if (!Check(d.CreateDescriptorSetLayout(s.device, &layout, nullptr, &s.setLayout), "vkCreateDescriptorSetLayout")) return false;
 
-        VkDescriptorPoolSize size = {};
-        size.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        size.descriptorCount = 1;
+        VkDescriptorPoolSize sizes[2] = {};
+        sizes[0].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        sizes[0].descriptorCount = (s.ground ? 2u : 1u) * kSets;
+        sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        sizes[1].descriptorCount = gxvk::vk::ground::kSlots * kSets;
         VkDescriptorPoolCreateInfo pool = {};
         pool.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        pool.maxSets       = 1;
-        pool.poolSizeCount = 1;
-        pool.pPoolSizes    = &size;
+        pool.maxSets       = kSets;
+        pool.poolSizeCount = s.ground ? 2u : 1u;
+        pool.pPoolSizes    = sizes;
         if (!Check(d.CreateDescriptorPool(s.device, &pool, nullptr, &s.pool), "vkCreateDescriptorPool")) return false;
-
-        VkDescriptorSetAllocateInfo alloc = {};
-        alloc.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        alloc.descriptorPool     = s.pool;
-        alloc.descriptorSetCount = 1;
-        alloc.pSetLayouts        = &s.setLayout;
-        if (!Check(d.AllocateDescriptorSets(s.device, &alloc, &s.set), "vkAllocateDescriptorSets")) return false;
 
         if (!memory::CreateBuffer(kBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, memory::Where::Stream, s.buffer) || !s.buffer.block.mapped)
         {
@@ -108,17 +139,28 @@ namespace gxvk::vk::wmoextra
         }
 
         VkDescriptorBufferInfo info = { s.buffer.handle, 0, kBytes };
-        VkWriteDescriptorSet write = {};
-        write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet          = s.set;
-        write.dstBinding      = 0;
-        write.descriptorCount = 1;
-        write.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        write.pBufferInfo     = &info;
-        d.UpdateDescriptorSets(s.device, 1, &write, 0, nullptr);
+
+        for (uint32_t k = 0; k < kSets; ++k)
+        {
+            VkDescriptorSetAllocateInfo alloc = {};
+            alloc.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            alloc.descriptorPool     = s.pool;
+            alloc.descriptorSetCount = 1;
+            alloc.pSetLayouts        = &s.setLayout;
+            if (!Check(d.AllocateDescriptorSets(s.device, &alloc, &s.sets[k]), "vkAllocateDescriptorSets")) return false;
+
+            VkWriteDescriptorSet write = {};
+            write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet          = s.sets[k];
+            write.dstBinding      = 0;
+            write.descriptorCount = 1;
+            write.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            write.pBufferInfo     = &info;
+            d.UpdateDescriptorSets(s.device, 1, &write, 0, nullptr);
+        }
 
         s.ready = true;
-        Write(Info, "vulkan: WMO extra data: ready (%u KiB)", static_cast<uint32_t>(kBytes / 1024));
+        Write(Info, "vulkan: WMO extra data: ready (%u KiB%s)", static_cast<uint32_t>(kBytes / 1024), s.ground ? ", with the terrain's table" : ", without the terrain's table");
         return true;
     }
 
@@ -184,6 +226,7 @@ namespace gxvk::vk::wmoextra
     {
         if (!s.dapi || !s.device) return;
         const loader::Device& d = *s.dapi;
+        gxvk::vk::ground::Shutdown();
         memory::DestroyBuffer(s.buffer);
         if (s.pool != VK_NULL_HANDLE) d.DestroyDescriptorPool(s.device, s.pool, nullptr);
         if (s.setLayout != VK_NULL_HANDLE) d.DestroyDescriptorSetLayout(s.device, s.setLayout, nullptr);

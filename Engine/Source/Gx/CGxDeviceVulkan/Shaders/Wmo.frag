@@ -1,5 +1,8 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
+#if GROUND
+#extension GL_EXT_nonuniform_qualifier : require
+#endif
 // SXC: our WMO pixel shader (Vulkan/Pipelines: FragmentProgram::Wmo; kb: our-shaders), in place of the
 // translated stock and Cataclysm WMO pixel records. The material per shader id is retail's (the Mac
 // builds' GLSL, Shaders\Pixel\glfs_420\MapObj*.bls): the diffuse = the lit colour x 2 x the material, times
@@ -55,6 +58,10 @@ layout(std140, set = 1, binding = 0) uniform Regs {
 
 #include "Lights.glsl"
 #include "Push.glsl"
+#if GROUND
+// 16's terrain blend: the terrain under the camera (built with GROUND where the device indexes per pixel).
+#include "Ground.glsl"
+#endif
 
 // Parallax (22): the view in the surface's tangent space, as retail's MapObjParallax vertex shader computes it
 // from its generated tangents (out_viewTS = the view position x (tangent, bitangent, normal)); here from the
@@ -148,6 +155,16 @@ void main()
     // The light first (its derivatives want uniform control flow, before any discard): the lit colour with
     // our lamps (Lights.glsl).
     vec4 light = LightsModelColor(inColor, vec4(inView, 1.0), vec4(inNormal, 1.0));
+#if GROUND
+    // 16: the world position for the terrain's table, its derivatives before anything branches by pixel.
+    vec2 groundXy = kShader == 16 ? GroundWorld(inView).xy : vec2(0.0);
+    vec2 groundDx = dFdx(groundXy), groundDy = dFdy(groundXy);
+    // And the terrain's light here (the sun and ambient as the terrain takes them, with our lamps), for the terrain's
+    // share: lit as the ground beside it, not as the WMO (whose baked vertex light and interior ambient differ).
+    vec3 groundLit = kShader == 16 ? LightsModelColor(vec4(GroundLight(inNormal), 1.0), vec4(inView, 1.0), vec4(inNormal, 1.0)).rgb : vec3(0.0);
+    float terrainShare = 0.0;
+    vec3 terrainMaterial = vec3(0.0);
+#endif
     vec4 t0 = texture(s0, inTex0);
     vec3 material = t0.rgb;
     vec3 added = vec3(0.0);
@@ -216,6 +233,41 @@ void main()
         vec4 t1 = texture(s1, inTex1);                                           // TwoLayerDiffuseEmissive:
         material = mix(t1.rgb * (1.0 - t1.a), t0.rgb, blend);                   // the second layer's alpha
         added = t1.rgb * t1.a * (1.0 - blend);                                   // glows where it shows
+    }
+    else if (kShader == 16)
+    {
+        // DiffuseTerrain: retail draws the WMO as Diffuse (mapobj.wfx) and the ADT's baked blend meshes over it with
+        // the terrain shader. OURS instead: the terrain's own layers at this spot (Ground.glsl), lit as the terrain
+        // and mixed in by the blend set's alpha as the two-layer shaders take it (1: the material's own texture, 0:
+        // the other layer, here the terrain; SXC::Wmo::TerrainBlendParams in pc.xform[2]: the debug view, read
+        // inverted, on, the strength). Without the table (a device that can't index per pixel, or no chunk here) the
+        // material alone, as Diffuse.
+#if GROUND
+        int debugView = int(pc.xform[2].x + 0.5);
+        float share = clamp((pc.xform[2].y > 0.5 ? blend : 1.0 - blend) * pc.xform[2].w, 0.0, 1.0);
+        vec3 terrain;
+        int entry;
+        bool found = GroundColour(groundXy, groundDx, groundDy, debugView, terrain, entry);
+
+        if (debugView == 1 || debugView >= 4)
+        {
+            material = found ? terrain : vec3(1.0, 0.0, 1.0);                     // the terrain alone
+        }
+        else if (debugView == 2)
+        {
+            material = vec3(share);                                               // the terrain's share
+        }
+        else if (debugView == 3)
+        {
+            material = found ? fract(sin(vec3(float(entry)) * vec3(12.9898, 78.233, 37.719)) * 43758.5453) : vec3(1.0, 0.0, 1.0);
+        }
+        else if (found && pc.xform[2].z > 0.5)
+        {
+            // Mixed after the light (below): the WMO's share lit as the WMO, the terrain's as the terrain.
+            terrainShare = share;
+            terrainMaterial = terrain;
+        }
+#endif
     }
     else if (kShader == 18)
     {
@@ -321,6 +373,15 @@ void main()
     }
 
     vec3 colour = light.rgb * shade * 2.0 * material + added;
+
+#if GROUND
+    // 16: the terrain's share as the terrain draws itself (Terrain.frag: the layers x the shadow's 0.7..1 x twice its
+    // light x the vertex colour; terrainMaterial carries twice the vertex colour already).
+    if (kShader == 16 && terrainShare > 0.0)
+    {
+        colour = mix(colour, groundLit * shade * terrainMaterial, terrainShare);
+    }
+#endif
 
     // The stock fog: toward the fog colour as the factor falls.
     colour = mix(regs.p[2].rgb, colour, inFog);
