@@ -14,6 +14,7 @@
 layout(constant_id = 0) const int  kShader     = 0;
 layout(constant_id = 1) const bool kLit        = false;
 layout(constant_id = 2) const int  kShadowMode = 0;
+layout(constant_id = 5) const bool kAlphaKey   = false; // blend mode 1: cut where texture 0's alpha < 128/255
 
 layout(location = 0) in vec4 inColor;
 layout(location = 1) in float inBlend;
@@ -196,8 +197,11 @@ void main()
         material = mix(t0.rgb, t0.rgb * texture(s1, inTex1).rgb * 2.0, blend);  // TwoLayerDiffuseMod2xNA
     }
 
-    // The alpha test (the stock's alpha-test permutations: the reference in p2.w).
-    if (regs.p[2].w > 0.0 && alpha < regs.p[2].w)
+    // The alpha test. An alpha-key material (blend mode 1) as retail cuts it: texture 0's alpha below 128/255,
+    // whatever the vertex alpha (MapObjTwoLayerDiffuseMod2xNA and the others' alpha-tested programs); neither
+    // the stock nor Cataclysm's records cut the two-layer ones (Kul Tiras' hanging roots, 2026-11-19). Else
+    // the stock's alpha-test reference in p2.w.
+    if (kAlphaKey ? t0.a < 0.501960814 : (regs.p[2].w > 0.0 && alpha < regs.p[2].w))
     {
         discard;
     }

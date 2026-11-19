@@ -93,10 +93,11 @@ namespace gxvk::vk::pipelines
     // for both stages: bits 0-4 the material's retail shader id (0-31), 5 lit (the stock lighting mode
     // isn't 0), 6-7 the shadow mode (CShaderEffect::s_shadowValue: 0 none, 1 one cascade, 2-3 all), 8 a
     // second vertex colour and UV set in the vertex (PNC2T2), 9 a third texture (Cataclysm's three-texture
-    // shaders).
+    // shaders), 10 an alpha-key material (blend mode 1: cut where texture 0's alpha is below half, retail's).
     namespace wmo
     {
         constexpr uint32_t kShaderMask = 0x1Fu, kLit = 1u << 5, kShadowShift = 6, kSecondSet = 1u << 8, kThirdTexture = 1u << 9;
+        constexpr uint32_t kAlphaKey = 1u << 10;
         inline uint32_t Shader(uint32_t o) { return o & kShaderMask; }
         inline uint32_t ShadowMode(uint32_t o) { return (o >> kShadowShift) & 3u; }
         /// The samplers the pixel module declares: the material's textures (0, 1, 2) and the stock

@@ -155,14 +155,15 @@ namespace gxvk::vk::pipelines::detail
     // Vertex constants 0..5 (the record's options), 6 the underlay, 7 big alpha; the evaluation stage of
     // a raised chunk takes the same.
     // SXC: our WMO shader's constants, the same for both stages: 0 the retail shader id, 1 lit, 2 the shadow
-    // mode, 3 a second vertex colour and UV set, 4 a third texture.
+    // mode, 3 a second vertex colour and UV set, 4 a third texture, 5 an alpha-key material.
     const VkSpecializationInfo* WmoSpecialization(const Key& k, TerrainSpecialization& storage)
     {
         const uint32_t o = k.wmoOptions;
-        const uint32_t values[5] = {
+        const uint32_t values[6] = {
             wmo::Shader(o), (o & wmo::kLit) ? 1u : 0u, wmo::ShadowMode(o), (o & wmo::kSecondSet) ? 1u : 0u, (o & wmo::kThirdTexture) ? 1u : 0u,
+            (o & wmo::kAlphaKey) ? 1u : 0u,
         };
-        return Specialize(storage, values, 5);
+        return Specialize(storage, values, 6);
     }
 
     const VkSpecializationInfo* VertexSpecialization(const Key& k, TerrainSpecialization& storage)

@@ -550,7 +550,8 @@ uint32_t CGxDeviceVulkan::IShaderPrograms(pipelines::Draw& draw) {
             draw.vertex = pipelines::VertexProgram::Wmo;
             draw.fragment = pipelines::FragmentProgram::Wmo;
             draw.vertexRecord = vs->record;
-            draw.wmoOptions = wmoShader | ((n & 1u) ? wmo::kLit : 0u) | ((m % 4u) << wmo::kShadowShift);
+            draw.wmoOptions = wmoShader | ((n & 1u) ? wmo::kLit : 0u) | ((m % 4u) << wmo::kShadowShift) |
+                              (draw.blend == GxBlend_AlphaKey ? wmo::kAlphaKey : 0u);
             draw.vertexRows = pipelines::kVertexRowsLarge;
             const uint32_t used = s_vertexRowsWritten < 256 ? s_vertexRowsWritten : 256;
             draw.vertexRowsUsed = used < draw.vertexRows ? used : draw.vertexRows;
