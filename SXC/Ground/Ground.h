@@ -49,6 +49,7 @@ namespace SXC::Ground {
         uint32_t holes[kGrid * kGrid] = {};   // per cell its map chunk's holes (MCNK's 4 x 4 bits: (row / 2) * 4 + column / 2)
         uint32_t colours[kGrid * kGrid * kColours] = {};   // per cell its map chunk's vertex colours (D3DCOLOR, 0x7F7F7F neutral)
         float heights[kGrid * kGrid * kColours] = {};      // per cell its map chunk's vertex heights (world z), as the colours
+        uint32_t normals[kGrid * kGrid * kColours] = {};   // and its vertex normals (MCNR: x, y, z as signed bytes, /127)
         Entry entries[kMaxEntries] = {};
         uint32_t entryCount = 0;
         Texture textures[kMaxTextures];
@@ -72,6 +73,7 @@ namespace SXC::Ground {
         float centres[2][2] = {};
         const uint32_t* shading[2] = {};   // each map chunk's vertex colours (kColours; null: none)
         const float* heights[2] = {};      // its vertex heights (kColours, from baseZ; null: none)
+        const int8_t* normals[2] = {};     // its vertex normals (kColours x 3; null: none)
         float baseZ[2] = {};
         uint16_t holes[2] = {};
         uint32_t centreCount = 0;

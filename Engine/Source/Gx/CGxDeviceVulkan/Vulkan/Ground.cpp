@@ -28,13 +28,14 @@ namespace
 
     constexpr uint32_t     kSlotsInFlight = frame::kFramesInFlight;
     constexpr VkDeviceSize kHeaderBytes   = 144;  ///< viewInv (3 vec4), the window (ivec4), (chunk size, the map's half, 0, 0), the light (4 vec4)
-    // The table: the header, the grid, the holes, the vertex colours, the vertex heights, the entries (Ground.glsl).
+    // The table: the header, the grid, the holes, the vertex colours, heights and normals, the entries (Ground.glsl).
     constexpr VkDeviceSize kGridBytes     = kGrid * kGrid * 4;
     constexpr VkDeviceSize kColourBytes   = static_cast<VkDeviceSize>(kGrid) * kGrid * kColours * 4;
     constexpr VkDeviceSize kHolesAt       = kHeaderBytes + kGridBytes;
     constexpr VkDeviceSize kColoursAt     = kHolesAt + kGridBytes;
     constexpr VkDeviceSize kHeightsAt     = kColoursAt + kColourBytes;
-    constexpr VkDeviceSize kEntriesAt     = kHeightsAt + kColourBytes;
+    constexpr VkDeviceSize kNormalsAt     = kHeightsAt + kColourBytes;
+    constexpr VkDeviceSize kEntriesAt     = kNormalsAt + kColourBytes;
     constexpr VkDeviceSize kTableBytes    = kEntriesAt + static_cast<VkDeviceSize>(kMaxEntries) * kEntryBytes;
     static_assert(kEntriesAt % 16 == 0, "the entries must start on 16 bytes (std430)");
     constexpr float        kChunk         = 533.33333f / 16.0f;
@@ -134,6 +135,7 @@ namespace gxvk::vk::ground
         if (on && f.holes) std::memcpy(out + kHolesAt, f.holes, kGridBytes);
         if (on && f.colours) std::memcpy(out + kColoursAt, f.colours, kColourBytes);
         if (on && f.heights) std::memcpy(out + kHeightsAt, f.heights, kColourBytes);
+        if (on && f.normals) std::memcpy(out + kNormalsAt, f.normals, kColourBytes);
         if (entries) std::memcpy(out + kEntriesAt, f.entries, static_cast<size_t>(entries) * kEntryBytes);
         memory::FlushHost(slot.table.block);
 

@@ -19,6 +19,7 @@ namespace {
         int32_t cells[2][2] = {};   // (i, j) of its map chunks
         uint32_t colours[2][SXC::Ground::kColours] = {};   // their vertex colours, copied
         float heights[2][SXC::Ground::kColours] = {};      // their vertex heights (world z), copied
+        uint32_t normals[2][SXC::Ground::kColours] = {};   // their vertex normals, packed (Frame::normals)
         uint32_t holes[2] = {};
     };
 
@@ -44,6 +45,11 @@ namespace SXC::Ground {
                 k.colours[c][v] = note.shading[c] ? note.shading[c][v] : 0xFF7F7F7Fu;
                 // Without heights the chunk counts as all holes for the proximity (far below anything).
                 k.heights[c][v] = note.heights[c] ? note.baseZ[c] + note.heights[c][v] : -1.0e9f;
+                // Up where there are none.
+                const int8_t* n = note.normals[c] ? note.normals[c] + 3 * v : nullptr;
+                k.normals[c][v] = n ? static_cast<uint8_t>(n[0]) | (static_cast<uint32_t>(static_cast<uint8_t>(n[1])) << 8) |
+                                          (static_cast<uint32_t>(static_cast<uint8_t>(n[2])) << 16)
+                                    : 127u << 16;
             }
 
             k.holes[c] = note.heights[c] ? note.holes[c] : 0xFFFFu;
@@ -51,6 +57,7 @@ namespace SXC::Ground {
 
         k.note.shading[0] = k.note.shading[1] = nullptr;   // not kept: the chunk owns them
         k.note.heights[0] = k.note.heights[1] = nullptr;
+        k.note.normals[0] = k.note.normals[1] = nullptr;
 
         // The light, its direction turned into the world with this frame's view (the WMOs drawn next frame turn it
         // back with theirs: no lag when the camera turns).
@@ -178,6 +185,7 @@ namespace SXC::Ground {
                     out.grid[j * kGrid + i] = out.entryCount;
                     std::memcpy(&out.colours[(j * kGrid + i) * kColours], k.colours[c], sizeof k.colours[c]);
                     std::memcpy(&out.heights[(j * kGrid + i) * kColours], k.heights[c], sizeof k.heights[c]);
+                    std::memcpy(&out.normals[(j * kGrid + i) * kColours], k.normals[c], sizeof k.normals[c]);
                     out.holes[j * kGrid + i] = k.holes[c];
                 }
             }

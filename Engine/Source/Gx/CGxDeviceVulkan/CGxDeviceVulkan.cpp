@@ -516,6 +516,7 @@ bool CGxDeviceVulkan::SxcGroundFrame(gxvk::vk::ground::Frame& out) {
     out.holes = in.holes;
     out.colours = in.colours;
     out.heights = in.heights;
+    out.normals = in.normals;
     out.entries = in.entries;
     out.entryCount = in.entryCount;
     out.textureCount = in.textureCount;

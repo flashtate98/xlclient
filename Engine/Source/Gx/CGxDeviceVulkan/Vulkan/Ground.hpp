@@ -29,6 +29,7 @@ namespace gxvk::vk::ground
         const uint32_t* holes = nullptr;       ///< kGrid x kGrid: each cell's holes (4 x 4 bits)
         const uint32_t* colours = nullptr;     ///< kGrid x kGrid x kColours: each cell's vertex colours (D3DCOLOR)
         const float*    heights = nullptr;     ///< kGrid x kGrid x kColours: each cell's vertex heights (world z)
+        const uint32_t* normals = nullptr;     ///< kGrid x kGrid x kColours: each cell's vertex normals (signed bytes x, y, z)
         const void*     entries = nullptr;     ///< kEntryBytes each
         uint32_t        entryCount = 0;
         pipelines::Texture textures[kSlots];   ///< slot k (entries name k + 1); view null: white

@@ -507,6 +507,7 @@ static void SxcNoteGround(CMapRenderChunk* chunk) {
             note.centres[note.centreCount][1] = (map->m_bbox.b.y + map->m_bbox.t.y) * 0.5f;
             note.shading[note.centreCount] = map->m_vertexShading;   // D3DCOLOR, as CreateVerticesWorld reads it
             note.heights[note.centreCount] = map->m_height;          // from m_topLeftCoords.z, as it reads them
+            note.normals[note.centreCount] = map->m_normals;         // x, y, z per vertex, /127, as it reads them
             note.baseZ[note.centreCount] = map->m_topLeftCoords.z;
             note.holes[note.centreCount] = map->m_header ? map->m_header->m_holes : 0;   // as CreateIndices leaves them out
             note.centreCount++;

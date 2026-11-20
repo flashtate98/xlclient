@@ -23,8 +23,20 @@ layout(std430, set = 2, binding = 1) readonly buffer GroundTable {
     uint  groundHoles[1024];  // per cell its map chunk's holes (4 x 4 bits: (row / 2) * 4 + column / 2)
     uint  groundColours[1024 * 145];   // per cell its map chunk's vertex colours (MCCV, D3DCOLOR): 9 x 9 corners, 8 x 8 centres, by rows
     float groundHeights[1024 * 145];   // and its vertex heights (world z), alike
+    uint  groundNormals[1024 * 145];   // and its vertex normals (MCNR: x, y, z as signed bytes), alike
     GroundChunk groundChunks[];
 };
+
+// Directions between the world scene's view and the world (the view is a rotation and a move).
+vec3 GroundDirToWorld(vec3 v)
+{
+    return vec3(dot(groundViewInv[0].xyz, v), dot(groundViewInv[1].xyz, v), dot(groundViewInv[2].xyz, v));
+}
+
+vec3 GroundDirToView(vec3 w)
+{
+    return groundViewInv[0].xyz * w.x + groundViewInv[1].xyz * w.y + groundViewInv[2].xyz * w.z;
+}
 
 // The terrain mesh's triangle at world xy in window cell c: four triangles a quad around its centre vertex
 // (CMapChunk::CreateVerticesWorld: rows run along world x, columns along y; CreateIndices): its three vertices'
@@ -65,6 +77,28 @@ vec3 GroundVertexColour(vec2 xy, ivec2 c)
     GroundTriangle(xy, c, at, w, hole);
     return unpackUnorm4x8(groundColours[at.x]).zyx * w.x + unpackUnorm4x8(groundColours[at.y]).zyx * w.y +
            unpackUnorm4x8(groundColours[at.z]).zyx * w.z;
+}
+
+// The terrain's normal at world xy (its vertex normals over the mesh's triangles, as it's lit), or false where there's no
+// chunk (holes count: a seam can run along one).
+bool GroundNormal(vec2 xy, out vec3 n)
+{
+    n = vec3(0.0, 0.0, 1.0);
+    ivec2 c = ivec2(floor((vec2(groundGrid.y) - xy) / groundGrid.x)) - groundWindow.xy;
+
+    if (any(lessThan(c, ivec2(0))) || any(greaterThanEqual(c, ivec2(groundWindow.z))) || groundCells[c.y * groundWindow.z + c.x] == 0u)
+    {
+        return false;
+    }
+
+    uvec3 at;
+    vec3 w;
+    bool hole;
+    GroundTriangle(xy, c, at, w, hole);
+    vec3 sum = unpackSnorm4x8(groundNormals[at.x]).xyz * w.x + unpackSnorm4x8(groundNormals[at.y]).xyz * w.y +
+               unpackSnorm4x8(groundNormals[at.z]).xyz * w.z;
+    n = dot(sum, sum) > 0.0 ? normalize(sum) : vec3(0.0, 0.0, 1.0);
+    return true;
 }
 
 // The terrain's surface height at world xy (as its mesh lies), or false where there's none: outside the window, a chunk
@@ -113,25 +147,24 @@ vec3 GroundWorld(vec3 view)
     return vec3(dot(groundViewInv[0], p), dot(groundViewInv[1], p), dot(groundViewInv[2], p));
 }
 
-// The terrain's light for a view-space normal, as its vertex shader lights it (TerrainVertex.glsl's TerrainLight:
-// the sun's diffuse by N.L and the ambient, clamped; the vertex colour is in GroundColour's colour).
-vec3 GroundLight(vec3 viewNormal)
+// The terrain's light for a world normal, as its vertex shader lights it (TerrainVertex.glsl's TerrainLight: the sun's
+// diffuse by N.L and the ambient, clamped; the vertex colour is in GroundColour's colour).
+vec3 GroundLight(vec3 n)
 {
-    vec3 n = normalize(vec3(dot(groundViewInv[0].xyz, viewNormal), dot(groundViewInv[1].xyz, viewNormal), dot(groundViewInv[2].xyz, viewNormal)));
     return min(groundLight[2].xyz * clamp(dot(groundLight[0].xyz, n), 0.0, 1.0) + groundLight[1].xyz, vec3(1.0));
 }
 
-// The terrain's sun highlight at a view-space position and normal, as its vertex shader computes it (TerrainLight's
-// kSpecular: Blinn-Phong toward the sun, v27's exponent and colour), here in the world; the gloss is the caller's.
-vec3 GroundHighlight(vec3 viewPos, vec3 viewNormal)
+// The terrain's sun highlight at a view-space position for a world normal, as its vertex shader computes it
+// (TerrainLight's kSpecular: Blinn-Phong toward the sun, v27's exponent and colour), here in the world; the gloss is
+// the caller's.
+vec3 GroundHighlight(vec3 viewPos, vec3 n)
 {
     if (all(equal(groundLight[3].xyz, vec3(0.0))))
     {
         return vec3(0.0);
     }
 
-    vec3 n = normalize(vec3(dot(groundViewInv[0].xyz, viewNormal), dot(groundViewInv[1].xyz, viewNormal), dot(groundViewInv[2].xyz, viewNormal)));
-    vec3 toEye = normalize(vec3(dot(groundViewInv[0].xyz, -viewPos), dot(groundViewInv[1].xyz, -viewPos), dot(groundViewInv[2].xyz, -viewPos)));
+    vec3 toEye = normalize(GroundDirToWorld(-viewPos));
     vec3 h = normalize(toEye + groundLight[0].xyz);
     return pow(max(dot(h, n), 0.0), max(groundLight[3].w, 1.0)) * groundLight[3].xyz;
 }

@@ -160,9 +160,27 @@ void main()
     vec3 groundWorld = kShader == 16 ? GroundWorld(inView) : vec3(0.0);
     vec2 groundXy = groundWorld.xy;
     vec2 groundDx = dFdx(groundXy), groundDy = dFdy(groundXy);
-    // And the terrain's light here (the sun and ambient as the terrain takes them, with our lamps), for the terrain's
+    // The terrain's share here (pc.xform[2], [3]: the authored blend by the blend set's alpha as the two-layer shaders
+    // take it, read inverted or not, times the strength; or the nearness share where the surface lies at or under the
+    // terrain, softening the seams of WMOs sunk too deep for their authored blend), and the normal its light takes:
+    // the WMO's bent toward the terrain's by that share, so the light meets the ground's own at a seam.
+    float groundShare = 0.0, groundProximity = 0.0;
+    vec3 groundNormal = vec3(0.0, 0.0, 1.0);
+
+    if (kShader == 16)
+    {
+        groundShare = clamp((pc.xform[2].y > 0.5 ? inBlend : 1.0 - inBlend) * pc.xform[2].w, 0.0, 1.0);
+        groundProximity = pc.xform[3].x > 0.5 ? GroundProximity(groundWorld, pc.xform[3].y, pc.xform[3].z) : 0.0;
+        groundShare = max(groundShare, groundProximity);
+        vec3 wmoNormal = normalize(GroundDirToWorld(normalize(inNormal)));
+        vec3 terrainNormal;
+        groundNormal = GroundNormal(groundXy, terrainNormal) ? normalize(mix(wmoNormal, terrainNormal, groundShare)) : wmoNormal;
+    }
+
+    // And the terrain's light there (the sun and ambient as the terrain takes them, with our lamps), for the terrain's
     // share: lit as the ground beside it, not as the WMO (whose baked vertex light and interior ambient differ).
-    vec3 groundLit = kShader == 16 ? LightsModelColor(vec4(GroundLight(inNormal), 1.0), vec4(inView, 1.0), vec4(inNormal, 1.0)).rgb : vec3(0.0);
+    vec3 groundLit = kShader == 16 ? LightsModelColor(vec4(GroundLight(groundNormal), 1.0), vec4(inView, 1.0), vec4(GroundDirToView(groundNormal), 1.0)).rgb
+                                   : vec3(0.0);
     float terrainShare = 0.0;
     vec3 terrainMaterial = vec3(0.0);
     float terrainGloss = 0.0;
@@ -246,11 +264,7 @@ void main()
         // material alone, as Diffuse.
 #if GROUND
         int debugView = int(pc.xform[2].x + 0.5);
-        float share = clamp((pc.xform[2].y > 0.5 ? blend : 1.0 - blend) * pc.xform[2].w, 0.0, 1.0);
-        // The proximity blend (pc.xform[3]: on, the fade above, the ceiling): where the WMO lies at or under the
-        // terrain, the terrain shows there too, softening the seams of WMOs sunk too deep for their authored blend.
-        float proximity = pc.xform[3].x > 0.5 ? GroundProximity(groundWorld, pc.xform[3].y, pc.xform[3].z) : 0.0;
-        share = max(share, proximity);
+        float share = groundShare, proximity = groundProximity;   // from the top
         vec3 terrain;
         float gloss;
         int entry;
@@ -392,7 +406,7 @@ void main()
     // the layers' gloss where unshadowed, untinted).
     if (kShader == 16 && terrainShare > 0.0)
     {
-        vec3 highlight = terrainGloss * GroundHighlight(inView, normalize(inNormal)) * sunShadow;
+        vec3 highlight = terrainGloss * GroundHighlight(inView, groundNormal) * sunShadow;
         colour = mix(colour, groundLit * shade * terrainMaterial + highlight, terrainShare);
     }
 #endif
