@@ -16,7 +16,7 @@ namespace SXC::Ground {
     constexpr uint32_t kMaxEntries = 1024;  // render chunks in the window (one covers one or two map chunks)
     constexpr uint32_t kMaxTextures = 2048; // distinct textures they name (layers, heights, alpha maps)
 
-    // One render chunk as the shader reads it (std430, 7 x 16 bytes). Texture fields are slots + 1 (0: none).
+    // One render chunk as the shader reads it (std430, 8 x 16 bytes). Texture fields are slots + 1 (0: none).
     struct Entry {
         float place[4];        // the chunk's position (x, y; v23), the alpha map's scale (x, y; v18 + layers)
         float layerScale[4];   // each layer's coordinate scale (v18 + k; both axes alike)
@@ -28,6 +28,10 @@ namespace SXC::Ground {
         uint32_t layers;
         uint32_t flags;        // kBigAlpha, kReflective
         uint32_t unused;
+        uint32_t coverPainted; // the covers' entries as the terrain draws it (SXC::Cover's c11, c12): a byte per layer
+        uint32_t coverLooks;   // (painted, fallen-snow looks)
+        float liquid;          // its liquids' lowest top (c13.y; -100000 none, 0 without covers)
+        uint32_t unused2;
     };
     constexpr uint32_t kBigAlpha = 1;    // the map's alpha maps weight the layers (layer 0 takes the rest)
     constexpr uint32_t kReflective = 2;  // layer 0 is a cube map (not in the table: drawn as its neighbours)
@@ -81,6 +85,8 @@ namespace SXC::Ground {
         float ambient[3] = {};   // the ambient (v25),
         float diffuse[3] = {};   // the sun's diffuse colour (v26)
         float specular[4] = {};  // the sun's highlight colour and exponent (v27; colour 0 with terrain specular off)
+        uint32_t coverPainted = 0, coverLooks = 0;   // Entry's
+        float liquid = -100000.0f;
     };
     void NoteChunk(const CMapRenderChunk* chunk, const Note& note);
 

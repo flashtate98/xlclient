@@ -61,6 +61,45 @@ layout(std140, set = 1, binding = 0) uniform Regs {
 #if GROUND
 // 16's terrain blend: the terrain under the camera (built with GROUND where the device indexes per pixel).
 #include "Ground.glsl"
+// And the covers on its share as the terrain draws them (TerrainCover.glsl's Covers: painted covers, fallen snow, the
+// ground's wetness), from the covers' own set bound as set 4, flat (no tessellation on WMOs). Their inputs from the
+// terrain's table, set per pixel before Covers (WmoCoverInputs): the chunk's entries, liquid surface and corner; the
+// spot (world position, how much its surface faces up); the vertex colour's tint and the spot's height; how much the
+// maps' values belong to this surface (GroundMapsReach: fallen snow and moisture stop under a hill); the gradients.
+vec4  wmoCoverPainted = vec4(0.0), wmoCoverLooks = vec4(0.0), wmoCoverCorner = vec4(0.0);
+vec4  wmoCoverWorld = vec4(0.0), wmoCoverTint = vec4(0.5);
+float wmoCoverLiquid = -100000.0, wmoCoverReach = 1.0;
+vec2  wmoCoverDx = vec2(0.0), wmoCoverDy = vec2(0.0);
+#define COVER_SET      4
+#define COVER_WMO      1
+#define COVER_BINDLESS 1
+#define LAYERS         4
+#define COVER_PAINTED  wmoCoverPainted
+#define COVER_LOOKS    wmoCoverLooks
+#define COVER_LIQUID   wmoCoverLiquid
+#define COVER_CORNER   wmoCoverCorner
+#define COVER_WORLD    wmoCoverWorld
+#define COVER_TINT     wmoCoverTint
+#define COVER_REACH    wmoCoverReach
+#define COVER_UV_DX    wmoCoverDx
+#define COVER_UV_DY    wmoCoverDy
+#include "TerrainCover.glsl"
+
+// The inputs for the terrain chunk `entry` at world position `world` (`up`: how much the surface faces up; `tint`: the
+// terrain's vertex colour there; `dxy`: the position's screen derivatives; `ceiling`: the nearness blend's).
+void WmoCoverInputs(int entry, vec3 world, float up, vec3 tint, vec2 dx, vec2 dy, float ceiling)
+{
+    uvec4 c = groundChunks[entry].covers;
+    wmoCoverPainted = vec4(uvec4(c.x, c.x >> 8, c.x >> 16, c.x >> 24) & 0xFFu);
+    wmoCoverLooks = vec4(uvec4(c.y, c.y >> 8, c.y >> 16, c.y >> 24) & 0xFFu);
+    wmoCoverLiquid = uintBitsToFloat(c.z);
+    wmoCoverCorner = vec4(groundChunks[entry].place.xy, 0.0, 0.0);
+    wmoCoverWorld = vec4(world, up);
+    wmoCoverTint = vec4(tint, world.z);
+    wmoCoverReach = GroundMapsReach(world, ceiling);
+    wmoCoverDx = -dx.yx * cover.tuning.y;
+    wmoCoverDy = -dy.yx * cover.tuning.y;
+}
 #endif
 
 // Parallax (22): the view in the surface's tangent space, as retail's MapObjParallax vertex shader computes it
@@ -184,6 +223,7 @@ void main()
     float terrainShare = 0.0;
     vec3 terrainMaterial = vec3(0.0);
     float terrainGloss = 0.0;
+    float terrainWet = 0.0;
 #endif
     vec4 t0 = texture(s0, inTex0);
     vec3 material = t0.rgb;
@@ -265,14 +305,32 @@ void main()
 #if GROUND
         int debugView = int(pc.xform[2].x + 0.5);
         float share = groundShare, proximity = groundProximity;   // from the top
-        vec3 terrain;
+        vec3 terrain, tint;
         float gloss;
         int entry;
-        bool found = GroundColour(groundXy, groundDx, groundDy, debugView, terrain, gloss, entry);
+        vec4 weights;
+        bool found = GroundColour(groundXy, groundDx, groundDy, debugView, terrain, gloss, entry, weights, tint);
+
+        // The covers on it as on the terrain (painted covers, fallen snow, wetness; flat), then twice the vertex colour.
+        CoverResult covered;
+        covered.c = vec4(terrain, gloss);
+        covered.wet = 0.0;
+
+        if (found && debugView < 4)
+        {
+            WmoCoverInputs(entry, groundWorld, groundNormal.z, tint, groundDx, groundDy, pc.xform[3].z);
+            covered = Covers(vec4(terrain, gloss), weights, vec3(1.0), true);
+            terrain = covered.c.rgb * 2.0 * tint;
+            gloss = covered.c.a;
+        }
 
         if (debugView == 7)
         {
             material = vec3(proximity);                                          // the proximity share alone
+        }
+        else if (debugView == 8)
+        {
+            material = vec3(covered.wet);                                         // the ground's wetness
         }
         else if (debugView == 1 || debugView >= 4)
         {
@@ -290,6 +348,7 @@ void main()
         {
             // Mixed after the light (below): the WMO's share lit as the WMO, the terrain's as the terrain.
             terrainShare = share;
+            terrainWet = covered.wet;
             terrainMaterial = terrain;
             terrainGloss = gloss;
         }
@@ -336,12 +395,12 @@ void main()
         vec3 room = texture(s10, (inTex0 - shift * pc.xform[0].y) * pc.xform[3].xy + pc.xform[3].zw).rgb;
         // How the glass sits over what's behind it (Wmo/ParallaxGlassMode, retail's unknown): 0 its alpha covers
         // (retail's parallax), 1 its alpha is how much shows through, 2 the glass added over all of it.
-        float cover = glassMode == 0 ? glass.a : glassMode == 1 ? 1.0 - glass.a : 0.0;
-        float through = glassMode == 2 ? 1.0 : 1.0 - cover;
+        float glassCover = glassMode == 0 ? glass.a : glassMode == 1 ? 1.0 - glass.a : 0.0;
+        float through = glassMode == 2 ? 1.0 : 1.0 - glassCover;
         float glowShare = clamp(pc.xform[0].w, 0.0, 1.0);
         vec3 roomSeen = room * (1.0 - curtain) * through;
-        material = (glassMode == 2 ? glass.rgb : glass.rgb * cover) + fabric * curtain * through + roomSeen * (1.0 - glowShare);
-        added = roomSeen * pc.xform[0].w + texture(s1, inTex1).rgb * (glassMode == 2 ? glass.a : cover);
+        material = (glassMode == 2 ? glass.rgb : glass.rgb * glassCover) + fabric * curtain * through + roomSeen * (1.0 - glowShare);
+        added = roomSeen * pc.xform[0].w + texture(s1, inTex1).rgb * (glassMode == 2 ? glass.a : glassCover);
         alpha = inColor.a;
     }
     else if (kShader == 23)
@@ -403,10 +462,11 @@ void main()
 #if GROUND
     // 16: the terrain's share as the terrain draws itself (Terrain.frag: the layers x the shadow's 0.7..1 x twice its
     // light x the vertex colour, terrainMaterial carrying twice the vertex colour already; plus the sun's highlight in
-    // the layers' gloss where unshadowed, untinted).
+    // the layers' gloss where unshadowed, untinted, and the wet shine on top of it).
     if (kShader == 16 && terrainShare > 0.0)
     {
-        vec3 highlight = terrainGloss * GroundHighlight(inView, groundNormal) * sunShadow;
+        vec3 highlight = (terrainGloss * GroundHighlight(inView, groundNormal) + GroundWetShine(inView, groundNormal, terrainWet, terrainGloss)) *
+                         sunShadow;
         colour = mix(colour, groundLit * shade * terrainMaterial + highlight, terrainShare);
     }
 #endif

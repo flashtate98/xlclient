@@ -491,6 +491,17 @@ static void SxcNoteGround(CMapRenderChunk* chunk) {
     note.specular[2] = specular ? consts.m_sunSpecular.z : 0.0f;
     note.specular[3] = consts.m_sunSpecularW;
 
+    // The covers' entries this draw set (SXC::Cover::BeforeChunkDraw, just before): a byte per layer.
+    const float* covers = SXC::Cover::LastChunkConstants();
+
+    for (uint32_t l = 0; l < 4; l++) {
+        const float painted = covers[l], look = covers[4 + l];
+        note.coverPainted |= (painted >= 1.0f && painted <= 255.0f ? static_cast<uint32_t>(painted) : 0u) << (8 * l);
+        note.coverLooks |= (look >= 1.0f && look <= 255.0f ? static_cast<uint32_t>(look) : 0u) << (8 * l);
+    }
+
+    note.liquid = covers[9];   // 0 without covers (then unused: the covers are off)
+
     for (uint32_t i = 0; i < layers; i++) {
         CMapRenderChunkLayer& layer = SxcLayerParams(chunk->m_layers[i]);
         const bool reflective = i == 0 && (chunk->m_renderFlags & 0x4);

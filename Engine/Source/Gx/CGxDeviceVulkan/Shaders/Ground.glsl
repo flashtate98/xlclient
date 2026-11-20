@@ -11,6 +11,8 @@ struct GroundChunk {
     uvec4 layerTex;      // texture slots + 1 (0: none)
     uvec4 heightTex;
     uvec4 misc;          // the alpha map's slot + 1, the layer count, flags (1 big alpha, 2 layer 0 reflective)
+    uvec4 covers;        // the covers' entries as the terrain draws it (p11, p12: a byte per layer): painted, fallen-snow
+                         // looks; its liquid surface (p13.y, float bits)
 };
 
 layout(std430, set = 2, binding = 1) readonly buffer GroundTable {
@@ -138,6 +140,27 @@ float GroundProximity(vec3 world, float above, float ceiling)
                     : 1.0 - smoothstep(max(ceiling - 0.5, 0.0), max(ceiling, 1e-3), -d);
 }
 
+// How much the ground maps' values at xy (the fields' moisture, later snow: one value per spot, for the terrain's
+// surface there) belong to a surface at `world`: all where it lies at or above the terrain or just under it, none
+// under terrain more than `ceiling` yd higher (fading over its last half yard): a tunnel under a hill isn't the
+// rained-on hillside. Over holes too (the terrain's height there as its mesh would lie); 1 where there's no chunk.
+float GroundMapsReach(vec3 world, float ceiling)
+{
+    ivec2 c = ivec2(floor((vec2(groundGrid.y) - world.xy) / groundGrid.x)) - groundWindow.xy;
+
+    if (any(lessThan(c, ivec2(0))) || any(greaterThanEqual(c, ivec2(groundWindow.z))) || groundCells[c.y * groundWindow.z + c.x] == 0u)
+    {
+        return 1.0;
+    }
+
+    uvec3 at;
+    vec3 w;
+    bool hole;
+    GroundTriangle(world.xy, c, at, w, hole);
+    float z = groundHeights[at.x] * w.x + groundHeights[at.y] * w.y + groundHeights[at.z] * w.z;
+    return 1.0 - smoothstep(max(ceiling - 0.5, 0.0), max(ceiling, 1e-3), z - world.z);
+}
+
 layout(set = 2, binding = 2) uniform sampler2D groundTex[2048];
 
 // A view-space position of the world scene in the world.
@@ -169,6 +192,22 @@ vec3 GroundHighlight(vec3 viewPos, vec3 n)
     return pow(max(dot(h, n), 0.0), max(groundLight[3].w, 1.0)) * groundLight[3].xyz;
 }
 
+// The wet shine on top of it (TerrainCover.glsl's CoverWetShine: the exponent sharpened by the wetness, by the gloss
+// made stronger by it, beyond the dry gloss), untinted like the highlight. Nothing dry or with terrain specular off.
+vec3 GroundWetShine(vec3 viewPos, vec3 n, float wet, float gloss)
+{
+    if (wet <= 0.0 || all(equal(groundLight[3].xyz, vec3(0.0))))
+    {
+        return vec3(0.0);
+    }
+
+    vec3 toEye = normalize(GroundDirToWorld(-viewPos));
+    vec3 h = normalize(toEye + groundLight[0].xyz);
+    float e = max(groundLight[3].w, 1.0) * (1.0 + 3.0 * wet);
+    float mask = clamp(gloss * (1.0 + 2.0 * wet), 0.0, 1.0) - gloss;
+    return pow(max(dot(h, n), 0.0), e) * max(mask, 0.0) * groundLight[3].xyz;
+}
+
 // The window cell at world xy, and the entry of its chunk, or -1 (outside the window, or a chunk not drawn yet).
 int GroundChunkAt(vec2 xy, out ivec2 c)
 {
@@ -190,13 +229,17 @@ vec4 GroundSample(uint slot, vec2 uv, vec2 dx, vec2 dy, vec4 none)
 // The terrain's colour at world xy (its screen derivatives dx, dy taken by the caller in uniform control flow):
 // the coordinates as the terrain's vertex shader makes them ((world.yx - the chunk's position.yx) x the scale.yx,
 // TerrainRegs.glsl), the weights as CoverLayerWeights, by the layers' heights as HeightWeights where they have any.
-// False where there's no chunk.
+// False where there's no chunk. The colour is untinted: `tint` is the vertex colour (0.5 neutral) the caller multiplies
+// in twice, after the covers (which take it out of their own looks, TerrainCover.glsl's CoverLook); `weights` the
+// layers' final weights.
 // `view` (Wmo/TerrainBlendDebug): 4 the alpha map (layers 1..3 in r, g, b), 5 the final weights (layer 0 red,
 // 1 green, 2 blue, 3 yellow), 6 the vertex colour (0.5 grey neutral); else the colour.
-bool GroundColour(vec2 xy, vec2 dx, vec2 dy, int view, out vec3 colour, out float gloss, out int entry)
+bool GroundColour(vec2 xy, vec2 dx, vec2 dy, int view, out vec3 colour, out float gloss, out int entry, out vec4 weights, out vec3 tint)
 {
     colour = vec3(0.0);
     gloss = 0.0;
+    weights = vec4(0.0);
+    tint = vec3(0.5);
     ivec2 cell;
     entry = GroundChunkAt(xy, cell);
 
@@ -262,19 +305,15 @@ bool GroundColour(vec2 xy, vec2 dx, vec2 dy, int view, out vec3 colour, out floa
     }
 
     w /= max(dot(w, vec4(1.0)), 1e-5);
+    weights = w;
     vec4 mixed = layer[0] * w.x + layer[1] * w.y + layer[2] * w.z + layer[3] * w.w;
     gloss = mixed.a;
-    colour = view == 6 ? ((g.misc.z & 4u) != 0u ? GroundVertexColour(xy, cell) : vec3(0.5))
+    // The vertex colours tint it as they scale the terrain's light (0.5 neutral: x 2), where the map's vertices
+    // carry them (else 0.5, as our terrain shader's kVertexColor).
+    tint = (g.misc.z & 4u) != 0u ? GroundVertexColour(xy, cell) : vec3(0.5);
+    colour = view == 6 ? tint
            : view == 4 ? alpha.rgb
            : view == 5 ? vec3(1.0, 0.0, 0.0) * w.x + vec3(0.0, 1.0, 0.0) * w.y + vec3(0.0, 0.0, 1.0) * w.z + vec3(1.0, 1.0, 0.0) * w.w
                        : mixed.rgb;
-
-    // The vertex colours tint it as they scale the terrain's light (0.5 neutral: x 2), where the map's vertices
-    // carry them (else 0.5, as our terrain shader's kVertexColor).
-    if (view < 4 && (g.misc.z & 4u) != 0u)
-    {
-        colour *= 2.0 * GroundVertexColour(xy, cell);
-    }
-
     return true;
 }

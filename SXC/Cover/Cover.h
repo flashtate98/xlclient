@@ -138,6 +138,10 @@ namespace SXC::Cover {
     // textures the chunk shows.
     void BeforeChunkDraw(CMapRenderChunk* chunk);
 
+    // The constants the last BeforeChunkDraw set (c11..c13, 12 floats; zeros without covers): the terrain's table
+    // keeps them per chunk (SXC::Ground; WMO shader 16 draws the covers on its terrain share from them).
+    const float* LastChunkConstants();
+
     // The steady ground wind the mod sent with the look (0 calm .. 1 strong; 0 without covers or from
     // an older mod): covers level sooner in it (the terrain shader's pattern fade).
     float SteadyWind();

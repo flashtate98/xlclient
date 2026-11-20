@@ -763,6 +763,8 @@ namespace SXC::Cover {
         return s_haveLook && s_look.enabled ? std::fmax(s_look.steady_wind, 0.0f) : 0.0f;
     }
 
+    static float s_lastConstants[12] = {};   // LastChunkConstants
+
     void BeforeChunkDraw(CMapRenderChunk* rc) {
         float constants[12] = {};
 
@@ -853,5 +855,10 @@ namespace SXC::Cover {
         }
 
         GxShaderConstantsSet(GxSh_Pixel, 11, constants, 3);
+        std::memcpy(s_lastConstants, constants, sizeof constants);
+    }
+
+    const float* LastChunkConstants() {
+        return s_lastConstants;
     }
 }

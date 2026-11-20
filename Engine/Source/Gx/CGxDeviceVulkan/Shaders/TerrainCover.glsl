@@ -5,7 +5,11 @@
 // terrain is tessellated (Terrain.tese); the look (Terrain.frag) follows the same rules.
 //
 // Included by Terrain.frag (everything) and Terrain.tese (COVER_DEPTH_ONLY: the height). The includer
-// declares `regs` first and defines LAYERS.
+// declares `regs` first and defines LAYERS. Wmo.frag includes it too (COVER_WMO: 16's terrain share, from
+// its set 4, COVER_SET; the terrain's 2): without the terrain's varyings, the surface grid and depth writes,
+// the wet shine and the debug views, and with the chunk's inputs from the terrain's table in place of the
+// terrain's registers and varyings (the COVER_* macros below; COVER_REACH scales the maps' fallen snow and
+// moisture, COVER_UV_DX / _DY give the cover textures' gradients).
 //
 // Pixel registers (set per chunk by SXC::Cover::BeforeChunkDraw): p11 each layer's painted entry, p12
 // each layer's fallen-snow look (entry indices as floats, 0 = none), p13.x whether the chunk is raised,
@@ -18,8 +22,21 @@
 #ifndef LAYERS
 #define LAYERS 1
 #endif
+#ifndef COVER_SET
+#define COVER_SET 2
+#endif
+// The chunk's inputs: each layer's painted entry and fallen-snow look, its liquid surface, its corner; the
+// spot's world position (w how much it faces up) and tint (the vertex colour's factor; w the ground's height).
+#ifndef COVER_PAINTED
+#define COVER_PAINTED regs.p[11]
+#define COVER_LOOKS   regs.p[12]
+#define COVER_LIQUID  regs.p[13].y
+#define COVER_CORNER  regs.v[23]
+#define COVER_WORLD   coverWorld
+#define COVER_TINT    coverTint
+#endif
 
-layout(std140, set = 2, binding = 0) uniform CoverBlock {
+layout(std140, set = COVER_SET, binding = 0) uniform CoverBlock {
     vec4 enable;      // on, debug view, wet darkening, plain brightness
     vec4 nearMap;     // cell (yd), size, first i, first j
     vec4 farMap;
@@ -44,10 +61,10 @@ layout(std140, set = 2, binding = 0) uniform CoverBlock {
     vec4 entries[127 * 5];
 } cover;
 
-layout(set = 2, binding = 1) uniform sampler2D sCoverNear;
-layout(set = 2, binding = 2) uniform sampler2D sCoverFar;
-layout(set = 2, binding = 3) uniform sampler2D sTrailFine;    // per cell: pressed to (world z; 1e6 untouched), when, rim strength, when
-layout(set = 2, binding = 4) uniform sampler2D sTrailCoarse;
+layout(set = COVER_SET, binding = 1) uniform sampler2D sCoverNear;
+layout(set = COVER_SET, binding = 2) uniform sampler2D sCoverFar;
+layout(set = COVER_SET, binding = 3) uniform sampler2D sTrailFine;    // per cell: pressed to (world z; 1e6 untouched), when, rim strength, when
+layout(set = COVER_SET, binding = 4) uniform sampler2D sTrailCoarse;
 
 const uint kCoverPreventUnderwater = 1u;
 const uint kCoverPreventOnLand     = 2u;
@@ -227,12 +244,16 @@ CoverSpot CoverEvaluate(vec2 xy, float groundZ, float up, vec4 w)
 {
     CoverSpot s;
     s.g = CoverGround(xy);
+#ifdef COVER_REACH
+    s.g.x *= COVER_REACH;
+    s.g.z *= COVER_REACH;
+#endif
 
     // The water line: the near map's (each spot's own or nearest water), else the chunk's liquid surface
     // (p13.y: the lowest top of its liquids; kCoverNoWater without), so nothing settles on far sea beds.
     if (s.g.w <= kCoverNoWater + 1.0)
     {
-        s.g.w = regs.p[13].y;
+        s.g.w = COVER_LIQUID;
     }
 
     s.under = s.g.w - groundZ;
@@ -253,7 +274,7 @@ CoverSpot CoverEvaluate(vec2 xy, float groundZ, float up, vec4 w)
     int entries = int(cover.tuning2.w + 0.5);
 
     // The painted covers: each layer's entry by its weight here.
-    ivec4 painted = ivec4(regs.p[11] + 0.5);
+    ivec4 painted = ivec4(COVER_PAINTED + 0.5);
     float depth = 0.0, zOffset = 0.0, maxSlope = 0.0, slopeFade = 0.0, breakup = 0.0, driftAmount = 0.0, strongest = 0.0;
     vec3 paintedTrail = vec3(0.0), snowTrail = vec3(0.0, 0.3, 30.0);   // stiffness, rim, relax
 
@@ -312,7 +333,7 @@ CoverSpot CoverEvaluate(vec2 xy, float groundZ, float up, vec4 w)
     // the thin depth on, patchy before.
     if (cover.tuning2.z > 0.5 && s.g.x > 0.0005)
     {
-        ivec4 looks = ivec4(regs.p[12] + 0.5);
+        ivec4 looks = ivec4(COVER_LOOKS + 0.5);
         float lw = 0.0, sMax = 0.0, sFade = 0.0, sBreak = 0.0, sDrift = 0.0, sWet = 0.0;
         vec3 sTrail = vec3(0.0);
 
@@ -493,26 +514,27 @@ float CoverHeight(vec2 xy, float groundZ, float up, vec4 w)
 // The cover textures: one array indexed per pixel (COVER_BINDLESS: a Vulkan 1.2 device with non-uniform
 // indexing), else 16 slots the client gives to the textures in view.
 #if COVER_BINDLESS
-layout(set = 2, binding = 7) uniform sampler2D sCoverTex[1024];
+layout(set = COVER_SET, binding = 7) uniform sampler2D sCoverTex[1024];
 #else
-layout(set = 2, binding = 7) uniform sampler2D sCoverTex1;
-layout(set = 2, binding = 8) uniform sampler2D sCoverTex2;
-layout(set = 2, binding = 9) uniform sampler2D sCoverTex3;
-layout(set = 2, binding = 10) uniform sampler2D sCoverTex4;
-layout(set = 2, binding = 11) uniform sampler2D sCoverTex5;
-layout(set = 2, binding = 12) uniform sampler2D sCoverTex6;
-layout(set = 2, binding = 13) uniform sampler2D sCoverTex7;
-layout(set = 2, binding = 14) uniform sampler2D sCoverTex8;
-layout(set = 2, binding = 15) uniform sampler2D sCoverTex9;
-layout(set = 2, binding = 16) uniform sampler2D sCoverTex10;
-layout(set = 2, binding = 17) uniform sampler2D sCoverTex11;
-layout(set = 2, binding = 18) uniform sampler2D sCoverTex12;
-layout(set = 2, binding = 19) uniform sampler2D sCoverTex13;
-layout(set = 2, binding = 20) uniform sampler2D sCoverTex14;
-layout(set = 2, binding = 21) uniform sampler2D sCoverTex15;
-layout(set = 2, binding = 22) uniform sampler2D sCoverTex16;
+layout(set = COVER_SET, binding = 7) uniform sampler2D sCoverTex1;
+layout(set = COVER_SET, binding = 8) uniform sampler2D sCoverTex2;
+layout(set = COVER_SET, binding = 9) uniform sampler2D sCoverTex3;
+layout(set = COVER_SET, binding = 10) uniform sampler2D sCoverTex4;
+layout(set = COVER_SET, binding = 11) uniform sampler2D sCoverTex5;
+layout(set = COVER_SET, binding = 12) uniform sampler2D sCoverTex6;
+layout(set = COVER_SET, binding = 13) uniform sampler2D sCoverTex7;
+layout(set = COVER_SET, binding = 14) uniform sampler2D sCoverTex8;
+layout(set = COVER_SET, binding = 15) uniform sampler2D sCoverTex9;
+layout(set = COVER_SET, binding = 16) uniform sampler2D sCoverTex10;
+layout(set = COVER_SET, binding = 17) uniform sampler2D sCoverTex11;
+layout(set = COVER_SET, binding = 18) uniform sampler2D sCoverTex12;
+layout(set = COVER_SET, binding = 19) uniform sampler2D sCoverTex13;
+layout(set = COVER_SET, binding = 20) uniform sampler2D sCoverTex14;
+layout(set = COVER_SET, binding = 21) uniform sampler2D sCoverTex15;
+layout(set = COVER_SET, binding = 22) uniform sampler2D sCoverTex16;
 #endif
 
+#if !COVER_WMO
 layout(location = 11) in vec4 coverWorld;   // world position (raised onto the covers), how much the terrain faces up
 layout(location = 12) in vec4 coverView;    // view position
 layout(location = 13) in vec4 coverNormal;  // view normal (not normalised)
@@ -522,14 +544,14 @@ layout(location = 14) in vec4 coverTint;    // the factor the vertex colour put 
 // back (units, the camera, effects at units' feet). Per cell: the surface's z, the cell's tag ((i &
 // 4095) * 4096 + (j & 4095): the client takes only a cell's own), the bare ground's z, 1. Only cells in
 // the window around the player (far terrain would wrap onto near cells).
-layout(set = 2, binding = 5, rgba32f) uniform writeonly image2D sCoverSurface;
+layout(set = COVER_SET, binding = 5, rgba32f) uniform writeonly image2D sCoverSurface;
 
 // The terrain's distance per pixel of the target (step 5e: the client's projected textures, Decal.frag,
 // project onto the raised covers through it): the nearest terrain pixel's view depth (its clip w, the
 // same under any projection's near and far and any viewport depth range) with its lowest bit taken for
 // "the cover is raised here", by an atomic minimum (a positive float's bits order like it; overdraw keeps
 // the nearest). Cleared to all ones each frame.
-layout(set = 2, binding = 6, r32ui) uniform coherent uimage2D sCoverDepth;
+layout(set = COVER_SET, binding = 6, r32ui) uniform coherent uimage2D sCoverDepth;
 
 void CoverWriteDepth(bool raised)
 {
@@ -590,6 +612,7 @@ void CoverWriteSurface(vec3 world, float groundZ)
     float tag = float((q.x & 4095) * 4096 + (q.y & 4095));
     imageStore(sCoverSurface, slot, vec4(surfaceZ, tag, middleGroundZ, 1.0));
 }
+#endif  // !COVER_WMO
 
 float CoverTexInfo(int t) { return cover.texInfo[(t - 1) >> 2][(t - 1) & 3]; }
 
@@ -647,7 +670,7 @@ vec4 CoverLook(int e, vec2 uv, vec2 dx, vec2 dy)
 
     if ((flags & kCoverUseVertexColor) == 0u)
     {
-        look.rgb *= min(vec3(0.5) / max(coverTint.rgb, vec3(0.02)), vec3(4.0));
+        look.rgb *= min(vec3(0.5) / max(COVER_TINT.rgb, vec3(0.02)), vec3(4.0));
     }
 
     return look;
@@ -684,11 +707,15 @@ CoverResult Covers(vec4 c, vec4 w, vec3 twice, bool litLayers)
         return r;
     }
 
-    vec2 xy = coverWorld.xy;
+    vec2 xy = COVER_WORLD.xy;
     // Tiled like the terrain's layers (8 repeats per chunk, the same orientation), from the chunk's corner.
-    vec2 uv = -(xy.yx - regs.v[23].yx) * cover.tuning.y;
+    vec2 uv = -(xy.yx - COVER_CORNER.yx) * cover.tuning.y;
+#ifdef COVER_UV_DX
+    vec2 dx = COVER_UV_DX, dy = COVER_UV_DY;
+#else
     vec2 dx = dFdx(uv), dy = dFdy(uv);
-    CoverSpot s = CoverEvaluate(xy, coverTint.w, coverWorld.w, w);
+#endif
+    CoverSpot s = CoverEvaluate(xy, COVER_TINT.w, COVER_WORLD.w, w);
     int entries = int(cover.tuning2.w + 0.5);
     r.under = s.under;
     r.painted = s.painted * (1.0 - coverPoke);
@@ -700,7 +727,7 @@ CoverResult Covers(vec4 c, vec4 w, vec3 twice, bool litLayers)
 
     if (s.covered > 0.0)
     {
-        ivec4 painted = ivec4(regs.p[11] + 0.5);
+        ivec4 painted = ivec4(COVER_PAINTED + 0.5);
 
         for (int l = 0; l < LAYERS; l++)
         {
@@ -727,7 +754,7 @@ CoverResult Covers(vec4 c, vec4 w, vec3 twice, bool litLayers)
 
     if (s.snow > 0.0)
     {
-        ivec4 looks = ivec4(regs.p[12] + 0.5);
+        ivec4 looks = ivec4(COVER_LOOKS + 0.5);
         float lw = 0.0;
         vec4 sLook = vec4(0.0);
 
@@ -791,6 +818,8 @@ CoverResult Covers(vec4 c, vec4 w, vec3 twice, bool litLayers)
     r.c.rgb *= 1.0 - cover.enable.z * r.wet;
     return r;
 }
+
+#if !COVER_WMO
 
 // The wet shine (WXL's cover: a stronger, tighter highlight): per pixel, the sun's Blinn-Phong with the
 // exponent sharpened by the wetness, by the gloss made stronger by it. Nothing while the stock highlight
@@ -881,4 +910,5 @@ vec3 CoverDebug(CoverResult r, int view)
     float far = cover.tuning.w > 0.5 ? k : 0.0;
     return mix(mix(vec3(0.3), vec3(0.1, 0.2, 1.0), far), vec3(0.1, 0.9, 0.1), near);
 }
+#endif  // !COVER_WMO
 #endif
