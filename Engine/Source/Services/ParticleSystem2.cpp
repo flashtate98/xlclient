@@ -783,7 +783,9 @@ void CParticleEmitter2::FillOutParticleVertex(void* buffer, EGxVertexBufferForma
     vertex->m_position = static_cast<uint8_t*>(buffer) + GxVertexAttribOffset(format, GxVA_Position);
     vertex->m_positionStride = stride;
 
-    // FlashWOW: a lit two-layer emitter uses PCT2, which has no normal; writing one ran past the buffer.
+    // SXC: only where the format has a normal. A lit emitter with a second texture (FlashWOW's two layers) takes
+    // PCT2, which has none: the normal's offset there is -1, and the first vertex wrote 4 GB past the buffer
+    // (Seyri, 2026-11-18, the Zuldazar swamp trees). Lit two-layer particles go without the normal.
     if ((this->m_params.m_materialFlags & 0x1) && format != GxVBF_PCT2) {
         vertex->m_normalStride = stride;
         vertex->m_normal = static_cast<uint8_t*>(buffer) + GxVertexAttribOffset(format, GxVA_Normal);

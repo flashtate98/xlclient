@@ -590,13 +590,18 @@ void main()
 
     // The mirror (SXC/View, kb: second-camera): the world drawn again from the camera mirrored at this
     // water's height, as the screen lies, so it is read where the pixel is, moved by the waves' tilt as the
-    // scene behind is. Only on water at the mirror's height (other waters take the screen-space reflection).
+    // scene behind is. Only on water at the mirror's height (other waters take the screen-space reflection),
+    // and faded in while that water is far off (no pop as you come closer: Seyri, 2026-11-05).
     float mirrorShare = 0.0;
     vec3 mirrorColour = vec3(0.0);
 
     if (!below && scene.mirror.x > 0.5)
     {
-        mirrorShare = 1.0 - smoothstep(0.75, 2.0, abs(world.z - scene.mirror.y));
+        // Its still surface against the plane, closely: a river running downhill took the mirror over yards
+        // of height around the plane, a plane up to 2 yd off its surface that showed the terrain's and models'
+        // undersides looking flat along it (Seyri, 2026-11-13).
+        float stillZ = regs.p[14].w > 0.5 ? world.z - RiseHere(world) : world.z;
+        mirrorShare = (1.0 - smoothstep(0.2, 0.6, abs(stillZ - scene.mirror.y))) * clamp(scene.mirror.z, 0.0, 1.0);
 
         if (mirrorShare > 0.0)
         {
@@ -837,6 +842,17 @@ void main()
     {
         // The surface movement's easing from the depth byte: black still (the shore), white moving fully.
         fogged = vec3(vEase);
+    }
+    else if (debugView == 16)
+    {
+        // The scene copy against this surface: green where it lies behind (right), red where it holds the
+        // same depth (the water itself in the copy), blue in front, magenta not a number.
+        float copied = textureLod(sceneW, here, 0.0).r;
+        float gap = copied - vView.w;
+        fogged = isnan(copied) ? vec3(1.0, 0.0, 1.0)
+               : gap > 0.05 ? vec3(0.0, 1.0, 0.0)
+               : gap < -0.05 ? vec3(0.0, 0.0, 1.0)
+                             : vec3(1.0, 0.0, 0.0);
     }
     else if (debugView == 15)
     {

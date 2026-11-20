@@ -28,6 +28,9 @@
 #include "Engine/Source/Os/OsMemory.h"
 #include "SXC/Log.h"  // SXC:
 #if defined(WOWDECOMP_RETAIL_MODELS)
+#include <mutex>
+#include <string>
+#include <unordered_map>
 #include "Engine/Source/Retail/LocalSource.h"
 #include "Engine/Source/Retail/RetailModel.h"
 #endif
@@ -69,6 +72,80 @@ public:
 
 static bool IsRetailModel(const char* fileName) {
     return Retail::Source().Handles(fileName);
+}
+
+// Whether the client has the shader file `Shaders\<kind>\<profile>\<name>.bls` in a profile the engine
+// loads (3_0, or 2_0 it falls back to): retail's shaders past 3.3.5's come from Cataclysm's files, deployed
+// loose by Tools/VulkanShaders --cata, and may be absent. Asked once per name.
+static bool HaveShader(const char* kind, const char* name) {
+    static std::mutex lock;
+    static std::unordered_map<std::string, bool> known;
+    const std::string key = std::string(kind) + '\\' + name;
+    std::lock_guard<std::mutex> guard(lock);
+    auto it = known.find(key);
+    if (it != known.end()) return it->second;
+    const char* prefix = kind[0] == 'V' ? "vs" : "ps";
+    bool found = false;
+    for (const char* profile : {"3_0", "2_0"}) {
+        char path[260];
+        std::snprintf(path, sizeof(path), "Shaders\\%s\\%s_%s\\%s.bls", kind, prefix, profile, name);
+        if (SFile::FileExistsEx(path, 0)) {
+            found = true;
+            break;
+        }
+    }
+    known.emplace(key, found);
+    return found;
+}
+
+void M2RetailBatchShaders(const M2Batch* batch, const char** vertex, const char** pixel, char* name, size_t size, bool* cataFiles) {
+    const uint16_t index = batch->m_shader & Retail::kRetailIndexMask;
+    const Retail::RetailShader& real = Retail::RetailPackedShader(index);
+    const bool present = real.vertex && HaveShader("Vertex", real.vertex) && HaveShader("Pixel", real.pixel);
+    *vertex = real.vertex;
+    *pixel = real.pixel;
+    int length = 0;
+
+    if (cataFiles) {
+        // Retail's shaders past 0x8002 include at least one of Cataclysm's files (0x8000..0x8002 are 3.3.5's own).
+        *cataFiles = present && !real.unavailable && batch->m_textureCount >= real.textures && index > 2;
+    }
+
+    if (name) {
+        length = !real.vertex
+            ? std::snprintf(name, size, "Retail 0x%04X (not in Cataclysm's table)", Retail::RetailPackedId(batch->m_shader))
+            : real.nameUnknown
+            ? std::snprintf(name, size, "Retail 0x%04X (past Cataclysm's table) %s / %s", Retail::RetailPackedId(batch->m_shader), real.vertex, real.pixel)
+            : std::snprintf(name, size, "Retail 0x%04X %s / %s", Retail::RetailPackedId(batch->m_shader), real.vertex, real.pixel);
+    }
+
+    if (present && !real.unavailable && batch->m_textureCount >= real.textures) {
+        return;
+    }
+
+    const Retail::RetailShader* standIn = batch->m_textureCount < real.standInTextures ? &Retail::RetailFirstTextureStandIn() : &real;
+    *vertex = standIn->standInVertex;
+    *pixel = standIn->standInPixel;
+
+    if (!name) {
+        return;
+    }
+
+    char reason[256] = "";
+
+    if (real.vertex && batch->m_textureCount < real.textures) {
+        std::snprintf(reason, sizeof(reason), "only %u texture(s); ", static_cast<unsigned>(batch->m_textureCount));
+    } else if (real.unavailable) {
+        std::snprintf(reason, sizeof(reason), "needs %s; ", real.unavailable);
+    } else if (real.vertex && !present) {
+        std::snprintf(reason, sizeof(reason), "its shaders aren't deployed (Tools/VulkanShaders --cata); ");
+    }
+
+    if (standIn->missing) {
+        std::snprintf(name + length, size - length, " [WIP: %swithout %s; drawn as %s / %s]", reason, standIn->missing, *vertex, *pixel);
+    } else {
+        std::snprintf(name + length, size - length, " [WIP: %sdrawn as %s / %s]", reason, *vertex, *pixel);
+    }
 }
 #endif
 
@@ -776,17 +853,23 @@ CShaderEffect* CM2Shared::GetEffect(M2Batch* batch) {
     CShaderEffect* effect;
 
 #if defined(WOWDECOMP_RETAIL_MODELS)
-    // Not in the original: two-texture Retail combiners the adapter maps to stock shader pairs.
-    if ((batch->m_shader == 0x8011 || batch->m_shader == 0x8012) && IsRetailModel(this->m_fileName)) {
-        const bool mod2x = batch->m_shader == 0x8011;
-        const char* name = mod2x ? "Retail_Mod_Mod2x_T1_T2" : "Retail_Mod_Mod_T1_T2";
+    // Not in the original: a retail packed shader (tagged by Retail::PrepareSkin, or for a 3.3.5-format
+    // model by InitializeSkinProfile) gets an effect named after retail's shaders, drawn with them where
+    // the client has them (3.3.5's own, or Cataclysm's: Tools/VulkanShaders --cata). Otherwise the effect is
+    // an explicitly unfinished stand-in, and its name says what draws it and what is missing, so the
+    // Batches panel shows the truth.
+    if (Retail::IsRetailPacked(batch->m_shader)) {
+        const char* vertex;
+        const char* pixel;
+        char name[512];
+        M2RetailBatchShaders(batch, &vertex, &pixel, name, sizeof(name));
 
         if (CShaderEffect* existing = CShaderEffectManager::GetEffect(name)) {
             return existing;
         }
 
         effect = CShaderEffectManager::CreateEffect(name);
-        effect->InitEffect("Diffuse_T1_T2", mod2x ? "Combiners_Mod_Mod2x" : "Combiners_Mod_Mod");
+        effect->InitEffect(vertex, pixel);
         return effect;
     }
 #endif
@@ -1267,7 +1350,29 @@ int32_t CM2Shared::InitializeSkinProfile() {
     if (!IsRetailModel(this->m_fileName))
 #endif
     {
+#if defined(WOWDECOMP_RETAIL_MODELS)
+        // Not in the original: a 3.3.5-format model may carry retail's packed ids, kept by a retroport.
+        // 3.3.5 stores none (it makes 0x8000..0x8003 itself, in SubstituteSpecializedShaders, numbered one
+        // off from retail; of 27,055 stock skins only an orphan one, M2512E00.skin with no model, stores
+        // one), so a stored packed id is retail's: tagged and drawn as retail models draw it. The layer
+        // merging packs two texture slots and would mangle the tagged batches' texture runs, so a model
+        // with any is drawn unmerged.
+        bool retailIds = false;
+
+        for (uint32_t i = 0; i < this->m_skinData->m_batches.m_count; i++) {
+            M2Batch* batch = &this->m_skinData->m_batches[i];
+            const uint16_t index = batch->m_shader & 0x7FFF;
+
+            if ((batch->m_shader & 0x8000) && index <= Retail::kRetailIndexMask) {
+                batch->m_shader = static_cast<uint16_t>(Retail::kRetailPackedTag | index);
+                retailIds = true;
+            }
+        }
+#endif
         this->SubstituteSimpleShaders();
+#if defined(WOWDECOMP_RETAIL_MODELS)
+        if (!retailIds)
+#endif
         this->SubstituteSpecializedShaders();
     }
 
@@ -1843,7 +1948,10 @@ int32_t CM2Shared::Initialize() {
     for (uint32_t i = 0; i < this->m_data->m_materials.m_count; i++) {
         M2Material* material = &this->m_data->m_materials[i];
 
-        if (material->m_blendMode >= M2BLEND_MOD) {
+        // SXC: not blend add (7, WarcraftXL's), which retail lights like any other batch unless the
+        // material says unlit (WebWowViewerCpp's m2 shader); unlit, the infernal's fel glow shone at full
+        // strength in the dark.
+        if (material->m_blendMode >= M2BLEND_MOD && material->m_blendMode != M2BLEND_BLEND_ADD) {
             material->m_flags |= 1;
         }
     }

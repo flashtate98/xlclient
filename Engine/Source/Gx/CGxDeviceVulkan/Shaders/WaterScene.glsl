@@ -27,5 +27,5 @@ layout(std140, set = 2, binding = 2) uniform WaterScene {
     // 24, the fog ring at the horizon, the nadir.
     vec4 domeRows[2];
     vec4 domeColour[122];
-    vec4 mirror;      // the world drawn mirrored at the water (SXC/View; binding 9): x 1 when drawn this frame, y its plane (world z)
+    vec4 mirror;      // the world drawn mirrored at the water (SXC/View; binding 9): x 1 when drawn this frame, y its plane (world z), z its share (fading in)
 } scene;

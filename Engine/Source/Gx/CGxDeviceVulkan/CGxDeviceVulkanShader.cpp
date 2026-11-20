@@ -25,7 +25,9 @@
 #include "SXC/Settings/Settings.h"  // SXC: [Terrain] OurShader
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"  // SXC: our terrain shader's covers
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Lights.hpp" // SXC: and its point lights
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/WmoExtra.hpp" // SXC: our WMO shader's extra vertex data
 #include "SXC/Lights/Lights.h"
+#include "SXC/Wmo/Wmo.h"  // SXC: our WMO shader's seam
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Frame.hpp"  // SXC:
 
 namespace {
@@ -175,6 +177,7 @@ namespace {
     };
     std::unordered_map<const CGxShader*, TerrainDecode> g_terrainDecodes;
     uint64_t g_terrainDraws = 0, g_terrainStock = 0;
+    uint64_t g_wmoDraws = 0;   // SXC: our WMO shader's draws
 
     // "Family:n" -> family, n (n = 0 when the name has no permutation).
     bool SplitName(const char* name, char* family, size_t size, uint32_t& n) {
@@ -529,12 +532,78 @@ uint32_t CGxDeviceVulkan::IShaderPrograms(pipelines::Draw& draw) {
         }
     }
 
+    // SXC: our WMO shader (Shaders/Wmo.vert, Wmo.frag; kb: our-shaders) for a unified WMO batch it covers,
+    // when Wmo/OurShader is on. The batch's shader id comes from SXC::Wmo (CMapObj::UnifiedRender); lit from
+    // the vertex record's permutation (MapObjU*:n, n = lit + 2 (fog + 15 shadow), CMapObj::SelectWorldShaders),
+    // the shadow mode from the pixel record's (m mod 4: CShaderEffect::SelectShadowShader; the vertex side
+    // stops at 2). It reads the lights' set 3 and the vertex registers up to the shadow matrices (c235).
+    uint32_t wmoShader = 0, wmoBlend = 0;
+    const void* wmoGroup = nullptr;
+    if (vsTranslated && psTranslated && SXC::Wmo::OurShader() && SXC::Wmo::Drawing(wmoShader, wmoBlend, wmoGroup) && SXC::Wmo::Covers(wmoShader)
+        && gxvk::vk::lights::Ready() && gxvk::vk::wmoextra::Ready()) {
+        const CGxShader* vsShader = static_cast<const CGxShader*>(this->m_appRenderStates[GxRs_VertexShader].m_value.m_data.p);
+        const CGxShader* psShader = static_cast<const CGxShader*>(this->m_appRenderStates[GxRs_PixelShader].m_value.m_data.p);
+        char vsFamily[64], psFamily[64];
+        uint32_t n = 0, m = 0;
+
+        if (SplitName(vsShader->m_key.m_str, vsFamily, sizeof(vsFamily), n) && SplitName(psShader->m_key.m_str, psFamily, sizeof(psFamily), m)
+            && !SStrCmpI(vsFamily, "MapObjU", 7) && !SStrCmpI(psFamily, "MapObj", 6) && n < 90) {
+            namespace wmo = pipelines::wmo;
+            draw.vertex = pipelines::VertexProgram::Wmo;
+            draw.fragment = pipelines::FragmentProgram::Wmo;
+            draw.vertexRecord = vs->record;
+            // The alpha key by the material's blend mode, not the draw's: a transition batch draws in two passes
+            // with blend modes 9 and 7 whatever the material's (Kul Tiras' roots kept their background there).
+            draw.wmoOptions = wmoShader | ((n & 1u) ? wmo::kLit : 0u) | ((m % 4u) << wmo::kShadowShift) |
+                              (wmoBlend == GxBlend_AlphaKey ? wmo::kAlphaKey : 0u);
+            draw.vertexRows = pipelines::kVertexRowsLarge;
+            // The group's extra vertex data (Vulkan/WmoExtra): where it starts, and whether it has any, in the
+            // push block's first column (Wmo.vert; translated pairs leave xform alone after this).
+            uint32_t extraIndex = 0;
+            const bool extra = gxvk::vk::wmoextra::Offset(wmoGroup, extraIndex);
+            draw.xform[0] = static_cast<float>(extraIndex);
+            draw.xform[1] = extra ? 1.0f : 0.0f;
+
+            // Parallax (22) reads no extra vertex data: the push block's four columns carry its parameters
+            // instead (retail's pc_genericParams[0..3], SXC::Wmo::ParallaxParams).
+            if (wmoShader == 22) {
+                SXC::Wmo::ParallaxParams(draw.xform);
+            } else if (wmoShader == 23) {
+                draw.xform[2] = static_cast<float>(SXC::Wmo::DrawingLayers());   // which layers and heights it has
+            } else if (wmoShader == 16) {
+                SXC::Wmo::TerrainBlendParams(draw.xform + 8);   // the terrain blend's settings (third and fourth columns)
+            }
+            const uint32_t used = s_vertexRowsWritten < 256 ? s_vertexRowsWritten : 256;
+            draw.vertexRowsUsed = used < draw.vertexRows ? used : draw.vertexRows;
+
+            if (g_wmoDraws++ == 0) {
+                SXC::LogOnce("gxvk-wmo-on", "vulkan: our WMO shader draws unified WMOs (first: shader %u, %s / %s)", wmoShader, vsShader->m_key.m_str, psShader->m_key.m_str);
+            }
+
+            // What our WMO shader is given, once per shader id and blend mode (kb: our-shaders).
+            char key[64];
+            SStrPrintf(key, sizeof(key), "gxvk-wmo %u %u %u", wmoShader, static_cast<uint32_t>(draw.blend), wmoBlend);
+            SXC::LogOnce(key, "vulkan: our WMO shader: shader %u, blend mode %u (the material's %u), options 0x%03x (%s / %s)", wmoShader,
+                         static_cast<uint32_t>(draw.blend), wmoBlend, draw.wmoOptions, vsShader->m_key.m_str, psShader->m_key.m_str);
+
+            return wmo::SamplerMask(draw.wmoOptions);
+        }
+    }
+
     if (vsTranslated) {
         draw.vertex = pipelines::VertexProgram::Translated;
         draw.vertexRecord = vs->record;
         // A 256-row module (translated before the larger palette) reads the front of the larger slice.
         draw.vertexRows = vs->record->vconst > pipelines::kVertexRowsSmall ? pipelines::kVertexRowsLarge : pipelines::kVertexRowsSmall;
-        draw.vertexRowsUsed = s_vertexRowsWritten < draw.vertexRows ? s_vertexRowsWritten : draw.vertexRows;
+        // SXC: past 256 rows only the bone palettes are written, so a draw takes them up to the end of the
+        // last palette, not up to the highest row any palette ever reached: a retail body's (rows up to
+        // ~800) made every later draw of the session carry them, the frame's uniform ring ran full on a
+        // wide view (Goldshire looking north) and the draws after it - the world's models, the world
+        // map's cursor - were dropped.
+        uint32_t used = s_vertexRowsWritten < 256 ? s_vertexRowsWritten : 256;
+        used = CGxDevice::s_paletteEnd > used ? CGxDevice::s_paletteEnd : used;
+        used = used < s_vertexRowsWritten ? used : s_vertexRowsWritten;
+        draw.vertexRowsUsed = used < draw.vertexRows ? used : draw.vertexRows;
     } else {
         draw.vertex = pipelines::VertexProgram::FixedFunctionSemantic;
 

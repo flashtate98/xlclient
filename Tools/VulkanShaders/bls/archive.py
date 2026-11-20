@@ -76,7 +76,12 @@ def entries(arch, prefix='shaders'):
     for n, m in arch:
         if m.find('(listfile)') is None:
             continue
-        data, _ = m.read_file('(listfile)')
+        try:
+            data, _ = m.read_file('(listfile)')
+        except RuntimeError as e:
+            # A custom patch packed in a way the reader doesn't know (its shaders, if any, go unread).
+            print('warning: %s: (listfile) not read: %s' % (n, e))
+            continue
         for ln in data.decode('ascii', 'replace').replace('\r\n', '\n').split('\n'):
             ln = ln.strip()
             if ln.lower().startswith(prefix.lower()):

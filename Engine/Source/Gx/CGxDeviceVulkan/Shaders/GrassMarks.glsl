@@ -13,6 +13,7 @@
 //   c151  on (x)
 //   c152 + 2k, c153 + 2k  channel k's look (k 0 burn, 1 frost, 2 life above 0, 3 soot, 4 life below 0:
 //         blight): tint (rgb, strength); size at full, wind at full
+//   c162  the grass editor's highlight (rgb, strength; 0: none): set only while one plant model's runs draw
 // Per plant (sxcPlantDensity.w): 1 when the marks pass it by (GroundEffectDoodadWind's "no marks").
 
 layout(set = 2, binding = 23) uniform sampler2D sxcMarks;
@@ -20,7 +21,7 @@ layout(set = 2, binding = 23) uniform sampler2D sxcMarks;
 const int kSxcGrassMarks = 150;
 
 // A plant's marks at its root: the tint (rgb, how much), its size factor and wind factor.
-void SxcGrassMarks(vec2 root, out vec4 tint, out float size, out float wind)
+void SxcGrassMarksAt(vec2 root, out vec4 tint, out float size, out float wind)
 {
     tint = vec4(0.0);
     size = 1.0;
@@ -72,4 +73,16 @@ void SxcGrassMarks(vec2 root, out vec4 tint, out float size, out float wind)
     }
 
     tint = amount > 0.0 ? vec4(colour / amount, min(amount, 1.0)) : vec4(0.0);
+}
+
+// The marks, then the editor's highlight over their tint (stones, which the marks pass by, too).
+void SxcGrassMarks(vec2 root, out vec4 tint, out float size, out float wind)
+{
+    SxcGrassMarksAt(root, tint, size, wind);
+    vec4 highlight = regs.v[kSxcGrassMarks + 12];
+
+    if (highlight.w > 0.0)
+    {
+        tint = highlight;
+    }
 }

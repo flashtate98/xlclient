@@ -9,14 +9,23 @@
 #include "WoW/Source/WorldClient/Map.h"
 
 namespace SXC::Water {
-    bool LiquidAt(const C3Vector& position, float& height, uint32_t& liquidType) {
+    bool LiquidAt(const C3Vector& position, float& height, uint32_t& liquidType, bool* mapObj) {
         C3Vector p = position;
         int32_t type = 0;
         float h = 0.0f;
 
+        if (mapObj) {
+            *mapObj = false;
+        }
+
         if (CMap::QueryLiquidStatusMapObjsExt(&p, &type, &h) && std::isfinite(h)) {
             height = h;
             liquidType = static_cast<uint32_t>(type);
+
+            if (mapObj) {
+                *mapObj = true;
+            }
+
             return true;
         }
 

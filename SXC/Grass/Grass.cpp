@@ -23,6 +23,7 @@
 #include "SXC/Settings/Settings.h"
 #include "SXC/World/World.h"
 #include "WoW/Source/DB/DBClient/DBClient.h"
+#include "WoW/Source/DB/Rec/GroundEffectDoodadRec.h"
 #include "WoW/Source/DB/Rec/GroundEffectTextureRec.h"
 #include "WoW/Source/Object/ObjectClient/Player_C.h"
 #include "WoW/Source/ObjectMgrClient/ObjectMgrClient.h"
@@ -109,10 +110,44 @@ namespace {
     std::vector<TextureRuns> s_frame;
     bool s_collecting = false;
 
+    // The grass editor's highlight (sxc.grass set_highlight): one plant model's runs drawn apart, in a colour
+    // (Shaders/GrassMarks.glsl's c162).
+    constexpr uint32_t kHighlightRow = 162;
+    uint32_t s_highlight = 0;
+    float s_highlightColour[4] = {};
+    std::chrono::steady_clock::time_point s_highlightSet;   // it lapses half a second after the last call
+    std::vector<TextureRuns> s_highlighted;
+
     struct Stats {
-        uint32_t chunks = 0, plants = 0, runs = 0, draws = 0, built = 0, stock = 0, copies = 0, copyRuns = 0, spilled = 0, deferred = 0;
+        uint32_t chunks = 0, plants = 0, runs = 0, draws = 0, built = 0, refused = 0, beyond = 0, copies = 0, copyRuns = 0, spilled = 0, deferred = 0;
     } s_stats, s_last;
-    char s_status[320] = "";
+
+    // The pool's reach (SXC::Grass::Reach). A chunk the full pool refuses is drawn nowhere: the stock bake
+    // as a fallback cost 240 ms a frame flying over Elwynn (Seyri, 2026-11-14), and it retried its build
+    // every frame.
+    constexpr float kNoReach = 1e30f;
+    constexpr float kLeastReach = 60.0f;
+    constexpr float kRoomToGrow = 0.8f;    // the pool's share in use below which the reach grows
+    constexpr float kGrowth = 0.25f;       // its share a second
+    float s_reach = kNoReach;
+    float s_refusedAt = kNoReach;          // this frame: the eye's distance to the nearest refused chunk
+    std::chrono::steady_clock::time_point s_lastEnd;
+
+    // The eye's distance to a chunk's box (as CMapChunk::RenderPrep measures it).
+    float EyeDistance(const CDetailDoodadInst* inst) {
+        const CMapChunk* m = inst->m_chunk;
+
+        if (!m) {
+            return 0.0f;
+        }
+
+        const C3Vector& eye = CWorldScene::s_activeWorldView;
+        const float nx = std::max(std::max(m->m_bbox.b.x - eye.x, eye.x - m->m_bbox.t.x), 0.0f);
+        const float ny = std::max(std::max(m->m_bbox.b.y - eye.y, eye.y - m->m_bbox.t.y), 0.0f);
+        const float nz = std::max(std::max(m->m_bbox.b.z - eye.z, eye.z - m->m_bbox.t.z), 0.0f);
+        return std::sqrt(nx * nx + ny * ny + nz * nz);
+    }
+    char s_status[448] = "";
 
     // --- the motion (step 7b; WXL's features/GrassDoodads and GrassMotion) ------------------------
     // Per plant model: the bend from its root to its tip in texture V, found from its geometry (the mean
@@ -862,15 +897,15 @@ namespace {
         return false;
     }
 
-    TextureRuns& RunsFor(CTexture* texture) {
-        for (TextureRuns& t : s_frame) {
+    TextureRuns& RunsFor(CTexture* texture, std::vector<TextureRuns>& frame) {
+        for (TextureRuns& t : frame) {
             if (t.texture == texture) {
                 return t;
             }
         }
 
-        s_frame.push_back(TextureRuns{ texture, {} });
-        return s_frame.back();
+        frame.push_back(TextureRuns{ texture, {} });
+        return frame.back();
     }
 }
 
@@ -885,6 +920,7 @@ namespace SXC::Grass {
         s_models.clear();
         s_chunks.clear();
         s_frame.clear();
+        s_highlighted.clear();
     }
 
     bool Enabled() {
@@ -936,10 +972,19 @@ namespace SXC::Grass {
             t.runs.clear();
         }
 
+        for (TextureRuns& t : s_highlighted) {
+            t.runs.clear();
+        }
+
         s_stats = Stats{};
         s_playerKnown = false;
         s_frameNumber++;
         s_frameStart = std::chrono::steady_clock::now();
+        s_refusedAt = kNoReach;
+
+        if (s_highlight && s_frameStart - s_highlightSet > std::chrono::milliseconds(500)) {
+            s_highlight = 0;   // the editor stopped asking (its panel closed)
+        }
 
         if (CGPlayer_C* player = s_collecting && s_limits.on ? ClntObjMgrGetActivePlayerObj() : nullptr) {
             const C3Vector p = player->GetPosition();
@@ -955,6 +1000,14 @@ namespace SXC::Grass {
         }
 
         Chunk& c = s_chunks[inst];
+        const float eye = EyeDistance(inst);
+
+        // Past the pool's reach: no plants (they would be faded out), what it held back to the pool.
+        if (eye > s_reach) {
+            Release(c);
+            s_stats.beyond++;
+            return true;
+        }
 
         // Step 7d: a chunk whose edges waited for a neighbour is placed again once that one has loaded.
         const bool arrived = !c.missing.empty() && ((s_frameNumber + static_cast<uint32_t>(c.first)) & 31) == 0 && NeighboursArrived(c);
@@ -974,9 +1027,11 @@ namespace SXC::Grass {
                 Release(c);
 
                 if (!Build(inst, c)) {
+                    // The pool is full: drawn nowhere, and the reach shrinks below it at the frame's end.
                     Release(c);
-                    s_stats.stock++;
-                    return false;
+                    s_stats.refused++;
+                    s_refusedAt = std::min(s_refusedAt, eye);
+                    return true;
                 }
             }
         }
@@ -999,7 +1054,7 @@ namespace SXC::Grass {
                 continue;
             }
 
-            std::vector<Run>& runs = RunsFor(g.texture).runs;
+            std::vector<Run>& runs = RunsFor(g.texture, s_highlight && g.doodadId == s_highlight ? s_highlighted : s_frame).runs;
             runs.push_back(Run{ m.firstIndex, m.indexCount, m.vertexOffset, c.first + g.offset, g.count, 0, distance });
             s_stats.plants += g.count;
             s_stats.runs++;
@@ -1027,7 +1082,34 @@ namespace SXC::Grass {
         // One world matrix for all: the plants are in world space, the view is the scene's.
         C44Matrix world;
         world.Translate(C3Vector(0.0f, 0.0f, 0.0f) - CWorldScene::s_activeWorldView);
+
+        // The pool's reach: shrunk below the nearest refused chunk, else grown back while there's room.
+        const auto now = std::chrono::steady_clock::now();
+        const float seconds = std::min(std::chrono::duration<float>(now - s_lastEnd).count(), 0.25f);
+        s_lastEnd = now;
+
+        if (s_refusedAt < kNoReach) {
+            s_reach = std::max(std::min(s_reach, s_refusedAt * 0.98f), kLeastReach);
+        } else if (s_reach < kNoReach && s_device->plantsInUse() < kRoomToGrow * static_cast<float>(s_device->capacity())) {
+            s_reach += s_reach * kGrowth * seconds;
+
+            if (s_reach >= CWorld::detailDoodadDist) {
+                s_reach = kNoReach;
+            }
+        }
+
+        // Inside the reach the plants fade out over its last 15%, as the stock fade does at the grass distance.
+        CDetailDoodad::SShaderConstants& constants = CDetailDoodad::s_shaderConstants;
+        const C4Vector fade = constants.m_fade;
+
+        if (s_reach < CWorld::detailDoodadDist) {
+            const float f = 1.0f / (s_reach * 0.15f);
+            constants.m_fade.x = -f;
+            constants.m_fade.y = s_reach * f;
+        }
+
         CDetailDoodad::SetupVertexShader(world, 0);
+        constants.m_fade = fade;
 
         // Step 7b: the motion's rows (after the client's c0..c22), every frame: other shaders use them too.
         g_theGxDevicePtr->ShaderConstantsSet(GxSh_Vertex, kMotionFirstRow, &s_motionRows[0][0], kMotionRows);
@@ -1063,22 +1145,39 @@ namespace SXC::Grass {
 
         g_theGxDevicePtr->ShaderConstantsSet(GxSh_Vertex, kMarksFirstRow, &marks[0][0], kMarksRows);
 
-        for (TextureRuns& t : s_frame) {
-            if (t.runs.empty()) {
-                continue;
+        auto draw = [](std::vector<TextureRuns>& frame) {
+            for (TextureRuns& t : frame) {
+                if (t.runs.empty()) {
+                    continue;
+                }
+
+                // The copies after the plants, by copy number (each number binds its entry once).
+                std::stable_sort(t.runs.begin(), t.runs.end(), [](const Run& a, const Run& b) { return a.copy < b.copy; });
+
+                CGxTex* gxTex = TextureGetGxTex(t.texture, 0, nullptr);
+
+                if (gxTex && s_device->draw(gxTex, t.runs.data(), static_cast<uint32_t>(t.runs.size()))) {
+                    s_stats.draws++;
+                }
             }
+        };
 
-            // The copies after the plants, by copy number (each number binds its entry once).
-            std::stable_sort(t.runs.begin(), t.runs.end(), [](const Run& a, const Run& b) { return a.copy < b.copy; });
+        // The highlighted model after the rest, with its colour in c162 (0 for everything else).
+        const float none[4] = {};
+        g_theGxDevicePtr->ShaderConstantsSet(GxSh_Vertex, kHighlightRow, none, 1);
+        draw(s_frame);
 
-            CGxTex* gxTex = TextureGetGxTex(t.texture, 0, nullptr);
-
-            if (gxTex && s_device->draw(gxTex, t.runs.data(), static_cast<uint32_t>(t.runs.size()))) {
-                s_stats.draws++;
-            }
+        if (s_highlight) {
+            g_theGxDevicePtr->ShaderConstantsSet(GxSh_Vertex, kHighlightRow, s_highlightColour, 1);
+            draw(s_highlighted);
+            g_theGxDevicePtr->ShaderConstantsSet(GxSh_Vertex, kHighlightRow, none, 1);
         }
 
         s_last = s_stats;
+    }
+
+    float Reach() {
+        return Active() ? s_reach : kNoReach;
     }
 
     void Forget(CDetailDoodadInst* inst) {
@@ -1099,12 +1198,18 @@ namespace SXC::Grass {
             return CDetailDoodad::s_bUseShaders ? "off ([Grass] Instanced)" : "off: the client's grass shaders are off";
         }
 
+        char reach[32] = "the grass distance";
+
+        if (s_reach < kNoReach) {
+            std::snprintf(reach, sizeof(reach), "%.0f yd", s_reach);
+        }
+
         std::snprintf(s_status, sizeof(s_status),
                       "%u chunks, %u plants in %u runs, %u draws; %u copies in %u runs (density %s); %u chunks built this frame (%u plants spilled, %u "
-                      "waiting), %u drawn the stock way; pool %u plants",
+                      "waiting), %u refused by the full pool, %u past its reach (%s); pool %u of %u plants",
                       s_last.chunks, s_last.plants, s_last.runs, s_last.draws, s_last.copies, s_last.copyRuns,
-                      !s_densityFn ? "no provider" : (s_limits.on ? "on" : "off"), s_last.built, s_last.spilled, s_last.deferred, s_last.stock,
-                      s_device->plantsInUse());
+                      !s_densityFn ? "no provider" : (s_limits.on ? "on" : "off"), s_last.built, s_last.spilled, s_last.deferred, s_last.refused,
+                      s_last.beyond, reach, s_device->plantsInUse(), s_device->capacity());
         return s_status;
     }
 }
@@ -1176,6 +1281,93 @@ namespace {
 
     const char* WXL_CALL ApiStatus() {
         return SXC::Grass::Status();
+    }
+
+    uint32_t WXL_CALL ApiEffectsNear(sxc_grass_effect* out, uint32_t capacity) {
+        CGPlayer_C* player = ClntObjMgrGetActivePlayerObj();
+
+        if (!player) {
+            return 0;
+        }
+
+        // The player's tile (x along -y from the map's corner, as CMap counts) and the 8 around it.
+        const C3Vector p = player->GetPosition();
+        constexpr float kTile = 16.0f * kChunkSize;
+        const int32_t tx = static_cast<int32_t>(std::floor((kMapCorner - p.y) / kTile));
+        const int32_t ty = static_cast<int32_t>(std::floor((kMapCorner - p.x) / kTile));
+        std::unordered_map<uint32_t, uint32_t> chunks;
+
+        for (int32_t j = ty - 1; j <= ty + 1; j++) {
+            for (int32_t i = tx - 1; i <= tx + 1; i++) {
+                CMapArea* area = i >= 0 && j >= 0 && i < 64 && j < 64 ? CMap::m_areaTable[64 * j + i] : nullptr;
+
+                if (!area || area->m_asyncObject) {
+                    continue;
+                }
+
+                for (CMapChunk* chunk : area->m_mapChunks) {
+                    if (!chunk || !chunk->m_header || !chunk->m_layers) {
+                        continue;
+                    }
+
+                    for (uint32_t l = 0; l < chunk->m_header->m_nLayers && l < 4; l++) {
+                        const uint32_t effect = chunk->m_layers[l].m_offectId;
+
+                        // A chunk once per effect (two layers may share one).
+                        if (effect && (l == 0 || std::none_of(chunk->m_layers, chunk->m_layers + l, [&](const auto& e) { return e.m_offectId == effect; }))) {
+                            chunks[effect]++;
+                        }
+                    }
+                }
+            }
+        }
+
+        std::vector<uint32_t> ids;
+
+        for (const auto& c : chunks) {
+            ids.push_back(c.first);
+        }
+
+        std::sort(ids.begin(), ids.end());
+
+        for (uint32_t k = 0; out && k < ids.size() && k < capacity; k++) {
+            sxc_grass_effect& e = out[k];
+            e = sxc_grass_effect{};
+            e.effect = ids[k];
+            e.chunks = chunks[ids[k]];
+
+            if (const GroundEffectTextureRec* rec = g_groundEffectTextureDB.GetRecord(static_cast<int32_t>(ids[k]))) {
+                for (int d = 0; d < 4; d++) {
+                    e.doodads[d] = rec->m_doodadID[d] > 0 ? static_cast<uint32_t>(rec->m_doodadID[d]) : 0;
+                    e.weights[d] = rec->m_doodadWeight[d] > 0 ? static_cast<uint32_t>(rec->m_doodadWeight[d]) : 0;
+                }
+
+                e.density = rec->m_density > 0 ? static_cast<uint32_t>(rec->m_density) : 0;
+            }
+        }
+
+        return static_cast<uint32_t>(ids.size());
+    }
+
+    const char* WXL_CALL ApiDoodadPath(uint32_t id) {
+        const GroundEffectDoodadRec* rec = g_groundEffectDoodadDB.GetRecord(static_cast<int32_t>(id));
+
+        if (!rec || !rec->m_doodadpath || !rec->m_doodadpath[0]) {
+            return nullptr;
+        }
+
+        static std::string path;
+        path = std::string("World\\NoDXT\\Detail\\") + rec->m_doodadpath;
+        return path.c_str();
+    }
+
+    void WXL_CALL ApiSetHighlight(uint32_t doodadId, const float* rgba) {
+        s_highlight = rgba && rgba[3] > 0.0f ? doodadId : 0;
+        s_highlightSet = std::chrono::steady_clock::now();
+
+        for (int k = 0; k < 4; k++) {
+            s_highlightColour[k] = rgba ? std::min(std::max(rgba[k], 0.0f), 1.0f) : 0.0f;
+        }
     }
 
     void WXL_CALL ApiSetEdges(const sxc_grass_edges* edges) {
@@ -1344,7 +1536,8 @@ namespace {
     const sxc_grass_api s_api = { sizeof(sxc_grass_api), ApiAvailable,          ApiSetMotion,          ApiSetDoodads,
                                   ApiDoodadInfo,         ApiStatus,             ApiSetDensityProvider, ApiSetDensityLimits,
                                   ApiSetEdges,           ApiSetPlacement,       ApiPlacement,          ApiSetSlopes,
-                                  ApiSlopes,             ApiInspect,            ApiSetMarks };
+                                  ApiSlopes,             ApiInspect,            ApiSetMarks,           ApiEffectsNear,
+                                  ApiDoodadPath,         ApiSetHighlight };
 }
 
 namespace SXC::Grass {

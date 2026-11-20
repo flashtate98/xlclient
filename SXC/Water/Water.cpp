@@ -73,6 +73,8 @@ namespace {
         float windSpeed = 6.0f;       // yd / s
         float windAngle = 0.0f;       // degrees, 0 = +x
         int debugView = 0;
+        int depthView = 0;             // full screen at present: 0 off, 1 the depth buffer, 2 the copy's w
+        float depthRange = 500.0f;     // yd: the copy's w shown white
         int causticDebug = 0;          // the terrain's caustics debug view
         int writeScope = 0;           // SXC::Water::ScopeKind: where "Write" puts the row
         // The shore (one setting for every water for now).
@@ -321,6 +323,14 @@ namespace SXC::Water {
 
     bool Active() {
         return s_available && OurShader().Get();
+    }
+
+    int DepthView(float* range) {
+        if (range) {
+            *range = s_panel.depthRange;
+        }
+
+        return s_panel.depthView;
     }
 
     const SXC::Water::Look& FillWaves(SXC::Water::Waves& waves, const C3Vector& cameraPos);
@@ -590,6 +600,47 @@ namespace SXC::Water {
         }
     }
 
+    // The LiquidType of the water nearest (x, y) within `reach` yd in the shore field (lava and slime passed
+    // by), 0 where none is: the water a player on its bank belongs to.
+    uint32_t NearestWaterType(float x, float y, float reach) {
+        const SXC::Water::ShoreMap& m = SXC::Water::ShoreField();
+
+        if (!m.valid) {
+            return 0;
+        }
+
+        constexpr float kHalfWorld = 17066.666f;
+        const int32_t cx = static_cast<int32_t>(std::floor((kHalfWorld - y) / SXC::Water::kShoreCell));
+        const int32_t cy = static_cast<int32_t>(std::floor((kHalfWorld - x) / SXC::Water::kShoreCell));
+        const int32_t r = static_cast<int32_t>(reach / SXC::Water::kShoreCell) + 1;
+        int32_t best = INT32_MAX;
+        uint32_t type = 0;
+
+        for (int32_t gy = std::max(cy - r, m.originY); gy <= std::min(cy + r, m.originY + SXC::Water::kShoreSize - 1); gy++) {
+            for (int32_t gx = std::max(cx - r, m.originX); gx <= std::min(cx + r, m.originX + SXC::Water::kShoreSize - 1); gx++) {
+                const int32_t d = (gx - cx) * (gx - cx) + (gy - cy) * (gy - cy);
+
+                if (d >= best || d > r * r) {
+                    continue;
+                }
+
+                const size_t k = static_cast<size_t>(gy & (SXC::Water::kShoreSize - 1)) * SXC::Water::kShoreSize +
+                                 static_cast<size_t>(gx & (SXC::Water::kShoreSize - 1));
+                const uint16_t distance = m.texels[k * 4];   // a half: positive out on the water
+                const float t = m.cells[k * 4 + 2];          // the LiquidType, + 0.25 for lava and slime
+
+                if ((distance & 0x8000u) || !(distance & 0x7FFFu) || t < 1.0f || t != std::floor(t)) {
+                    continue;
+                }
+
+                best = d;
+                type = static_cast<uint32_t>(t);
+            }
+        }
+
+        return type;
+    }
+
     // The frame's water as the device takes it (the waves, the looks, the shore, the caustics, the swimmers),
     // from any water draw and from the liquid pass's start (Frame); the sea's look (the water the player is in).
     const SXC::Water::Look& FillWaves(SXC::Water::Waves& waves, const C3Vector& cameraPos) {
@@ -600,18 +651,23 @@ namespace SXC::Water {
         dt = dt < 0.0f ? 0.0f : (dt > 0.5f ? 0.5f : dt);
         s_lastTime = waves.time;
         WindForWaves(waves, dt);
-        // The shared sea's spectrum from the water the player is in (looked up four times a second).
+        // The shared sea's spectrum and shore from the water the player is in, else the nearest within 60 yd
+        // (looked up four times a second). On the bank the query finds none, and the every-water row's (or the
+        // defaults') shore waves ran on a lake whose own row said otherwise (Seyri, 2026-11-14).
         static uint32_t s_typeHere = 0;
         static auto s_typeChecked = std::chrono::steady_clock::time_point();
         const auto now = std::chrono::steady_clock::now();
+        float playerX = 0.0f, playerY = 0.0f;
+        SXC::Water::PlayerPosition(playerX, playerY);
 
         if (now - s_typeChecked > std::chrono::milliseconds(250)) {
             s_typeChecked = now;
             s_typeHere = SXC::Water::LiquidTypeHere();
-        }
 
-        float playerX = 0.0f, playerY = 0.0f;
-        SXC::Water::PlayerPosition(playerX, playerY);
+            if (!s_typeHere) {
+                s_typeHere = NearestWaterType(playerX, playerY, 60.0f);
+            }
+        }
         const SXC::Water::Look& sea = LookFor(s_typeHere, playerX, playerY);
         waves.amplitude = sea.amplitude;
         waves.chop = sea.chop;
@@ -645,7 +701,7 @@ namespace SXC::Water {
         }
 
         DomeOf(waves);
-        waves.mirror = SXC::View::Mirror(waves.mirrorZ);   // the world mirrored at the water (drawn once the world's opaque part is)
+        waves.mirror = SXC::View::Mirror(waves.mirrorZ, waves.mirrorFade);   // the world mirrored at the water (drawn once the world's opaque part is)
 
         // The looks of terrain water by place (none while the panel tests its values over every water).
         const SXC::Water::LookGrid& grid = SXC::Water::SurfaceGrid();
@@ -894,8 +950,20 @@ namespace SXC::Water {
                                               "Shore field (blue water, red land, green depth)", "Shore waves (red crests, white foam)",
                                               "River flow (colour: speed, blue to red; dots drift with it)",
                                               "Sky fallback (the dome mirrored; magenta: none)",
-                                              "Mirror alone (magenta: not this water)" };
+                                              "Mirror alone (magenta: not this water)",
+                                              "Scene copy against the surface (green behind, red same depth, blue in front, magenta NaN)" };
         ImGui::Combo("Debug view", &s_panel.debugView, kViews, IM_ARRAYSIZE(kViews));
+
+        // The depth over the whole screen, as the scene's copy took it (the last frame with water in view).
+        static const char* const kDepthViews[] = { "Off", "The depth buffer (log scale: black near, white far)",
+                                                   "The copy as distance (grey to the range, blue nothing drawn)" };
+        ImGui::Combo("Full-screen depth", &s_panel.depthView, kDepthViews, IM_ARRAYSIZE(kDepthViews));
+        ImGui::SetItemTooltip("Drawn over the whole screen at present, from the scene copy the water reads: the depth buffer as it is, "
+                              "or turned into distance. Magenta: not a number. Only frames with our water in view refresh it.");
+
+        if (s_panel.depthView == 2) {
+            ImGui::SliderFloat("Depth range (yd)", &s_panel.depthRange, 10.0f, 2000.0f, "%.0f");
+        }
         ImGui::Checkbox("Model cells", &s_panel.modelCells);
         ImGui::SetItemTooltip("Markers on the water under models (WMOs, doodads): why the shore field takes a cell as a model standing in the water "
                               "(it foams like a shore) or not. Hover one for the rays' hits. While this panel is open.");

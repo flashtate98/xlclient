@@ -13,7 +13,7 @@ class CGxTex;
 // space), each plant model's geometry is uploaded once, and every visible chunk's grass of one texture
 // is drawn together, instanced (the device's Vulkan/Grass and SxcGrassDraw; the stock DetailDoodad
 // vertex modules' instanced variants). The seam is CWorldScene::RenderDetailDoodads; a chunk the
-// device can't take this frame (its pool is full) is drawn the stock way.
+// device's full pool refuses is drawn nowhere, and the pool's reach shrinks below it (Reach).
 //
 // Density (step 7d; GroundEffectDoodadDensity through the mod's provider, sxc.grass): each plant carries
 // how many copies it wants, out to what radius from the player and how far they may stray. The chunks
@@ -45,6 +45,7 @@ namespace SXC::Grass {
         // constants) and `texture` at stage 0. False: nothing drawn.
         bool (*draw)(CGxTex* texture, const Run* runs, uint32_t count);
         uint32_t (*plantsInUse)();
+        uint32_t (*capacity)();   // the pool's plants
     };
     void SetDevice(const Device* device);
 
@@ -57,6 +58,12 @@ namespace SXC::Grass {
     void Begin();
     bool Take(CDetailDoodadInst* inst);
     void End();
+
+    // How far from the eye chunks hold plants (yd; huge: as far as the grass distance). Flying high, the
+    // chunks within the grass distance want more plants than the pool holds: the reach shrinks to the
+    // nearest chunk the pool refused, the plants fade out before it, and it grows back while the pool has
+    // room. CMapChunk::RenderPrep places no plants past it.
+    float Reach();
 
     // A chunk's grass is going away (CDetailDoodadInst::Free): its plants go back to the pool.
     void Forget(CDetailDoodadInst* inst);

@@ -21,6 +21,8 @@ python Tools/VulkanShaders/translate_shaders.py --client "C:\Games\World of Warc
 | `--out <folder>` | the output tree (default: `translated/` in this folder) |
 | `--deploy` | also copy `manifest.txt`, `index.txt` and every `.spv` into `<client>\VulkanShaders\`, removing stale modules |
 | `--names A:0,B --print` | look at the GLSL of a few records, write nothing |
+| `--retail-palette` | 1024 vertex constant rows, for clients built with `WOWDECOMP_RETAIL_MODELS` |
+| `--cata <folder>` | a Cataclysm (4.3.4) client's `Shaders` folder, extracted: the retail model shaders 3.3.5 lacks, repacked (`bls/cata.py`) and translated; `--deploy` puts them loose in `<client>\Data\Shaders\` |
 
 The archives are read in the client's own order: `common.MPQ`, `common-2.MPQ`, `expansion.MPQ`,
 `lichking.MPQ`, `patch.MPQ`, then `patch-2.MPQ` .. `patch-9.MPQ` and `patch-A.MPQ` .. `patch-Z.MPQ`; a

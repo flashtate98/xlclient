@@ -110,6 +110,9 @@ void CShaderEffect::ComputeLocalLights(LocalLights* localLights, uint32_t lightC
                 localLights->m_color[i].y = 0.0f;
                 localLights->m_color[i].z = 0.0f;
                 localLights->m_color[i].w = 0.0f;
+                localLights->m_constantAttenuation[i] = 1.0f;  // Not in the original: as for the unused ones below
+                localLights->m_linearAttenuation[i] = 0.0f;
+                localLights->m_quadraticAttenuation[i] = 0.0f;
             }
         }
     }
@@ -119,6 +122,13 @@ void CShaderEffect::ComputeLocalLights(LocalLights* localLights, uint32_t lightC
         localLights->m_color[i].y = 0.0f;
         localLights->m_color[i].z = 0.0f;
         localLights->m_color[i].w = 0.0f;
+        // Not in the original: a neutral attenuation for the unused lights. Cataclysm's model shaders
+        // (Tools/VulkanShaders --cata) have one four-light permutation that 3.3.5 uses for two and three
+        // lights; it divides by every light's attenuation, and a stale 0 there gives 0 * inf = NaN on the
+        // GPU even with the colour zeroed.
+        localLights->m_constantAttenuation[i] = 1.0f;
+        localLights->m_linearAttenuation[i] = 0.0f;
+        localLights->m_quadraticAttenuation[i] = 0.0f;
     }
 }
 

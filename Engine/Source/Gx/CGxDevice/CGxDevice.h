@@ -258,6 +258,9 @@ class CGxDevice {
     static CGxShader* s_uiPixelShader;
     static CGxShader* s_uiVertexShader[2];
     static ShadowConstants s_shadowConstants[2];
+    // Not in the original: one past the vertex rows of the last bone palette written (from c31, three
+    // rows a bone). Rows past 256 hold nothing else, so a draw needs those only up to here.
+    static uint32_t s_paletteEnd;
     static uint32_t s_alphaRef[12];
     static const uint32_t s_texFormatBitDepth[GxTexFormats_Last];
     static const uint32_t s_texFormatBlockSize[GxTexFormats_Last];

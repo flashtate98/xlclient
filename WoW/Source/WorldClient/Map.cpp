@@ -87,6 +87,7 @@
 #include "WoW/Source/Game/GameClient/ProjectTex.h"
 #include "WoW/Source/DB/Rec/TerrainTypeRec.h"
 #include "SXC/Water/Ripples.h"  // SXC: our water ripples itself
+#include "SXC/Wmo/Wmo.h"         // SXC: our WMO shader's extra vertex data, released with a group
 
 static const int32_t MAXALPHA = 127;
 static const float FOOTPRINT_FADEOUT_RATE = 0.00016666666f;
@@ -2795,7 +2796,18 @@ CMapObjDef* CMap::CreateMapObjDef(char* fileName, SMMapObjDef* mapObjectDef, C3V
     mapObjDef->m_mat.RotateAroundZ(rotZ + 3.1415927f);
     mapObjDef->m_mat.RotateAroundY(rotY);
     mapObjDef->m_mat.RotateAroundX(rotX);
-    mapObjDef->m_invMat = mapObjDef->m_mat.AffineInverse();
+
+    // SXC: the placement's scale (1024 = 1), read where flag 0x4 says it's set, as retail does (Legion on). 3.3.5
+    // left the field as padding: stock tiles have 0 and no flag. The doodads inside follow through the matrix,
+    // collision through its inverse; the extents are the placed (scaled) box already. The server reads the same
+    // field for its own collision (kb: modern-models, "WMO scale").
+    const float scale = (mapObjectDef->m_flags & 0x4) && mapObjectDef->m_scale ? mapObjectDef->m_scale * (1.0f / 1024.0f) : 1.0f;
+
+    if (scale != 1.0f) {
+        mapObjDef->m_mat.Scale(scale);
+    }
+
+    mapObjDef->m_invMat = mapObjDef->m_mat.AffineInverse(scale);   // SXC: the plain one assumes no scale
 
     mapObjDef->m_bbox.b.x = -mapObjectDef->m_extents.t.z;
     mapObjDef->m_bbox.b.y = -mapObjectDef->m_extents.t.x;
@@ -3103,6 +3115,7 @@ CMapObjGroup* CMap::AllocMapObjGroup() {
 // VERIFY: 13962642 manual
 // OFFSET: 0x007C0030
 void CMap::FreeMapObjGroup(CMapObjGroup* mapObjGroup) {
+    SXC::Wmo::ReleaseGroup(mapObjGroup);   // SXC: our WMO shader's extra vertex data
     mapObjGroup->m_asyncLoadLink.Unlink();
     mapObjGroup->~CMapObjGroup();
     ObjectFree(*CMap::mapObjGroupHeap, mapObjGroup->m_objectIndex);

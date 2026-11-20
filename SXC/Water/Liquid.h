@@ -9,8 +9,8 @@ struct sxc_water_api;
 
 namespace SXC::Water {
     // A WMO's liquid where the point is inside its group, else the terrain's: the surface's height and its
-    // LiquidType. False where there is none.
-    bool LiquidAt(const C3Vector& position, float& height, uint32_t& liquidType);
+    // LiquidType, and (`mapObj`, optional) whether it is the WMO's. False where there is none.
+    bool LiquidAt(const C3Vector& position, float& height, uint32_t& liquidType, bool* mapObj = nullptr);
 
     const sxc_water_api* Api();
 }

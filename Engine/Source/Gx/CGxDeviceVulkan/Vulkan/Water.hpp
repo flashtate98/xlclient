@@ -33,8 +33,9 @@ namespace gxvk::vk::water
         bool  dome = false;       ///< the sky's dome as drawn: each row's elevation (sine), the vertices' colours
         float domeRows[8] = {};
         float domeColours[122][4] = {};
-        bool  mirror  = false;    ///< the mirror (Vulkan/View.cpp) is drawn at this plane (world z) this frame
+        bool  mirror  = false;    ///< the mirror (Vulkan/View.cpp) is drawn at this plane (world z) this frame,
         float mirrorZ = 0.0f;
+        float mirrorFade = 1.0f;  ///< this much of it (fading in while the water is far off)
     };
 
     /// The look grid (SXC/Water/Surface.h): per terrain chunk around the player an index into a palette of
@@ -156,6 +157,11 @@ namespace gxvk::vk::water
     VkDescriptorSet FrameSet(uint32_t slot, uint64_t serial);
 
     const char* Status();
+
+    /// The scene copy's depth image (r: the view's w, g: the raw depth), in GENERAL, as the frame's
+    /// copy (or the last frame with one) left it; null before the first copy. For the present pass's
+    /// debug views.
+    VkImageView DepthCopyView();
 
     /// After the device is idle.
     void Shutdown();

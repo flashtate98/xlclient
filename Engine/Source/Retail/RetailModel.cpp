@@ -368,7 +368,7 @@ bool Validate(const std::vector<uint8_t>& b, const ModelFiles& files, std::strin
                 return Fail(error, "Model vertex references an invalid bone");
     }
     for (uint32_t i = 0; i < U32(b, 0x70); ++i)
-        if (U16(b, U32(b, 0x74) + size_t(i) * 4 + 2) > 7) return Fail(error, "Unsupported Retail blend mode");   // 7: blend add (M2BLEND_BLEND_ADD)
+        if (U16(b, U32(b, 0x74) + size_t(i) * 4 + 2) > 7) return Fail(error, "Unsupported Retail blend mode");  // SXC: 7 the engine's blend add
     for (const auto& f : {Field{0xf0, 40}, Field{0x100, 36}, Field{0x108, 156}}) {
         for (uint32_t i = 0; i < U32(b, f.offset); ++i) {
             size_t p = U32(b, f.offset + 4) + size_t(i) * f.stride;
@@ -924,16 +924,18 @@ bool PrepareModel(const std::vector<uint8_t>& bytes, std::vector<uint8_t>& prepa
     if ((U32(b, 0x10) & 8) && !Array(b, 0x130, 2)) return Fail(error, "Invalid texture combiner array");
     // Retail added blend modes 7-14 beyond the legacy 7-entry table. Map each onto the closest legacy mode
     // and drop render flags the legacy renderer does not define.
+    // SXC and FlashWOW, found separately: 7 ("blend add", ONE / INVSRCALPHA, wowdev's M2/Rendering) stays 7,
+    // since the engine has it (M2BLEND_BLEND_ADD, GxBlend_BlendAdd). As Add (4) the infernal's fel glow
+    // washed out, and a Retail effect's glow was dimmed by its own alpha (Thunder Clap's lightning).
     if (Array(b, 0x70, 4)) {
-        // FlashWOW: 7 (blend add: the color is added whole, not times its alpha) stays 7 now that the
-        // renderer has it (M2BLEND_BLEND_ADD). Drawn as plain additive, a Retail effect's glow was dimmed by
-        // its own alpha: Thunder Clap's lightning and the blue ring under it (2026-11-15).
         static const uint8_t kBlend[] = {0, 1, 2, 3, 4, 5, 6, 7, 4, 2, 2, 3, 2, 4, 4};
         for (uint32_t i = 0; i < U32(b, 0x70); ++i) {
             const size_t m = U32(b, 0x74) + size_t(i) * 4;
             const uint16_t blend = U16(b, m + 2);
             if (blend < sizeof(kBlend)) { b[m + 2] = kBlend[blend]; b[m + 3] = 0; }
-            b[m] &= 0x1f; b[m + 1] = 0;
+            // 0x100 (receives no shadow) means the same to the 3.3.5 engine (CM2Scene::ComputeElementShaders):
+            // kept, so glow cards, beams and dust don't darken in the stock shadow.
+            b[m] &= 0x1f; b[m + 1] &= 0x01;
         }
     }
     // Retail ribbons may layer several textures and scroll them with a texture transform (byte 175; the
@@ -991,6 +993,33 @@ bool PrepareModel(const std::vector<uint8_t>& bytes, std::vector<uint8_t>& prepa
         if (first(135) >= 0 && first(229) >= 0 && first(364) >= 0 && first(41) >= 0 && first(42) >= 0) {
             swapIds(41, 229);
             swapIds(42, 364);
+        }
+    }
+    // SXC: the header's bounds cover every animation, and retail's newest reach far (the bodies' 1056-1062
+    // sweep 9 yd out: a radius of 15.5 against 1-2 for the rest). The client sizes effects by that box
+    // (CEffect::ComputeModelScaleFromTarget: a footstep's splash came out five times too large) and culls
+    // by it, yet plays only the animations AnimationData.dbc knows (ids below 506 in 3.3.5). So the bounds
+    // become those of the animations it can play, where it can play any.
+    {
+        constexpr uint16_t kLegacyAnimations = 506;
+        auto getF = [&](size_t at) { float v; std::memcpy(&v, b.data() + at, 4); return v; };
+        auto putF = [&](size_t at, float v) { std::memcpy(b.data() + at, &v, 4); };
+        float box[6] = {std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+            -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max()};
+        bool any = false;
+        for (uint32_t i = 0; i < U32(b, 0x1c); ++i) {
+            const size_t p = U32(b, 0x20) + size_t(i) * 64;
+            if (U16(b, p) >= kLegacyAnimations) continue;
+            for (int k = 0; k < 3; ++k) {
+                box[k] = std::min(box[k], getF(p + 32 + k * 4));
+                box[k + 3] = std::max(box[k + 3], getF(p + 44 + k * 4));
+            }
+            any = true;
+        }
+        if (any && box[0] <= box[3] && box[1] <= box[4] && box[2] <= box[5]) {
+            for (int k = 0; k < 6; ++k) putF(0xa0 + k * 4, box[k]);
+            const float dx = box[3] - box[0], dy = box[4] - box[1], dz = box[5] - box[2];
+            putF(0xb8, 0.5f * std::sqrt(dx * dx + dy * dy + dz * dz));
         }
     }
     // TXID replaces embedded filenames in modern models. Append stable virtual names;
@@ -1133,9 +1162,9 @@ bool ValidateSkin(const std::vector<uint8_t>& b, const std::vector<uint8_t>& m, 
         size_t p = U32(b, 40) + size_t(i) * 24;
         uint32_t n = U16(b, p + 14);
         uint16_t shader = U16(b, p + 2);
-        if (!n || n > 3 || (n == 3 && shader != 0x8010) ||
-            ((shader & 0x8000) && !((shader >= 0x8001 && shader <= 0x8003 && n == 2) ||
-                (shader == 0x8010 && n == 3) || ((shader == 0x8011 || shader == 0x8012) && n == 2))))
+        // Packed ids must carry the retail tag (PrepareSkin); three or four textures only with a packed
+        // retail shader, since the stock decoder of non-packed ids knows two stages.
+        if (!n || n > 4 || ((shader & 0x8000) && !IsRetailPacked(shader)) || (n >= 3 && !IsRetailPacked(shader)))
             return Fail(error, "Retail shader or texture count is not supported yet");
         // The batch geoset index (+6) is unused by the legacy renderer and may exceed the section count in newer models.
         const bool section = U16(b, p + 4) < U32(b, 28);
@@ -1228,6 +1257,83 @@ std::string HexWord(uint16_t v) {
     return text;
 }
 
+namespace {
+// Retail's packed shader table by index, as far as Cataclysm's 4.3.4 client knows it (M2Shader.cpp's
+// s_shaderEffects; kb: cata-decomp-reference-2026-11-16): retail's shaders, the stages they sample, and
+// the stand-in for when they can't be used. Later indices come from wowdev's .skin page (8.0.1
+// M2ShaderTable) when we meet them.
+constexpr const char* kFirstTexture = "every layer past the first texture";
+constexpr const char* kGuildColours = "the guild colours (pixel c0, c1, c3), which 3.3.5 doesn't have";
+constexpr RetailShader kRetailShaders[] = {
+    /* 0x8000 */ {"Diffuse_T1_Env", "Combiners_Opaque_Mod2xNA_Alpha", 2, "Diffuse_T1_Env", "Combiners_Opaque_Mod2xNA_Alpha", nullptr, 2},
+    /* 0x8001 */ {"Diffuse_T1_Env", "Combiners_Opaque_AddAlpha", 2, "Diffuse_T1_Env", "Combiners_Opaque_AddAlpha", nullptr, 2},
+    /* 0x8002 */ {"Diffuse_T1_Env", "Combiners_Opaque_AddAlpha_Alpha", 2, "Diffuse_T1_Env", "Combiners_Opaque_AddAlpha_Alpha", nullptr, 2},
+    /* 0x8003 */ {"Diffuse_T1_Env_T1", "Combiners_Opaque_Mod2xNA_Alpha_Add", 3, "Diffuse_T1_Env", "Combiners_Opaque_Mod2xNA_Alpha", "the third texture's additive glow layer", 2},
+    /* 0x8004 */ {"Diffuse_T1_Env", "Combiners_Mod_AddAlpha", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8005 */ {"Diffuse_T1_T1", "Combiners_Opaque_AddAlpha", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8006 */ {"Diffuse_T1_T1", "Combiners_Mod_AddAlpha", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8007 */ {"Diffuse_T1_Env", "Combiners_Mod_AddAlpha_Alpha", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8008 */ {"Diffuse_T1_Env", "Combiners_Opaque_Alpha_Alpha", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8009 */ {"Diffuse_T1_Env_T1", "Combiners_Opaque_Mod2xNA_Alpha_3s", 3, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x800A */ {"Diffuse_T1_T1", "Combiners_Opaque_AddAlpha_Wgt", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x800B */ {"Diffuse_T1_Env", "Combiners_Mod_Add_Alpha", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x800C */ {"Diffuse_T1_Env", "Combiners_Opaque_ModNA_Alpha", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x800D */ {"Diffuse_T1_Env", "Combiners_Mod_AddAlpha_Wgt", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x800E */ {"Diffuse_T1_T1", "Combiners_Mod_AddAlpha_Wgt", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x800F */ {"Diffuse_T1_T2", "Combiners_Opaque_AddAlpha_Wgt", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8010 */ {"Diffuse_T1_Env", "Combiners_Opaque_Mod_Add_Wgt", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8011 */ {"Diffuse_T1_Env_T1", "Combiners_Opaque_Mod2xNA_Alpha_UnshAlpha", 3, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8012 */ {"Diffuse_T1_T1_T1", "Combiners_Mod_Dual_Crossfade", 3, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8013 */ {"Diffuse_EdgeFade_T1", "Combiners_Mod", 1, "Diffuse_T1", "Combiners_Mod", "the edge fade", 1},
+    /* 0x8014 */ {"Diffuse_T1_Env_T2", "Combiners_Opaque_Mod2xNA_Alpha_Alpha", 3, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8015 */ {"Diffuse_EdgeFade_T1_T2", "Combiners_Mod_Mod", 2, "Diffuse_T1_T2", "Combiners_Mod_Mod", "the edge fade", 2},
+    /* 0x8016 */ {"Diffuse_T1_T1_T1_T2", "Combiners_Mod_Masked_Dual_Crossfade", 4, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8017 */ {"Diffuse_T1_T1", "Combiners_Opaque_Alpha", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8018 */ {"Diffuse_T1_Env_T2", "Combiners_Opaque_Mod2xNA_Alpha_UnshAlpha", 3, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1},
+    /* 0x8019 */ {"Diffuse_EdgeFade_Env", "Combiners_Mod", 1, "Diffuse_T1", "Combiners_Mod", "the environment map and the edge fade", 1},
+    /* 0x801A */ {"Diffuse_T1_T2_T1", "Guild", 3, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1, kGuildColours},
+    /* 0x801B */ {"Diffuse_T1_T2", "Guild_NoBorder", 2, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1, kGuildColours},
+    /* 0x801C */ {"Diffuse_T1_T2_T1", "Guild_Opaque", 3, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1, kGuildColours},
+};
+// Past Cataclysm's table: known by what it does, not yet by name.
+// Index 33, a two-texture edge-fade combiner (the Haranir fire totem's flame: a fire gradient times a
+// scrolling flame mask), drawn with Cataclysm's edge-fade vertex shader and Combiners_Mod_Mod.
+constexpr RetailShader kRetailEdgeFade33 = {"Diffuse_EdgeFade_T1_T2", "Combiners_Mod_Mod", 2, "Diffuse_T1_T2", "Combiners_Mod_Mod", "the edge fade", 2, nullptr, true};
+constexpr RetailShader kRetailUnknown = {nullptr, nullptr, 0, "Diffuse_T1", "Combiners_Mod", kFirstTexture, 1};
+}
+
+RetailTransforms RetailVertexTransforms(const char* vertexShader) {
+    // Cataclysm's M2GetVertexShaderID cases, by name: which transform combo slot each matrix stage takes.
+    struct Row { const char* name; RetailTransforms transforms; };
+    static const Row rows[] = {
+        {"Diffuse_T1", {{0, -1}, {0, -1}}},           {"Diffuse_T1_Env", {{0, -1}, {0, -1}}},
+        {"Diffuse_Env_T1", {{0, -1}, {0, -1}}},       {"Diffuse_T1_Env_T1", {{0, -1}, {0, -1}}},
+        {"Diffuse_T1_T1", {{0, -1}, {0, -1}}},        {"Diffuse_T1_T1_T1", {{0, -1}, {0, -1}}},
+        {"Diffuse_EdgeFade_T1", {{0, -1}, {0, -1}}},  {"Diffuse_EdgeFade_Env", {{0, -1}, {0, -1}}},
+        {"Diffuse_T1_T2", {{1, 0}, {1, 0}}},          {"Diffuse_EdgeFade_T1_T2", {{1, 0}, {1, 0}}},
+        {"Diffuse_T2", {{0, -1}, {1, -1}}},           {"Diffuse_T1_Env_T2", {{2, 0}, {1, 0}}},
+        {"Diffuse_T1_T1_T1_T2", {{3, 0}, {1, 0}}},    {"Diffuse_T1_T2_T1", {{1, 0}, {1, 0}}},
+    };
+    for (const Row& row : rows) {
+        if (std::strcmp(row.name, vertexShader) == 0) return row.transforms;
+    }
+    return {{-1, -1}, {-1, -1}};   // Diffuse_Env, Diffuse_Env_Env: environment maps only
+}
+
+const RetailShader& RetailPackedShader(uint16_t index) {
+    if (index < sizeof(kRetailShaders) / sizeof(kRetailShaders[0])) return kRetailShaders[index];
+    if (index == 33) return kRetailEdgeFade33;
+    return kRetailUnknown;
+}
+
+bool IsKnownRetailPacked(uint16_t index) {
+    return &RetailPackedShader(index) != &kRetailUnknown;
+}
+
+const RetailShader& RetailFirstTextureStandIn() {
+    return kRetailUnknown;
+}
+
 bool PrepareSkin(std::vector<uint8_t>& b, const std::vector<uint8_t>& m, std::string& error, bool degradeShaders) {
     if (!Range(b, 0, 48) || !Range(m, 0, 0x130) || !Array(b, 4, 2) || !Array(b, 28, 48) || !Array(m, 0x3c, 48))
         return Fail(error, "Invalid SKIN arrays");
@@ -1248,55 +1354,24 @@ bool PrepareSkin(std::vector<uint8_t>& b, const std::vector<uint8_t>& m, std::st
         b[p + 17] = 0;
     }
     if (!Array(b, 36, 24)) return Fail(error, "Invalid SKIN batches");
-    // Retail explicit shader indices 0-2 name the same three T1/Env combiners
-    // as legacy indices 1-3. Legacy index 0 is a disabled-batch marker.
-    // Reference: wowmodelviewer Tools/UnityRendererProject/Assets/Scripts/Wow/M2ShaderTable.cs.
+    // Retail's packed shader ids keep their index, tagged (RetailModel.h, kRetailPackedTag); the batch's
+    // texture count stays the file's. CM2Shared::GetEffect draws each by RetailPackedShader: retail's
+    // shaders where the client has them, otherwise a named stand-in. Non-packed ids mean what they mean
+    // in 3.3.5.
     for (uint32_t i = 0; i < U32(b, 36); ++i) {
         size_t p = U32(b, 40) + size_t(i) * 24 + 2;
         uint16_t shader = U16(b, p);
-        if (shader >= 0x8000 && shader <= 0x8002) {
-            ++shader;
-            b[p] = uint8_t(shader);
-            b[p + 1] = uint8_t(shader >> 8);
-        } else if (shader == 0x8003) {
-            // Retail index 3 is index 0's combiner plus an additive glow layer (a third texture).
-            // The glow needs its own pixel shader, which is not ported; draw the base layers only.
-            b[p] = 0x01; b[p + 1] = 0x80;
-            b[p + 12] = 2; b[p + 13] = 0;
-        } else if (shader == 0x4014) {
-            shader = 0x8011;
-            b[p] = uint8_t(shader); b[p + 1] = uint8_t(shader >> 8);
-        } else if (shader == 0x8021 && U16(b, U32(b, 40) + size_t(i) * 24 + 14) == 2) {
-            // Retail index 33, a two-texture edge-fade combiner (the Haranir fire totem's flame: a fire
-            // gradient times a scrolling flame mask). Without the fade it still needs both layers, or the
-            // mesh draws as a solid sphere of the first texture: use the two-texture Mod_Mod pair.
-            b[p] = 0x12; b[p + 1] = 0x80;
-        } else if (shader == 0x8015) {
-            // Diffuse_EdgeFade_T1_T2 / Combiners_Mod_Mod: the 3.3.5 client has no edge-fade vertex shader, so draw it without the fade.
-            b[p] = 0x12; b[p + 1] = 0x80;
-        } else if ((shader >= 0x8004 && shader <= 0x8007) || shader == 0x800a || shader == 0x800b
-            || (shader >= 0x800d && shader <= 0x800f) || shader == 0x8012 || shader == 0x8017) {
-            // A base texture plus a glow or blend layer: Opaque/Mod_AddAlpha(_Alpha, _Wgt) and Mod_Add_Alpha
-            // (retail M2ShaderTable 4-7, 10, 11, 13-15), 18 Mod_Dual_Crossfade and 23 Opaque_Alpha (a lerp to
-            // texture 2). The two-texture Mod_Mod pair would multiply the base by a mostly black glow map, or by
-            // itself; draw the base texture with the Mod combiner (0x10), which keeps its alpha. These models
-            // used to fail outside character layers. shortcut: no glow layer. Mapping from STRHercules/wowdecomp
-            // (Engine/Source/Retail/RetailModel.cpp), where each case was checked on a model.
-            b[p] = 0x10; b[p + 1] = 0;
-            b[p + 12] = 1; b[p + 13] = 0;
-        } else if (shader == 0x8013) {
-            // Diffuse_EdgeFade_T1 / Combiners_Mod_Depth: soft cards for steam, dust and light rays, which rely on
-            // fading at their edges and where they meet geometry. Without that they are hard flat quads, so the
-            // batch is off (0x8000, the disabled marker). shortcut: no mist or rays until an edge-fade shader
-            // exists. Also after wowdecomp.
-            b[p] = 0; b[p + 1] = 0x80;
-        } else if ((shader & 0x8000) && degradeShaders) {
-            // Character layers (tabards, armor effects) use multi-texture shaders the legacy renderer lacks.
-            // Draw them with their first texture and the plain opaque combiner instead of failing the model.
-            b[p] = b[p + 1] = 0;
-            b[p + 12] = 1; b[p + 13] = 0;
-        } else if (shader & 0x8000) {
-            return Fail(error, ("Retail explicit shader is not implemented yet: 0x" + HexWord(shader) + " in batch " + std::to_string(i) + " (textures " + std::to_string(U16(b, U32(b, 40) + size_t(i) * 24 + 14)) + ")").c_str());
+        if (!(shader & 0x8000)) continue;
+        const uint16_t index = shader & 0x7FFF;
+        // Without degradeShaders, an id we know nothing about fails the model instead.
+        if (index > kRetailIndexMask || (!degradeShaders && !IsKnownRetailPacked(index)))
+            return Fail(error, ("Retail packed shader is unknown: 0x" + HexWord(shader) + " in batch " + std::to_string(i) + " (textures " + std::to_string(U16(b, U32(b, 40) + size_t(i) * 24 + 14)) + ")").c_str());
+        Put16(b, p, uint16_t(kRetailPackedTag | index));
+        // The engine's model shaders sample at most four textures; character layers carry up to six (0x801C
+        // on the bodies). Those keep what draws them (retail's shaders, or the stand-in).
+        if (U16(b, p + 12) > 4) {
+            const RetailShader& entry = RetailPackedShader(index);
+            Put16(b, p + 12, std::max<uint16_t>(1, entry.vertex && !entry.unavailable ? entry.textures : entry.standInTextures));
         }
     }
     // Diagnostic: WOW_RETAIL_HIDE_BATCHES=1,5 drops those batch indices (of the original skin) from every Retail model.

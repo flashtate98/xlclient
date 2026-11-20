@@ -88,6 +88,14 @@ OUTPUTS = [
         ("WaterQuery.comp", "kWaterQueryComp"),  # the surface under each swimmer (SXC/Water/Ride.cpp)
         ("RippleStep.comp", "kRippleStepComp"),  # the ripple field (Vulkan/Ripples.cpp)
     ]),
+    # SXC: our WMO shader (kb: our-shaders), in place of the translated WMO records when Wmo/OurShader is on. The
+    # pixel source twice: without the terrain's table, and with it (16's terrain blend; "Ground": a Vulkan 1.2
+    # device with non-uniform indexing, Vulkan/Ground.hpp's Possible(); SPIR-V 1.5).
+    ("WmoSpirv.inc", [
+        ("Wmo.vert", "kWmoVert"),
+        ("Wmo.frag", "kWmoFrag"),
+        ("Wmo.frag", "kWmoFragGround", ["GROUND=1"], "vulkan1.2"),
+    ]),
 ]
 
 

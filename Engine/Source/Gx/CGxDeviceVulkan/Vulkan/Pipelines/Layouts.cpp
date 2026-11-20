@@ -6,6 +6,7 @@
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"  // SXC:
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Lights.hpp" // SXC:
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Water.hpp"  // SXC:
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/WmoExtra.hpp"  // SXC: our WMO shader's set 2
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/DeviceCaps.hpp"
 
 namespace gxvk::vk::pipelines::detail
@@ -62,6 +63,7 @@ namespace gxvk::vk::pipelines::detail
         const VkDescriptorSetLayout set2 = cover ? gxvk::vk::cover::SetLayout()
                                          : extra == kExtraLights ? s.emptyLayout
                                          : extra == kExtraWater  ? gxvk::vk::water::SetLayout()  // our water: the scene behind it
+                                         : extra == kExtraWmo    ? gxvk::vk::wmoextra::SetLayout()  // our WMO shader's extra vertex data
                                                                  : VK_NULL_HANDLE;
         const VkDescriptorSetLayout lightsLayout = extra != kExtraNone ? gxvk::vk::lights::SetLayout() : VK_NULL_HANDLE;
         if (extra != kExtraNone && (set2 == VK_NULL_HANDLE || lightsLayout == VK_NULL_HANDLE)) return false;

@@ -108,12 +108,13 @@ namespace gxvk::vk::pipelines::detail
     constexpr uint32_t kAttribPosition  = 0;
     constexpr uint32_t kAttribNormal    = 3;  // SXC: our terrain shader
     constexpr uint32_t kAttribColor0    = 4;
+    constexpr uint32_t kAttribColor1    = 5;  // SXC: our WMO shader (the blend set)
     constexpr uint32_t kAttribTexCoord0 = 6;
     constexpr uint32_t kAttribTexCoord1 = 7;
 
     /// Whether a program is of the translated family (reads set 1, the semantic interface).
-    inline bool TranslatedFamily(VertexProgram v) { return v == VertexProgram::Translated || v == VertexProgram::FixedFunctionSemantic || v == VertexProgram::Terrain || v == VertexProgram::Decal || v == VertexProgram::Water; }
-    inline bool TranslatedFamily(FragmentProgram f) { return f == FragmentProgram::Translated || f == FragmentProgram::FixedFunctionTranslated || f == FragmentProgram::Terrain || f == FragmentProgram::Decal || f == FragmentProgram::Water; }
+    inline bool TranslatedFamily(VertexProgram v) { return v == VertexProgram::Translated || v == VertexProgram::FixedFunctionSemantic || v == VertexProgram::Terrain || v == VertexProgram::Decal || v == VertexProgram::Water || v == VertexProgram::Wmo; }
+    inline bool TranslatedFamily(FragmentProgram f) { return f == FragmentProgram::Translated || f == FragmentProgram::FixedFunctionTranslated || f == FragmentProgram::Terrain || f == FragmentProgram::Decal || f == FragmentProgram::Water || f == FragmentProgram::Wmo; }
 
     /// What a pipeline is built from. Compared bytewise, so every byte is set (zeroed first).
     struct Key
@@ -142,6 +143,7 @@ namespace gxvk::vk::pipelines::detail
         uint32_t     instanceStreams; ///< SXC: streams fed per instance (instanced grass)
         uint32_t     plantStream;     ///< SXC: the plant rows' stream + 1; 0 none
         uint32_t     copyStream;      ///< SXC: the grass copies' number stream + 1; 0 none
+        uint32_t     wmoOptions;      ///< SXC: VertexProgram::Wmo's options (wmo::k*), else 0
     };
 
     struct Entry
@@ -301,6 +303,7 @@ namespace gxvk::vk::pipelines::detail
     // Layouts.cpp
     bool CreateRegsLayout();
     constexpr uint32_t kExtraNone = 0, kExtraCover = 1, kExtraLights = 2, kExtraWater = 3;  // SXC: LayoutEntry::extra
+    constexpr uint32_t kExtraWmo = 4;   // SXC: our WMO shader: set 2 its extra vertex data (Vulkan/WmoExtra), set 3 the lights'
     bool LayoutFor(uint32_t samplerMask, uint32_t extra, uint32_t& index);
     void DestroyLayouts();
 

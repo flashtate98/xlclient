@@ -13,6 +13,9 @@
 #include "Engine/Source/Model2/M2Model.h"
 #include "Engine/Source/Model2/M2Shared.h"
 #include "Engine/Source/Model2/CM2SceneRender.h"
+#if defined(WOWDECOMP_RETAIL_MODELS)
+#include "Engine/Source/Retail/RetailModel.h"
+#endif
 #include "Engine/Source/Services/GfxSingletonManager.h"
 #include "Engine/Source/Services/ParticleSystem2.h"
 #include "Engine/Source/Services/RibbonEmitter.h"
@@ -1560,6 +1563,22 @@ void __stdcall CM2Scene::ComputeElementShaders(M2Element* element) {
             }
         }
     }
+
+#if defined(WOWDECOMP_RETAIL_MODELS)
+    // Not in the original: Cataclysm's shaders (repacked, Tools/VulkanShaders bls/cata.py) have no
+    // permutation for 3.3.5's shadow constants, so their vertex permutations write no shadow coordinates;
+    // a shadowed pixel permutation would read them, and the draw is refused. Such a batch gets no shadow.
+    if (shadow && Retail::IsRetailPacked(element->m_batch->m_shader)) {
+        const char* vertex;
+        const char* pixel;
+        bool cataFiles = false;
+        M2RetailBatchShaders(element->m_batch, &vertex, &pixel, nullptr, 0, &cataFiles);
+
+        if (cataFiles) {
+            shadow = 0;
+        }
+    }
+#endif
 
     int32_t useAlphaTest = alphaTest && (!g_theGxDevicePtr->Caps().m_shaderAlphaRef || shadow);
     uint32_t shadowIndex = shadow > 2 ? 2 : shadow;

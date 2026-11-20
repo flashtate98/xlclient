@@ -1,8 +1,12 @@
 // SXC: a second view of the world (SXC/View/View.h).
 #include "SXC/View/View.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
+#include <unordered_map>
+#include <vector>
 #include "Engine/Source/Gx/CGxDevice/CGxDevice.h"
 #include "Engine/Source/Gx/Gx.h"
 #include "Engine/Source/Tempest/C3Vector.h"
@@ -58,9 +62,41 @@ namespace {
         return s_setting;
     }
 
+    // How far off the water may be for a mirror (Seyri, 2026-11-05: it popped in on lakes as you came
+    // closer, at the ~100 yd the search reached then), and the last stretch of that over which it fades in.
+    SXC::Settings::Float& Distance() {
+        static SXC::Settings::Float s_setting("Liquid", "MirrorDistance", 250.0f, 50.0f, 260.0f, "The mirror's distance",
+                                              "How far off the nearest water may be for the mirror (yd, at most the shore "
+                                              "field's ~260): farther, the water shows the screen-space reflection only.");
+        return s_setting;
+    }
+
+    SXC::Settings::Float& Fade() {
+        static SXC::Settings::Float s_setting("Liquid", "MirrorFade", 100.0f, 0.0f, 250.0f, "The mirror's fade",
+                                              "Over how many yards before its distance the mirror fades in, instead of switching on.");
+        return s_setting;
+    }
+
     bool s_planned = false;   // PlanMirror decided this frame (WorldBegin keeps to it)
     bool s_plannedOn = false; // and to mirror
     float s_plannedZ = 0.0f;
+    float s_plannedFade = 1.0f;
+    float s_fade = 1.0f;      // the drawn mirror's share (1 full, toward 0 as the water lies farther)
+    float s_waterDistance = 0.0f;
+    constexpr float kHighest = 400.0f;   // yd: the highest above the water the camera mirrors
+    constexpr float kRightAbove = 15.0f; // yd: the water under the camera is the plane, seen or not
+    bool s_hadPlane = false;             // the last frame's plane (SeenWater keeps to it)
+    float s_lastPlane = 0.0f;
+
+    // The panel's view of the choice: the levels SeenWater weighed this frame, and how the plane was taken.
+    struct Candidate {
+        float z, own, weight, nearest;   // weight: with the neighbouring half-yard steps (what is compared)
+        uint32_t cells;
+    };
+
+    std::vector<Candidate> s_candidates;
+    bool s_keptPrevious = false;         // a heavier level lost to the last plane (it wasn't 1.5x heavier)
+    const char* s_pickedBy = "";
 
     SXC::Settings::Int& Divisor() {
         static SXC::Settings::Int s_setting("Liquid", "MirrorDivisor", 2, 1, 4, "The mirror's size",
@@ -83,9 +119,10 @@ namespace {
         return f;
     }
 
-    // The surface of the water nearest (x, y) in the shore field (terrain water around the player, ~100 yd
-    // searched in rings); false where none is.
-    bool NearestWater(float x, float y, float& z) {
+    // The surface of the water nearest (x, y) in the shore field (terrain water around the player, its whole
+    // window searched in rings out to `reach` yd) and how far it lies (yd, across the ground); false where none
+    // is. The rings are squares: past the first hit, those that could still hold a nearer cell are searched too.
+    bool NearestWater(float x, float y, float reach, float& z, float& distance) {
         const SXC::Water::ShoreMap& m = SXC::Water::ShoreField();
 
         if (!m.valid) {
@@ -94,41 +131,55 @@ namespace {
 
         const int32_t cx = static_cast<int32_t>(std::floor((kHalfWorld - y) / SXC::Water::kShoreCell));
         const int32_t cy = static_cast<int32_t>(std::floor((kHalfWorld - x) / SXC::Water::kShoreCell));
+        const int32_t rings = std::min(static_cast<int32_t>(reach / SXC::Water::kShoreCell) + 1, SXC::Water::kShoreSize);
+        int32_t last = rings;
+        int32_t best = INT32_MAX;
 
-        for (int32_t r = 0; r <= 48; r++) {
-            float best = 1e9f;
+        auto visit = [&](int32_t gx, int32_t gy) {
+            if (gx < m.originX || gy < m.originY || gx >= m.originX + SXC::Water::kShoreSize || gy >= m.originY + SXC::Water::kShoreSize) {
+                return;
+            }
 
-            for (int32_t gy = cy - r; gy <= cy + r; gy++) {
-                for (int32_t gx = cx - r; gx <= cx + r; gx++) {
-                    if (std::abs(gx - cx) != r && std::abs(gy - cy) != r) {
-                        continue;   // the ring only
-                    }
+            const size_t k = static_cast<size_t>(gy & (SXC::Water::kShoreSize - 1)) * SXC::Water::kShoreSize + static_cast<size_t>(gx & (SXC::Water::kShoreSize - 1));
 
-                    if (gx < m.originX || gy < m.originY || gx >= m.originX + SXC::Water::kShoreSize || gy >= m.originY + SXC::Water::kShoreSize) {
-                        continue;
-                    }
+            if (FromHalf(m.texels[k * 4]) <= 0.0f) {
+                return;   // land
+            }
 
-                    const size_t k = static_cast<size_t>(gy & (SXC::Water::kShoreSize - 1)) * SXC::Water::kShoreSize + static_cast<size_t>(gx & (SXC::Water::kShoreSize - 1));
+            const int32_t d = (gx - cx) * (gx - cx) + (gy - cy) * (gy - cy);
 
-                    if (FromHalf(m.texels[k * 4]) <= 0.0f) {
-                        continue;   // land
-                    }
+            if (d < best) {
+                best = d;
+                z = m.cells[k * 4];
+            }
+        };
 
-                    const float d = static_cast<float>((gx - cx) * (gx - cx) + (gy - cy) * (gy - cy));
+        for (int32_t r = 0; r <= last; r++) {
+            if (r == 0) {
+                visit(cx, cy);
+            } else {
+                for (int32_t i = -r; i <= r; i++) {
+                    visit(cx + i, cy - r);
+                    visit(cx + i, cy + r);
+                }
 
-                    if (d < best) {
-                        best = d;
-                        z = m.cells[k * 4];
-                    }
+                for (int32_t i = -r + 1; i <= r - 1; i++) {
+                    visit(cx - r, cy + i);
+                    visit(cx + r, cy + i);
                 }
             }
 
-            if (best < 1e9f) {
-                return true;
+            if (best != INT32_MAX && last == rings) {
+                last = std::min(rings, static_cast<int32_t>(std::ceil(r * 1.4143f)));
             }
         }
 
-        return false;
+        if (best == INT32_MAX) {
+            return false;
+        }
+
+        distance = std::sqrt(static_cast<float>(best)) * SXC::Water::kShoreCell;
+        return distance <= reach;
     }
 
     // Row-major 4x4 helpers over the engine's matrices (row vectors: v' = v M).
@@ -146,6 +197,143 @@ namespace {
         }
 
         std::memcpy(out, r, sizeof r);
+    }
+
+    // The water the camera sees most of (Seyri, 2026-11-13: the plane was the water nearest the player, so a
+    // lake looked at past a nearer river or pond never took the mirror and showed the sky's gradient). The
+    // shore field's water cells in view, every second one each way, grouped by height (half-yard steps);
+    // each counts what it covers on screen (its solid angle).
+    // The level's weighted surface and its nearest cell across the ground; false when none is in view.
+    // `previous` (the last plane) wins unless another covers clearly more, so two waters don't flicker.
+    bool SeenWater(const C3Vector& camera, float reach, bool hadPrevious, float previous, float& z, float& distance) {
+        const SXC::Water::ShoreMap& m = SXC::Water::ShoreField();
+
+        if (!m.valid) {
+            return false;
+        }
+
+        const CGxMatrixStack& viewStack = g_theGxDevicePtr->m_xforms[GxXform_View];
+        float vp[16], p[16];
+        Load(viewStack.m_mtx[viewStack.m_level], vp);
+        Load(g_theGxDevicePtr->m_projNative, p);
+        Multiply(vp, p, vp);
+
+        struct Level {
+            float weight = 0.0f, zSum = 0.0f, nearest = 1e30f;
+            uint32_t cells = 0;
+        };
+
+        std::unordered_map<int32_t, Level> levels;
+        const float cell = SXC::Water::kShoreCell, area = 4.0f * cell * cell;
+        const float reach2 = reach * reach;
+
+        for (int32_t gy = m.originY; gy < m.originY + SXC::Water::kShoreSize; gy += 2) {
+            for (int32_t gx = m.originX; gx < m.originX + SXC::Water::kShoreSize; gx += 2) {
+                const size_t k = static_cast<size_t>(gy & (SXC::Water::kShoreSize - 1)) * SXC::Water::kShoreSize + static_cast<size_t>(gx & (SXC::Water::kShoreSize - 1));
+
+                if (FromHalf(m.texels[k * 4]) <= 0.0f) {
+                    continue;   // land
+                }
+
+                const float wz = m.cells[k * 4];
+                const float rx = kHalfWorld - (static_cast<float>(gy) + 0.5f) * cell - camera.x;
+                const float ry = kHalfWorld - (static_cast<float>(gx) + 0.5f) * cell - camera.y;
+                const float rz = wz - camera.z;
+                const float flat2 = rx * rx + ry * ry;
+
+                if (rz > -0.3f || flat2 > reach2) {
+                    continue;   // at or above the camera, or past the distance
+                }
+
+                // In view: the clip space's x, y within w (with a margin: a wave's tilt reads a little aside).
+                const float cx = rx * vp[0] + ry * vp[4] + rz * vp[8] + vp[12];
+                const float cy = rx * vp[1] + ry * vp[5] + rz * vp[9] + vp[13];
+                const float cw = rx * vp[3] + ry * vp[7] + rz * vp[11] + vp[15];
+
+                if (cw <= 0.0f || std::abs(cx) > 1.2f * cw || std::abs(cy) > 1.2f * cw) {
+                    continue;
+                }
+
+                // Water near the camera counts as if 25 yd off (the few yards under it outweighed a lake: Seyri,
+                // 2026-11-13), and sloped water (a river running down; its neighbour two cells on differs) a
+                // tenth: one flat plane suits it badly.
+                // The solid angle: the area x the sine of the angle it's seen at / the distance squared.
+                const float d = std::sqrt(flat2 + rz * rz);
+                Level& l = levels[static_cast<int32_t>(std::floor(wz * 2.0f))];
+                float w = area * (-rz / d) / std::max(d * d, 625.0f);
+                const size_t kx = static_cast<size_t>(gy & (SXC::Water::kShoreSize - 1)) * SXC::Water::kShoreSize + static_cast<size_t>((gx + 2) & (SXC::Water::kShoreSize - 1));
+                const size_t ky = static_cast<size_t>((gy + 2) & (SXC::Water::kShoreSize - 1)) * SXC::Water::kShoreSize + static_cast<size_t>(gx & (SXC::Water::kShoreSize - 1));
+
+                if ((FromHalf(m.texels[kx * 4]) > 0.0f && std::abs(m.cells[kx * 4] - wz) > 0.25f) ||
+                    (FromHalf(m.texels[ky * 4]) > 0.0f && std::abs(m.cells[ky * 4] - wz) > 0.25f)) {
+                    w *= 0.1f;
+                }
+                l.weight += w;
+                l.zSum += w * wz;
+                l.cells++;
+                l.nearest = std::min(l.nearest, flat2);
+            }
+        }
+
+        // Neighbouring half-yard steps are one water (a level surface on a step's edge, a gentle slope): the
+        // group decides, its heaviest step is the plane. (The best scoring step itself was a sliver of 7 cells
+        // half a yard above a lake of 758, its score the lake's: Seyri, 2026-11-13.)
+        const Level* best = nullptr;
+        int32_t bestKey = 0;
+        float bestWeight = 0.0f, previousWeight = 0.0f;
+        s_candidates.clear();
+
+        for (const auto& [key, l] : levels) {
+            float w = l.weight;
+
+            for (int32_t d : { -1, 1 }) {
+                const auto n = levels.find(key + d);
+                w += n != levels.end() ? n->second.weight : 0.0f;
+            }
+
+            s_candidates.push_back(Candidate{ l.zSum / l.weight, l.weight, w, std::sqrt(l.nearest), l.cells });
+
+            if (w > bestWeight) {
+                bestWeight = w;
+                bestKey = key;
+                best = &l;
+            }
+
+            if (hadPrevious && std::abs(l.zSum / l.weight - previous) < 0.6f) {
+                previousWeight = std::max(previousWeight, w);
+            }
+        }
+
+        if (!best) {
+            return false;
+        }
+
+        for (int32_t d : { -1, 1 }) {
+            const auto n = levels.find(bestKey + d);
+
+            if (n != levels.end() && n->second.weight > best->weight) {
+                best = &n->second;
+            }
+        }
+
+        if (previousWeight > 0.0f && bestWeight < 1.5f * previousWeight) {
+            const Level* kept = nullptr;
+
+            for (const auto& [key, l] : levels) {
+                if (std::abs(l.zSum / l.weight - previous) < 0.6f && (!kept || l.weight > kept->weight)) {
+                    kept = &l;
+                }
+            }
+
+            s_keptPrevious = kept != nullptr && kept != best;
+            best = kept ? kept : best;
+        } else {
+            s_keptPrevious = false;
+        }
+
+        z = best->zSum / best->weight;
+        distance = std::sqrt(best->nearest);
+        return true;
     }
 
     // The sky's: directions mirrored (z to -z through the camera), nothing clipped; as a transform of view space.
@@ -216,20 +404,59 @@ namespace SXC::View {
         }
 
         uint32_t type = 0;
+        const float reach = Distance().Get();
+        float distance = 0.0f;
 
-        // The water under the camera (a WMO's where the camera is inside its group), else the nearest in
-        // the shore field around.
-        if (!SXC::Water::LiquidAt(camera, planeZ, type) && !NearestWater(camera.x, camera.y, planeZ)) {
+        // A WMO's water right under the camera (where it is inside its group: the shore field holds only the
+        // terrain's), else the water seen most of, else the nearest in the shore field around. Terrain water
+        // under the camera competes with the rest (a river under it broke the lake beyond: Seyri, 2026-11-13).
+        float under = 0.0f;
+        bool underIsMapObj = false;
+        const bool hasUnder = SXC::Water::LiquidAt(camera, under, type, &underIsMapObj);
+
+        s_candidates.clear();
+        s_keptPrevious = false;
+
+        if (hasUnder && underIsMapObj && camera.z - under < kRightAbove) {
+            planeZ = under;
+            s_pickedBy = "a WMO's water right under the camera";
+        } else if (SeenWater(camera, reach, s_hadPlane, s_lastPlane, planeZ, distance)) {
+            s_pickedBy = s_keptPrevious ? "the water seen most of, kept from the last frame" : "the water seen most of";
+        } else if (hasUnder) {
+            planeZ = under;
+            s_pickedBy = "no water in view: the water under the camera";
+        } else if (NearestWater(camera.x, camera.y, reach, planeZ, distance)) {
+            s_pickedBy = "no water in view: the nearest water";
+        } else {
             s_why = "no water near";
+            s_pickedBy = "";
+            s_hadPlane = false;
             return false;
         }
 
-        if (camera.z < planeZ + 0.3f || camera.z - planeZ > 400.0f) {
+        s_hadPlane = true;
+        s_lastPlane = planeZ;
+
+        if (camera.z < planeZ + 0.3f || camera.z - planeZ > kHighest) {
             s_why = camera.z < planeZ + 0.3f ? "the camera is under the water" : "the water is far below";
             return false;
         }
 
+        // Faded in over the last stretch of the distance across the ground, and of the height above the
+        // water (flying straight up, it popped at the height's limit: Seyri, 2026-11-13).
+        const float fade = std::max(Fade().Get(), 0.0f);
+        const float acrossT = fade > 0.0f ? std::clamp((reach - distance) / fade, 0.0f, 1.0f) : 1.0f;
+        const float aboveT = fade > 0.0f ? std::clamp((kHighest - (camera.z - planeZ)) / fade, 0.0f, 1.0f) : 1.0f;
+        const float t = std::min(acrossT, aboveT);
+        s_waterDistance = distance;
+
+        if (t <= 0.0f) {
+            s_why = "the water is at the distance's edge";
+            return false;
+        }
+
         s_plannedZ = planeZ;
+        s_plannedFade = t * t * (3.0f - 2.0f * t);
         s_plannedOn = true;
         s_why = "";
         return true;
@@ -274,6 +501,7 @@ namespace SXC::View {
 
         s_recording = true;
         s_planeZ = planeZ;
+        s_fade = s_plannedFade;
         s_why = "";
     }
 
@@ -293,8 +521,9 @@ namespace SXC::View {
         }
     }
 
-    bool Mirror(float& planeZ) {
+    bool Mirror(float& planeZ, float& fade) {
         planeZ = s_planeZ;
+        fade = s_fade;
         return s_drawn;
     }
 
@@ -314,6 +543,23 @@ namespace SXC::View {
         if (ImGui::Combo("Mirror size", &size, kSizes, IM_ARRAYSIZE(kSizes))) {
             Divisor().Set(size + 1);
         }
+
+        float distance = Distance().Get();
+        ImGui::SetNextItemWidth(200.0f);
+
+        if (ImGui::SliderFloat("Mirror distance (yd)", &distance, 50.0f, 260.0f, "%.0f")) {
+            Distance().Set(distance);
+        }
+
+        ImGui::SetItemTooltip("%s", "How far off the nearest water may be for the mirror (at most the shore field's ~260 yd).");
+        float fade = Fade().Get();
+        ImGui::SetNextItemWidth(200.0f);
+
+        if (ImGui::SliderFloat("Mirror fade (yd)", &fade, 0.0f, 250.0f, "%.0f")) {
+            Fade().Set(fade);
+        }
+
+        ImGui::SetItemTooltip("%s", "Over how many yards before the distance the mirror fades in (0: it switches on).");
 
         bool grass = Grass().Get();
 
@@ -349,6 +595,49 @@ namespace SXC::View {
             }
         }
 
+        // How the plane was chosen: the levels of water in view, by how much of the screen each covers.
+        if (*s_pickedBy) {
+            ImGui::TextDisabled("Plane: %s.", s_pickedBy);
+        }
+
+        if (!s_candidates.empty() && ImGui::TreeNode("mirrorLevels", "Water levels in view (%zu)", s_candidates.size())) {
+            std::vector<Candidate> sorted = s_candidates;
+            std::sort(sorted.begin(), sorted.end(), [](const Candidate& a, const Candidate& b) { return a.weight > b.weight; });
+            const float top = sorted.front().weight > 0.0f ? sorted.front().weight : 1.0f;
+
+            if (ImGui::BeginTable("mirrorLevelsTable", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
+                ImGui::TableSetupColumn("z");
+                ImGui::TableSetupColumn("score (with +-0.5 yd)");
+                ImGui::TableSetupColumn("own");
+                ImGui::TableSetupColumn("cells");
+                ImGui::TableSetupColumn("nearest (yd)");
+                ImGui::TableHeadersRow();
+
+                for (size_t i = 0; i < sorted.size() && i < 12; i++) {
+                    const Candidate& c = sorted[i];
+                    const bool chosen = std::abs(c.z - s_lastPlane) < 0.3f;
+                    const ImVec4 colour = chosen ? ImVec4(0.4f, 1.0f, 0.4f, 1.0f) : ImVec4(0.75f, 0.75f, 0.75f, 1.0f);
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::TextColored(colour, "%.2f%s", c.z, chosen ? "  <" : "");
+                    ImGui::TableNextColumn();
+                    ImGui::TextColored(colour, "%.0f%%", 100.0f * c.weight / top);
+                    ImGui::TableNextColumn();
+                    ImGui::TextColored(colour, "%.0f%%", 100.0f * c.own / top);
+                    ImGui::TableNextColumn();
+                    ImGui::TextColored(colour, "%u", c.cells);
+                    ImGui::TableNextColumn();
+                    ImGui::TextColored(colour, "%.0f", c.nearest);
+                }
+
+                ImGui::EndTable();
+            }
+
+            ImGui::TextDisabled("Each level scores what it covers on screen (water nearer than 25 yd counted as 25 yd off, "
+                                "sloped water a tenth). The last plane stays unless another scores 1.5x more.");
+            ImGui::TreePop();
+        }
+
         if (!s_drawn) {
             ImGui::TextDisabled("Mirror: none this frame (%s).", s_why);
             return;
@@ -360,7 +649,8 @@ namespace SXC::View {
             s_device->stats(copied, left, noProjection, width, height);
         }
 
-        ImGui::TextDisabled("Mirror at z %.2f, %ux%u: %u draws copied, %u left out (interface, decals, water), %u without a projection found.",
-                            s_planeZ, width, height, copied, left, noProjection);
+        ImGui::TextDisabled("Mirror at z %.2f, the water %.0f yd off, %.0f%% in, %ux%u: %u draws copied, %u left out (interface, decals, water), "
+                            "%u without a projection found.",
+                            s_planeZ, s_waterDistance, s_fade * 100.0f, width, height, copied, left, noProjection);
     }
 }

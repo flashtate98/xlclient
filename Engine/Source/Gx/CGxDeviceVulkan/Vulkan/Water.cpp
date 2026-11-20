@@ -30,7 +30,7 @@ namespace
 
     constexpr uint32_t kSlots = frame::kFramesInFlight;
     constexpr VkFormat kColourFormat = VK_FORMAT_R8G8B8A8_UNORM;
-    constexpr VkFormat kDepthFormat  = VK_FORMAT_R32_SFLOAT;
+    constexpr VkFormat kDepthFormat  = VK_FORMAT_R32G32_SFLOAT;   // r: the view's w; g: the raw depth (the debug views)
 
     /// Water.frag's WaterScene block (std140): the viewport on the target (x, y, width, height), the
     /// target's size (width, height, 1 / width, 1 / height), the wave cascades' sizes (yd; w 1 when the
@@ -56,7 +56,7 @@ namespace
         float rippleLook[4];   ///< its current layer, 1 when stepped this frame, the strength, how far it shows (yd)
         float domeRows[8];     ///< the sky's dome: its seven rows' elevation (sine), [7] 1 when drawn
         float domeColours[122][4];   ///< its vertices' colours: the zenith, four rings of 24, the fog ring, the nadir
-        float mirror[4];       ///< the mirror (Vulkan/View.cpp): 1 when drawn this frame, the plane's height (world z), 0, 0
+        float mirror[4];       ///< the mirror (Vulkan/View.cpp): 1 when drawn this frame, the plane's height (world z), its share (fading in), 0
     };
 
     // The waves (Shaders/WaterWaves.glsl): N x N per cascade, three cascades.
@@ -975,6 +975,7 @@ namespace
         {
             p.mirror[0] = 1.0f;
             p.mirror[1] = in.waves.mirrorZ;
+            p.mirror[2] = in.waves.mirrorFade;
         }
         gxvk::vk::ripples::Look(p.rippleGrid, p.rippleLook);
         p.rippleLook[2] = in.rippleStrength;
@@ -1195,6 +1196,8 @@ namespace gxvk::vk::water
     }
 
     const char* Status() { return s.status; }
+
+    VkImageView DepthCopyView() { return s.ready && s.lastUsed != 0 ? s.depth.view : VK_NULL_HANDLE; }
 
     VkDescriptorSet MoveSet(uint32_t slotIndex, uint64_t serial, float& time, float look[4])
     {

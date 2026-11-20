@@ -184,7 +184,31 @@ typedef struct sxc_grass_api
 
     /// What the ground marks (sxc.cover's set_marks) do to plants; copied, call again when it changes.
     void(WXL_CALL* set_marks)(const sxc_grass_marks* marks);
+
+    // --- appended 2026-11-14 (check struct_size before using): the grass editor -------------------------
+
+    /// The ground effects painted on the player's map tile and the 8 around it (their loaded chunks), by
+    /// GroundEffectTexture ID. Writes up to `capacity`, returns how many there are.
+    uint32_t(WXL_CALL* effects_near)(struct sxc_grass_effect* out, uint32_t capacity);
+
+    /// A GroundEffectDoodad's model as the client loads it (World\NoDXT\Detail\ + its path), null when
+    /// GroundEffectDoodad.dbc has no such row; valid until the next call.
+    const char*(WXL_CALL* doodad_path)(uint32_t id);
+
+    /// One plant model drawn in a colour (rgba, a the strength; 0 or null: none), to find it in the world.
+    /// Call every frame it should show: it lapses half a second after the last call.
+    void(WXL_CALL* set_highlight)(uint32_t doodad_id, const float* rgba);
 } sxc_grass_api;
+
+/// A ground effect near the player (effects_near): GroundEffectTexture.dbc's row and how much of it is painted.
+typedef struct sxc_grass_effect
+{
+    uint32_t effect;       ///< GroundEffectTexture ID
+    uint32_t doodads[4];   ///< its GroundEffectDoodad IDs (0: none)
+    uint32_t weights[4];
+    uint32_t density;
+    uint32_t chunks;       ///< the loaded chunks (of the 3 x 3 tiles) with a layer of it
+} sxc_grass_effect;
 
 /// What inspect found.
 typedef struct sxc_grass_inspect

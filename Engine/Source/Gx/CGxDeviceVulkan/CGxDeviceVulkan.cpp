@@ -31,6 +31,7 @@
 #include "Engine/Source/Storm/H/storm.h"
 #include "SXC/Fog/Fog.h"  // SXC: volumetric fog
 #include "SXC/Cover/Cover.h"  // SXC: surface covers
+#include "SXC/Ground/Ground.h"  // SXC: the terrain's table
 #include "SXC/Lights/Lights.h" // SXC: point lights
 #include "SXC/Log.h"
 #include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler
@@ -266,6 +267,7 @@ void CGxDeviceVulkan::ICreateDrawPath() {
         gxvk::vk::cover::SetProvider(&CGxDeviceVulkan::SxcCoverFrame);                  // SXC: surface covers
         SXC::Cover::SetDevice(gxvk::vk::cover::Ready(), gxvk::vk::cover::TextureSlots(), &gxvk::vk::cover::Status);
         gxvk::vk::lights::SetProvider(&CGxDeviceVulkan::SxcLightsFrame);                // SXC: point lights
+        gxvk::vk::ground::SetProvider(&CGxDeviceVulkan::SxcGroundFrame);                // SXC: the terrain's table
         gxvk::vk::lights::SetShadowReport(&SXC::Lights::ShadowsDrawn);
         SXC::Lights::SetDevice(gxvk::vk::cover::Ready() && gxvk::vk::lights::Ready(), &gxvk::vk::lights::Status);
         SXC::Lights::SetShadowDevice(gxvk::vk::shadows::Ready() ? gxvk::vk::shadows::Slots() : 0, gxvk::vk::shadows::kMaxVertices);
@@ -299,7 +301,8 @@ void CGxDeviceVulkan::ICreateDrawPath() {
         SXC::View::SetDevice(&s_view);
         // SXC: the instanced grass.
         static const SXC::Grass::Device s_grass = { gxvk::vk::grass::Mesh, gxvk::vk::grass::Allocate, gxvk::vk::grass::Write, gxvk::vk::grass::Release,
-                                                    &CGxDeviceVulkan::SxcGrassDraw, gxvk::vk::grass::PlantsInUse };
+                                                    &CGxDeviceVulkan::SxcGrassDraw, gxvk::vk::grass::PlantsInUse,
+                                                    []() { return gxvk::vk::grass::kMaxPlants; } };
         SXC::Grass::SetDevice(gxvk::vk::grass::Init() ? &s_grass : nullptr);
 
         // SXC: the frame profiler's GPU times (the pre-pass kinds into the profiler's pre-pass rows).
@@ -377,12 +380,13 @@ bool CGxDeviceVulkan::SxcGrassDraw(CGxTex* texture, const SXC::Grass::Run* runs,
 
     d.vertexRecord = instanced;
     d.lightsSurface = gxvk::vk::lights::kSurfaceOutdoor;   // step 7c: grass grows outside (our lights' inside / outside test)
-    // FlashWOW: the instanced variant is a 256-row module (GRASS_VCONST); with Retail models the large slice is 1024
-    // rows and a 256-row module reads its front. Matching 256 against 1024 fell back to the 64-row slice, so the
-    // motion's rows from c64 on were never uploaded and the plants flashed and stretched. The rows-used limit
-    // IDrawState took from the stock record (64) would cut them off the same way.
+    // The instanced module declares 256 rows (the motion's from c64 on); the large slice holds them at its front
+    // (1024 rows with retail models, where an `==` took it for the small one and the motion read garbage).
     d.vertexRows = instanced->vconst > gxvk::vk::pipelines::kVertexRowsSmall ? gxvk::vk::pipelines::kVertexRowsLarge : gxvk::vk::pipelines::kVertexRowsSmall;
-    d.vertexRowsUsed = 0;
+
+    if (d.vertexRowsUsed && d.vertexRowsUsed < instanced->vconst) {
+        d.vertexRowsUsed = instanced->vconst;
+    }
     static_assert(sizeof(SXC::Grass::Run) == sizeof(gxvk::vk::pipelines::Run), "SXC::Grass::Run is the pipelines' Run");
     d.runs = reinterpret_cast<const gxvk::vk::pipelines::Run*>(runs);
     d.runCount = count;
@@ -487,6 +491,46 @@ bool CGxDeviceVulkan::SxcLightsFrame(gxvk::vk::lights::Frame& out) {
 
     out.shadowJobs = jobs.empty() ? nullptr : jobs.data();
     out.shadowJobCount = in.shadowJobCount;
+    return true;
+}
+
+// SXC: the terrain under the camera as a table (SXC/Ground), once per frame at the first WMO draw: the window, the
+// entries, the textures they name resolved to this device's images (one not on the GPU yet stays white).
+bool CGxDeviceVulkan::SxcGroundFrame(gxvk::vk::ground::Frame& out) {
+    static_assert(gxvk::vk::ground::kSlots == SXC::Ground::kMaxTextures && gxvk::vk::ground::kGrid == SXC::Ground::kGrid &&
+                  gxvk::vk::ground::kMaxEntries == SXC::Ground::kMaxEntries && gxvk::vk::ground::kEntryBytes == sizeof(SXC::Ground::Entry) &&
+                  gxvk::vk::ground::kColours == SXC::Ground::kColours,
+                  "SXC::Ground and Vulkan/Ground disagree");
+    CGxDeviceVulkan* device = static_cast<CGxDeviceVulkan*>(g_theGxDevicePtr);
+    static SXC::Ground::Frame in;   // ~130 KB: off the stack
+
+    if (!device || !device->m_drawPath || !SXC::Ground::Build(in)) {
+        return false;
+    }
+
+    std::memcpy(out.viewInv, in.viewInv, sizeof out.viewInv);
+    std::memcpy(out.light, in.light, sizeof out.light);
+    out.firstI = in.firstI;
+    out.firstJ = in.firstJ;
+    out.grid = in.grid;
+    out.holes = in.holes;
+    out.colours = in.colours;
+    out.heights = in.heights;
+    out.normals = in.normals;
+    out.entries = in.entries;
+    out.entryCount = in.entryCount;
+    out.textureCount = in.textureCount;
+    static pipelines::Draw scratch;  // ITexResolve writes a draw's stage; one is reused
+
+    for (uint32_t k = 0; k < in.textureCount; k++) {
+        out.textures[k] = pipelines::Texture();
+        scratch.textureMask = 0;
+
+        if (in.textures[k].gx && device->ITexResolve(in.textures[k].gx, 0, scratch) && !scratch.textures[0].cube) {
+            out.textures[k] = scratch.textures[0];
+        }
+    }
+
     return true;
 }
 
@@ -718,6 +762,7 @@ bool CGxDeviceVulkan::SxcWaterCapture(const SXC::Water::Waves& waves, bool* firs
     std::memcpy(in.waves.domeColours, waves.domeColours, sizeof in.waves.domeColours);
     in.waves.mirror = waves.mirror;
     in.waves.mirrorZ = waves.mirrorZ;
+    in.waves.mirrorFade = waves.mirrorFade;
     in.looks.index = waves.lookIndex;
     in.looks.palette = waves.lookPalette;
     in.looks.count = waves.lookCount;

@@ -11,6 +11,7 @@
 #include "SXC/Fog/Fog.h"  // SXC: volumetric fog
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"  // SXC: surface covers
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Lights.hpp" // SXC: point lights
+#include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Ground.hpp" // SXC: the terrain's table
 #include "SXC/Grass/Grass.h"  // SXC: the instanced grass
 
 namespace SXC::Cover { struct Decal; }  // SXC: projected textures on the raised covers
@@ -181,6 +182,9 @@ class CGxDeviceVulkan : public CGxDevice {
     static bool SxcCoverFrame(gxvk::vk::cover::Frame& out);
     // SXC: our point lights for the shaders that light per pixel (SXC/Lights -> Vulkan/Lights).
     static bool SxcLightsFrame(gxvk::vk::lights::Frame& out);
+    // SXC: the terrain under the camera as a table (SXC/Ground -> Vulkan/Ground), its textures resolved to this
+    // device's images.
+    static bool SxcGroundFrame(gxvk::vk::ground::Frame& out);
     // SXC: the instanced grass (SXC/Grass -> Vulkan/Grass): a texture's runs with the client's grass state.
     static bool SxcGrassDraw(CGxTex* texture, const SXC::Grass::Run* runs, uint32_t count);
     static bool SxcWaterCapture(const SXC::Water::Waves& waves, bool* first);  // SXC: our water: the scene behind it and the waves, once per frame

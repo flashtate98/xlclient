@@ -1471,7 +1471,19 @@ void CMapChunk::RenderPrep() {
         this->m_renderChunk->RenderPrep();
     }
 
-    if ((CWorld::enables & Enable_DetailDoodads) && CWorld::detailDoodadDist > this->m_distToCamera) {
+    // SXC: also within the ground effects' distance of the camera in all three directions. m_distToCamera is
+    // the depth along the view, about the camera's height when looking down: flying high, every chunk in a wide
+    // footprint below built and drew its plants (17.9 ms GPU, a frame of 159 ms CPU: Seyri, 2026-11-13), though
+    // the plants' fade (CDetailDoodadData, by distance) leaves none visible past it.
+    const C3Vector& eye = CWorldScene::s_activeWorldView;
+    const float nx = std::max(std::max(this->m_bbox.b.x - eye.x, eye.x - this->m_bbox.t.x), 0.0f);
+    const float ny = std::max(std::max(this->m_bbox.b.y - eye.y, eye.y - this->m_bbox.t.y), 0.0f);
+    const float nz = std::max(std::max(this->m_bbox.b.z - eye.z, eye.z - this->m_bbox.t.z), 0.0f);
+    // And within the grass pool's reach (SXC/Grass: it shrinks when the pool is full).
+    const float reach = SXC::Grass::Reach();
+    const bool nearEye = nx * nx + ny * ny + nz * nz < std::min(World::groundEffectDistValueSqr, reach * reach);
+
+    if ((CWorld::enables & Enable_DetailDoodads) && CWorld::detailDoodadDist > this->m_distToCamera && nearEye) {
         if (!this->m_detailDoodadInst) {
             this->CreateDetailDoodads();
         }

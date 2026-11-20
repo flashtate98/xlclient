@@ -35,7 +35,12 @@ namespace SXC::Water {
                           "map before everywhere. Looks fade into each other over a terrain chunk (~33 yd) where places meet. The Water "
                           "panel's \"Write\" fills one; save here.");
             s.Id();
-            s.Uint("LiquidType").Group("Place").Tooltip("LiquidType.dbc's ID (1 Water, 2 Ocean, 17 WMO Water - Interior, ...); 0: every water.");
+            s.Uint("LiquidType").Group("Place").Tooltip(
+                "LiquidType.dbc's ID; 0: every water (the fallback for types without a row). The map file sets each water's "
+                "type; the Water panel shows the one under you. There is no river type: lakes and rivers are 1 Water, 5 Slow "
+                "Water or 9 Fast Water, the sea 2 Ocean, 6 Slow Ocean or 10 Fast Ocean, a building's water 13 WMO Water, 14 "
+                "WMO Ocean or 17 WMO Water - Interior. Waves, shore and caustics follow the row of the water you're in or "
+                "nearest (within 60 yd).");
             s.String("Scope").Group("Place").Tooltip("Empty: everywhere. A map's folder name (\"Kalimdor\"): that map. An area's name "
                                                      "(\"Elwynn Forest\", \"Crystal Lake\"; every area of that name) or \"area:<AreaTable ID>\": "
                                                      "that area and its sub-areas. An ADT's name (\"Kalimdor_23_30\"): that tile. Any case.");
@@ -57,7 +62,7 @@ namespace SXC::Water {
             s.Float("GlintSharpness").Group("Surface").Default(kDefaults.glintSharpness).Range(10, 5000);
             s.Float("WaveScale").Group("Waves").Default(kDefaults.waveScale).Range(0, 4).Tooltip("x the shared sea, this water (its shading and movement).");
             s.Float("WaveHeight").Group("Waves").Default(kDefaults.amplitude).Range(0, 4)
-                .Tooltip("The shared sea's height, from the row of the water the player is in.");
+                .Tooltip("The shared sea's height, from the row of the water the player is in or nearest.");
             s.Float("Choppiness").Group("Waves").Default(kDefaults.chop).Range(0, 4).Tooltip("The shared sea's: sharper crests.");
             s.Float("Spread").Group("Waves").Default(kDefaults.spread).Range(0, 1).Tooltip("The shared sea's: 0 all with the wind .. 1 every way.");
             s.Float("Foam").Group("Waves").Default(kDefaults.foam).Range(0, 4);
@@ -66,7 +71,7 @@ namespace SXC::Water {
             s.Text("Comment").Tooltip("Free text for the editor; never read.");
             // After the comment: added 2026-10-30, and older files are read by position (they lack these).
             s.Float("ShoreFoam").Group("Shore").Default(kDefaults.shoreFoam).Range(0, 2)
-                .Tooltip("The shore's foam (the waterline, breaking crests, the swash). The row of the water the player is in.");
+                .Tooltip("The shore's foam (the waterline, breaking crests, the swash). The row of the water the player is in or nearest.");
             s.Float("ShoreWaveHeight").Group("Shore").Default(kDefaults.shoreWaveHeight).Range(0, 0.6).Tooltip("yd: the shore waves' height.");
             s.Float("ShoreWavelength").Group("Shore").Default(kDefaults.shoreWavelength).Range(2, 20).Tooltip("yd between the shore waves.");
             s.Float("ShoreReach").Group("Shore").Default(kDefaults.shoreReach).Range(4, 60).Tooltip("yd: how far out the shore waves begin.");
@@ -454,7 +459,21 @@ namespace SXC::Water {
             const auto now = std::chrono::steady_clock::now();
             const bool moved = s_chunkX != s_gridChunkX || s_chunkY != s_gridChunkY;
 
-            if (!moved && s_gridGeneration == s_generation && now - s_gridBuilt < std::chrono::milliseconds(500)) {
+            // A chunk that has loaded since rebuilds it at once: its water drew with the defaults until then,
+            // then switched to its place's look (a still lake seen from afar popped from waves to a mirror,
+            // Seyri 2026-11-13).
+            bool arrived = false;
+
+            if (!moved && s_grid.valid) {
+                for (int32_t k = 0; k < kGridSize * kGridSize; k++) {
+                    if (!s_cells[k].known && ChunkAt(s_grid.originX + k % kGridSize, s_grid.originY + k / kGridSize)) {
+                        arrived = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!moved && !arrived && s_gridGeneration == s_generation && now - s_gridBuilt < std::chrono::milliseconds(500)) {
                 return;
             }
 

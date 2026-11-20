@@ -25,6 +25,7 @@
 #include "WoW/Source/WorldClient/Types.h"
 #include "WoW/Source/WorldClient/World.h"
 #include "SXC/Cover/Cover.h"  // SXC:
+#include "SXC/Ground/Ground.h"  // SXC:
 #include "SXC/Log.h"  // SXC:
 #include "SXC/Terrain/TextureParams.h"  // SXC:
 #if defined(_MSC_VER)
@@ -252,6 +253,8 @@ void CMapRenderChunk::SetVertexFormat(EGxVertexBufferFormat format) {
 // VERIFY: 75114f19 auto
 // OFFSET: 0x007B7350
 void CMapRenderChunk::FreeLayers() {
+    SXC::Ground::ForgetChunk(this);  // SXC: its textures go (the terrain's table)
+
     for (uint32_t i = 0; i < this->m_layersCount; i++) {
         CMapRenderChunkLayer& layer = this->m_layers[i];
         layer.m_texture = nullptr;
@@ -461,6 +464,57 @@ static void SxcSetHeights(CMapRenderChunk* chunk, bool on) {
     GxShaderConstantsSet(GxSh_Vertex, 60, smoothing, 1);
     const float buried[4] = { SXC::Terrain::PatternBuried(), SXC::Cover::SteadyWind(), 0.0f, 0.0f };
     GxShaderConstantsSet(GxSh_Vertex, 61, buried, 1);
+}
+
+// SXC: the chunk into the terrain's table (SXC::Ground; WMO shader 16 blends the terrain from it) as this draw
+// gives it to our terrain shader: the layers' and heights' textures, the coordinates' scales (v18 + k; the
+// alpha map's after the layers, SetVertexShader), the chunk's position (v23), the heights' values (p14, p15).
+static void SxcNoteGround(CMapRenderChunk* chunk) {
+    const CMapRenderChunk::SVertexShaderConstants& consts = CMapRenderChunk::s_vertexShaderConsts;
+    SXC::Ground::Note note;
+    const uint32_t layers = chunk->m_layersCount < 4 ? chunk->m_layersCount : 4;
+    note.layers = layers;
+    note.flags = ((CMap::header.m_flags & 0x4) ? SXC::Ground::kBigAlpha : 0u) | ((chunk->m_renderFlags & 0x4) ? SXC::Ground::kReflective : 0u) |
+                 (CMapRenderChunk::s_gxBufVertexFormat == GxVBF_PNC ? SXC::Ground::kVertexColour : 0u);
+    note.origin[0] = chunk->m_vec1.x;
+    note.origin[1] = chunk->m_vec1.y;
+    note.alphaScale[0] = consts.m_texScale[layers + 1].x;
+    note.alphaScale[1] = consts.m_texScale[layers + 1].y;
+    note.alpha = chunk->m_terrainBlendTexture ? TextureGetGxTex(chunk->m_terrainBlendTexture, 1, nullptr) : nullptr;
+    note.sunDir[0] = consts.m_sunDir.x, note.sunDir[1] = consts.m_sunDir.y, note.sunDir[2] = consts.m_sunDir.z;
+    note.ambient[0] = consts.m_sunAmbient.x, note.ambient[1] = consts.m_sunAmbient.y, note.ambient[2] = consts.m_sunAmbient.z;
+    note.diffuse[0] = consts.m_sunDiffuse.x, note.diffuse[1] = consts.m_sunDiffuse.y, note.diffuse[2] = consts.m_sunDiffuse.z;
+    // The sun's highlight where the terrain draws one (its vertex shader's specular permutation: SetVertexShader).
+    const bool specular = CMap::enableSpecularTerrain != 0;
+    note.specular[0] = specular ? consts.m_sunSpecular.x : 0.0f;
+    note.specular[1] = specular ? consts.m_sunSpecular.y : 0.0f;
+    note.specular[2] = specular ? consts.m_sunSpecular.z : 0.0f;
+    note.specular[3] = consts.m_sunSpecularW;
+
+    for (uint32_t i = 0; i < layers; i++) {
+        CMapRenderChunkLayer& layer = SxcLayerParams(chunk->m_layers[i]);
+        const bool reflective = i == 0 && (chunk->m_renderFlags & 0x4);
+        note.layer[i] = reflective || !layer.m_texture ? nullptr : TextureGetGxTex(layer.m_texture, 0, nullptr);
+        note.height[i] = reflective || !layer.m_sxcHeight ? nullptr : TextureGetGxTex(layer.m_sxcHeight, 0, nullptr);
+        note.layerScale[i] = consts.m_texScale[i + 1].x;
+        note.heightScale[i] = reflective ? 0.0f : layer.m_sxcHeightScale;
+        note.heightOffset[i] = reflective ? 0.0f : layer.m_sxcHeightOffset - 1.0f;
+    }
+
+    for (uint32_t c = 0; c < 2; c++) {
+        if (const CMapChunk* map = chunk->m_mapChunks[c]) {
+            note.centres[note.centreCount][0] = (map->m_bbox.b.x + map->m_bbox.t.x) * 0.5f;
+            note.centres[note.centreCount][1] = (map->m_bbox.b.y + map->m_bbox.t.y) * 0.5f;
+            note.shading[note.centreCount] = map->m_vertexShading;   // D3DCOLOR, as CreateVerticesWorld reads it
+            note.heights[note.centreCount] = map->m_height;          // from m_topLeftCoords.z, as it reads them
+            note.normals[note.centreCount] = map->m_normals;         // x, y, z per vertex, /127, as it reads them
+            note.baseZ[note.centreCount] = map->m_topLeftCoords.z;
+            note.holes[note.centreCount] = map->m_header ? map->m_header->m_holes : 0;   // as CreateIndices leaves them out
+            note.centreCount++;
+        }
+    }
+
+    SXC::Ground::NoteChunk(chunk, note);
 }
 
 // VERIFY: 6c5dc3eb manual
@@ -2860,6 +2914,7 @@ void CMapRenderChunk::RenderSinglePassVertexPixelShader() {
     CMapRenderChunk::SetVertexShader(this, this->m_layersCount + 1, specular);
     SXC::Cover::BeforeChunkDraw(this);  // SXC: the layers' cover entries for our terrain shader
     SxcSetHeights(this, true);          // SXC: and their heights
+    SxcNoteGround(this);                // SXC: and the terrain's table
     g_theGxDevicePtr->Draw(&this->m_batch, 1);
     SxcSetHeights(this, false);
 

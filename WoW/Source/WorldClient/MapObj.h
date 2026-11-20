@@ -68,7 +68,9 @@ class CMapObj : public CMapObjIndex, public TSHashObject<CMapObj, HASHKEY_NONE> 
     static void (CMapObj::*s_renderGroupExterior)(CMapObjGroup* group, uint32_t index);
     static void (CMapObj::*s_renderGroupInterior)(CMapObjGroup* group, uint32_t index);
     static CShaderEffect* s_classicShaders[7];
-    static CShaderEffect* s_unifiedShaders[7];
+    // SXC: 14, for Cataclysm's unified effects 7-13 (Shaders\Effects\CataMapObjU.wfx, Tools/VulkanShaders
+    // --cata; null when not deployed, and 10, a liquid window there). 0-6 are 3.3.5's own.
+    static CShaderEffect* s_unifiedShaders[14];
     static int32_t s_lightingMode;
     static uint32_t s_maxLiquidQueryDepth;
 
@@ -308,6 +310,46 @@ struct SMOMaterial {
 
 inline CTexture** SMOMaterial::Textures() {
     return reinterpret_cast<CTexture**>(&this->m_runTimeData[4 - 2 * sizeof(CTexture*) / sizeof(uint32_t)]);
+}
+
+// SXC: Cataclysm's unified WMO shaders (7-13) in unified WMOs. Their textures, UV sets and vertex colours as
+// Cataclysm counts them (s_shaderInfo there); the third texture (TwoLayerEnvMetal, MaskedEnvMetal,
+// EnvMetalEmissive), for which the material's run-time data has no room, is kept beside it.
+namespace MapObjCata {
+    // Whether a unified material's shader is drawn by Cataclysm's effect (7-13, deployed).
+    bool Drawn(uint32_t shader);
+    // The textures the shader samples (0: not one of Cataclysm's).
+    uint32_t TextureCount(uint32_t shader);
+    // Whether the shader reads the second vertex colour and UV set (the group's PNC2T2 vertices); 6, 3.3.5's
+    // composite, too.
+    bool SecondVertexSet(uint32_t shader);
+    CTexture* ThirdTexture(const SMOMaterial& material);
+    void SetThirdTexture(const SMOMaterial& material, CTexture* texture);
+    // Retail's 22 and 23 (from Dragonflight on) name up to six further textures in fields that are a colour,
+    // flags and run-time words elsewhere: color_3, flags_3, runTimeData[0..3] (null where none). Kept beside
+    // the material, bound to texture stages 8-13 when our WMO shader draws it (Apply). Set takes the
+    // references; Release closes them.
+    void SetExtraTextures(const SMOMaterial& material, CTexture* const (&textures)[6]);
+    bool HasExtraTextures(const SMOMaterial& material);
+    // Which of 23's layers and heights the material has: bits 0-3 the layers (texture_2, texture_3, color_3,
+    // flags_3), bits 4-7 the heights (runTimeData[0..3]).
+    uint32_t LayerMask(const SMOMaterial& material);
+    void ReleaseExtraTextures(const SMOMaterial& material);
+    // Before drawing a batch with Cataclysm's effect: its third texture and the wrap of the other two
+    // (CMapObjRender::ApplyMaterial there).
+    void Apply(const SMOMaterial& material, uint32_t shader);
+    // The texture matrices its vertex shader reads, right before each draw (after the lighting, which
+    // writes c9).
+    void ApplyMatrices(uint32_t shader);
+    // The shader the file names and why the material is drawn with another (nullptr: it isn't), kept from
+    // CreateMaterial, which overwrites m_shader with the one that draws it; for the Ray panel's surface readout.
+    struct ShaderNote { uint32_t retail = 0; const char* reason = nullptr; bool known = false; };
+    ShaderNote Note(const SMOMaterial& material);
+    void SetNote(const SMOMaterial& material, uint32_t retail, const char* reason);
+    void ClearNote(const SMOMaterial& material);
+    // The id a batch announces to our WMO shader (SXC::Wmo): the file's own where our shader draws it
+    // natively although CreateMaterial gave it a fallback for the translated path (15, 19), else `shader`.
+    uint32_t OurShaderId(const SMOMaterial& material, uint32_t shader);
 }
 
 struct SMOPortal {

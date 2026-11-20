@@ -130,6 +130,11 @@ namespace gxvk::vk::pipelines::detail
             }
             if (ss.regsUsed == ss.regsCount && !CreateChunk(ss))
             {
+                if (!s.stats.regsFull)
+                {
+                    Write(Error, "vulkan: pipelines: the frame's uniform ring is full (%u chunks of %u KiB, last slice %u bytes): later draws of the frame are dropped (logged once)",
+                          kMaxRegsChunks, kRegsChunkBytes / 1024, bytes);
+                }
                 ++s.stats.regsFull;
                 return false;
             }

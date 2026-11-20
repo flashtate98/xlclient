@@ -8,6 +8,7 @@
 #include "SXC/Data/Data.h"
 #include "SXC/Grass/Grass.h"
 #include "SXC/Log.h"
+#include "SXC/Models/Geosets.h"  // the Geosets panel
 #include "SXC/Profiler/Profiler.h"
 #include "SXC/Ui/RayTool.h"
 #include "SXC/Water/Medium.h"  // the Underwater panel
@@ -181,6 +182,9 @@ namespace {
         const int water = SXC::Ui::AddModule("Water", "Our water (kb: water-shader): the look's live values and debug views.");
         SXC::Ui::AddPanel(water, "Look", SXC::Water::DrawPanel);
         SXC::Ui::AddPanel(water, "Underwater", SXC::Water::DrawMediumPanel);
+        const int models = SXC::Ui::AddModule("Models", "Models (kb: modern-models): geosets and what the client shows of them.");
+        SXC::Ui::AddPanel(models, "Geosets", SXC::Geosets::DrawPanel);
+        SXC::Ui::AddPanel(models, "Batches", SXC::Geosets::DrawBatchesPanel);
     }
 
     PFN_vkVoidFunction LoadVulkan(const char* name, void* user) {

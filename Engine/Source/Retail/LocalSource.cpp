@@ -1,5 +1,7 @@
 #include "Engine/Source/Retail/LocalSource.h"
 #include "Engine/Source/Retail/RetailModel.h"
+#include "Engine/Source/Retail/RetailWmo.h"
+#include <cctype>
 #include "Engine/Source/BlizzardCore/SFile2-Core.h"
 #include "Engine/Source/BlizzardCore/Source/System/Log/Log.h"
 #include <algorithm>
@@ -55,6 +57,13 @@ std::string Extension(const std::string& key) {
 std::string Stem(const std::string& key) {
     const auto ext = Extension(key);
     return key.substr(0, key.size() - ext.size());
+}
+
+// A WMO group's conventional name: <root>_NNN.wmo.
+bool IsWmoGroupName(const std::string& key) {
+    if (key.size() < 9 || key.compare(key.size() - 4, 4, ".wmo")) return false;
+    const size_t u = key.size() - 8;
+    return key[u] == '_' && std::isdigit(uint8_t(key[u + 1])) && std::isdigit(uint8_t(key[u + 2])) && std::isdigit(uint8_t(key[u + 3]));
 }
 
 bool Number(const std::string& text, uint32_t& value) {
@@ -220,8 +229,11 @@ struct LocalSource::Impl {
     std::mutex mutex;
     std::once_flag tablesLoaded;
     std::unordered_map<uint32_t, std::string> listfile;      // optional CSV, wins over the DB2 tables
+    std::unordered_map<std::string, uint32_t> aliases;       // listfile-custom.csv: further names of a FileDataID
+    std::set<std::string> reportedAliases;                   // logged once each
     PathTable texturePaths, modelPaths;
     std::unordered_map<std::string, bool> modelKinds;        // .m2 name -> header is MD21
+    std::unordered_map<std::string, bool> wmoKinds;          // .wmo root name -> a retail root (RetailWmo.h)
     std::map<std::string, Reference> dependencies;           // published skin/anim names
     std::map<std::string, std::pair<std::shared_ptr<Model>, size_t>> models;
     std::map<std::string, uint32_t> preparedSizes;
@@ -259,17 +271,17 @@ struct LocalSource::Impl {
                 Blizzard::Log::Printf(1, kLog, "%s: %u paths\n", name, table->count);
                 rows += table->count;
             }
+            LoadCustomListfile();
             if (listfile.empty() && !rows)
                 Blizzard::Log::Printf(1, kLog, "No listfile.csv and no TextureFilePath/ModelFilePath.db2: textures and parent skeletons cannot be resolved\n");
         });
     }
 
-    void LoadListfile() {
-        const auto path = ListfilePath();
+    // Calls row(id, name) for each "id;path" line of a listfile; false when the file isn't there.
+    template <typename Row> static bool ReadListfile(const std::filesystem::path& path, Row row) {
         std::ifstream input(path);
-        if (!input) return;
+        if (!input) return false;
         std::string line;
-        size_t rows = 0;
         while (std::getline(input, line)) {
             const auto separator = line.find(';');
             if (separator == std::string::npos) continue;
@@ -277,11 +289,72 @@ struct LocalSource::Impl {
             if (!Number(line.substr(0, separator), id)) continue;
             auto name = line.substr(separator + 1);
             while (!name.empty() && (name.back() == '\r' || name.back() == ' ' || name.back() == '\t')) name.pop_back();
-            if (name.empty()) continue;
-            listfile[id] = Normalize(name.c_str());
-            ++rows;
+            if (!name.empty()) row(id, Normalize(name.c_str()));
         }
+        return true;
+    }
+
+    void LoadListfile() {
+        const auto path = ListfilePath();
+        size_t rows = 0;
+        if (!ReadListfile(path, [&](uint32_t id, std::string name) { listfile[id] = std::move(name); ++rows; })) return;
         Blizzard::Log::Printf(1, kLog, "Listfile %s: %u entries\n", path.string().c_str(), static_cast<unsigned>(rows));
+    }
+
+    // listfile-custom.csv beside listfile.csv: ours, kept apart so a new community listfile can be dropped in
+    // without losing it. Same "id;path" lines, read after the other tables: a line for an id that has no name
+    // names it; a line for an id that has one is an alias, another name for that file (a name an ADT still
+    // uses from an older listfile). The order of the lines is the order they're read in, every time.
+    void LoadCustomListfile() {
+        const auto path = ListfilePath().parent_path() / "listfile-custom.csv";
+        size_t names = 0, added = 0;
+        const bool found = ReadListfile(path, [&](uint32_t id, std::string name) {
+            std::string current;
+            if (!NameOf(id, current)) {
+                listfile[id] = std::move(name);
+                ++names;
+            } else if (current != name) {
+                aliases.emplace(std::move(name), id);
+                ++added;
+            }
+        });
+        if (found) Blizzard::Log::Printf(1, kLog, "Listfile %s: %u names, %u aliases\n", path.string().c_str(),
+            static_cast<unsigned>(names), static_cast<unsigned>(added));
+    }
+
+    // The name of a FileDataID: the listfiles, else the FilePath DB2s. Only looks up paths.
+    bool NameOf(uint32_t id, std::string& name) {
+        const auto found = listfile.find(id);
+        if (found != listfile.end()) {
+            name = found->second;
+            return true;
+        }
+        return texturePaths.Find(id, name) || modelPaths.Find(id, name);
+    }
+
+    // Called with the mutex held. Another name for a FileDataID: a line of listfile-custom.csv, or the name an
+    // older community listfile gave a file it couldn't name, <name>_<FileDataID>.<ext>, as ADTs ported back
+    // then still say (models and WMO roots, six digits or more, the id's name having the same extension).
+    // The id's current name is then read first, the asked name after it. Logged once per name.
+    bool AliasOf(const std::string& key, uint32_t& id) {
+        const char* from = "listfile-custom.csv";
+        const auto alias = aliases.find(key);
+        std::string name;
+        if (alias != aliases.end()) {
+            id = alias->second;
+            NameOf(id, name);
+        } else {
+            const auto ext = Extension(key);
+            if ((ext != ".m2" && ext != ".wmo") || IsWmoGroupName(key)) return false;
+            const auto stem = Stem(key);
+            const auto underscore = stem.find_last_of('_');
+            if (underscore == std::string::npos || stem.size() - underscore - 1 < 6) return false;
+            if (!Number(stem.substr(underscore + 1), id) || !NameOf(id, name) || name == key || Extension(name) != ext) return false;
+            from = "its name";
+        }
+        if (reportedAliases.insert(key).second)
+            Blizzard::Log::Printf(1, kLog, "%s: another name for FileDataID %u (%s), from %s\n", key.c_str(), id, name.c_str(), from);
+        return true;
     }
 
     // Called with the mutex held.
@@ -299,19 +372,16 @@ struct LocalSource::Impl {
             ref.path = internal; // An embedded filename from an older model: read it as is.
             return true;
         }
-        ref.path = key; // A Retail model opened by its normal path.
+        ref.path = key; // A Retail model opened by its normal path, or by an alias of its FileDataID.
+        AliasOf(key, ref.id);
         return true;
     }
 
     // Called with the mutex held; only looks up paths.
     std::vector<std::string> Candidates(const Reference& ref) {
         std::vector<std::string> paths;
-        if (ref.id) {
-            const auto found = listfile.find(ref.id);
-            std::string path;
-            if (found != listfile.end()) paths.push_back(found->second);
-            else if (texturePaths.Find(ref.id, path) || modelPaths.Find(ref.id, path)) paths.push_back(path);
-        }
+        std::string path;
+        if (ref.id && NameOf(ref.id, path)) paths.push_back(path);
         if (!ref.path.empty() && std::find(paths.begin(), paths.end(), ref.path) == paths.end()) paths.push_back(ref.path);
         return paths;
     }
@@ -424,13 +494,49 @@ bool LocalSource::Handles(const char* name) {
     {
         std::lock_guard<std::mutex> lock(m_impl->mutex);
         if (m_impl->dependencies.count(key) || m_impl->models.count(key)) return true;
-        if (Extension(key) != ".m2") return false;
-        const auto kind = m_impl->modelKinds.find(key);
-        if (kind != m_impl->modelKinds.end()) return kind->second;
+        if (Extension(key) == ".wmo") {
+            // A group is handled once its retail root registered it; only roots are looked at.
+            if (IsWmoGroupName(key)) return false;
+            const auto kind = m_impl->wmoKinds.find(key);
+            if (kind != m_impl->wmoKinds.end()) return kind->second;
+        } else if (Extension(key) != ".m2") {
+            return false;
+        } else {
+            const auto kind = m_impl->modelKinds.find(key);
+            if (kind != m_impl->modelKinds.end()) return kind->second;
+        }
     }
-    // First sight of this model name: look at its header outside the lock (this reads the archives).
+    // First sight of this name: the file it reads (an alias reads its FileDataID's file first) is looked at
+    // outside the lock, since that reads the archives.
+    m_impl->EnsureTables();
+    std::vector<std::string> paths;
+    {
+        std::lock_guard<std::mutex> lock(m_impl->mutex);
+        Reference ref;
+        std::string error;
+        if (m_impl->Resolve(key, ref, error)) paths = m_impl->Candidates(ref);
+    }
+    if (Extension(key) == ".wmo") {
+        // A root (roots are small): look for retail's GFID.
+        std::vector<uint8_t> raw;
+        std::string error;
+        bool retail = false;
+        for (const auto& path : paths) {
+            if (!RawRead(path, raw, error)) continue;
+            retail = IsRetailWmoRoot(raw);
+            break;
+        }
+        std::lock_guard<std::mutex> lock(m_impl->mutex);
+        m_impl->wmoKinds[key] = retail;
+        return retail;
+    }
     uint32_t magic = 0, size = 0;
-    const bool retail = RawMagic(key, magic, size) && magic == 0x3132444d; // "MD21"
+    bool retail = false;
+    for (const auto& path : paths) {
+        if (!RawMagic(path, magic, size)) continue;
+        retail = magic == 0x3132444d; // "MD21"
+        break;
+    }
     std::lock_guard<std::mutex> lock(m_impl->mutex);
     m_impl->modelKinds[key] = retail;
     return retail;
@@ -445,6 +551,9 @@ bool LocalSource::Exists(const char* name, std::string& error) {
     {
         std::lock_guard<std::mutex> lock(m_impl->mutex);
         if (m_impl->preparedSizes.count(key)) return true;
+        // A retail root's group always exists: a missing file is served as an empty group (Read), since a
+        // WMO file that fails to open is fatal (CMap::SafeOpen).
+        if (IsWmoGroupName(key) && m_impl->dependencies.count(key)) return true;
         if (!m_impl->Resolve(key, ref, error)) return false;
         paths = m_impl->Candidates(ref);
     }
@@ -499,9 +608,16 @@ bool LocalSource::Read(const char* name, std::vector<uint8_t>& bytes, std::strin
         std::lock_guard<std::mutex> lock(s.mutex);
         if (!s.Resolve(key, ref, error)) return false;
     }
-    if (!s.Fetch(ref, bytes, error)) return false;
-
     const auto ext = Extension(key);
+    if (!s.Fetch(ref, bytes, error)) {
+        if (ext != ".wmo" || !IsWmoGroupName(key)) return false;
+        Blizzard::Log::Printf(1, kLog, "%s: a group its root lists is missing (%s); drawn empty\n", key.c_str(), error.c_str());
+        EmptyWmoGroup(bytes);
+        std::lock_guard<std::mutex> lock(s.mutex);
+        s.preparedSizes[key] = static_cast<uint32_t>(bytes.size());
+        return true;
+    }
+
     bool success = true;
     if (ext == ".m2" || ext == ".mdx") {
         auto model = std::make_shared<Model>();
@@ -571,12 +687,44 @@ bool LocalSource::Read(const char* name, std::vector<uint8_t>& bytes, std::strin
         success = ref.owner ? (StripAnimationChunk(bytes, error) &&
             ValidateAnimation(bytes, ref.owner->bytes, ref.animation, ref.variation, error)) :
             Fail(error, "open the Retail model before its animation");
+    } else if (ext == ".wmo" && IsWmoGroupName(key)) {
+        // A WMO that can't be prepared is served as it is, as 3.3.5 would have read it: a failed open is fatal
+        // for a WMO (CMap::SafeOpen), and the stock reader got through many damaged retroports.
+        WmoGroup group;
+        if (PrepareWmoGroup(bytes, group, error)) {
+            for (const auto& note : group.notes) Blizzard::Log::Printf(1, kLog, "%s: %s\n", key.c_str(), note.c_str());
+            bytes.swap(group.bytes);
+        } else {
+            Blizzard::Log::Printf(1, kLog, "%s: not prepared, served as it is: %s\n", key.c_str(), error.c_str());
+        }
+    } else if (ext == ".wmo") {
+        // A retail root: rebuilt in 3.3.5's order, and its groups published under their conventional names
+        // (<root>_NNN.wmo), found by their FileDataIDs (GFID) first. Served as it is when that fails (above).
+        WmoRoot root;
+        success = PrepareWmoRoot(bytes, [this](uint32_t id, std::string& path) { return PathOf(id, path); }, root, error);
+        if (!success) {
+            Blizzard::Log::Printf(1, kLog, "%s: not prepared, served as it is: %s\n", key.c_str(), error.c_str());
+            success = true;
+        } else {
+            for (const auto& note : root.notes) Blizzard::Log::Printf(1, kLog, "%s: %s\n", key.c_str(), note.c_str());
+            const auto base = Stem(key);
+            std::lock_guard<std::mutex> lock(s.mutex);
+            for (size_t i = 0; i < root.groupFiles.size(); ++i) {
+                char suffix[16];
+                std::snprintf(suffix, sizeof(suffix), "_%03u.wmo", static_cast<unsigned>(i));
+                Reference file;
+                file.id = root.groupFiles[i];
+                file.path = base + suffix;
+                s.dependencies[base + suffix] = file;
+            }
+            bytes.swap(root.bytes);
+        }
     } else if (ext == ".blp") {
         // BLP2 format version 1 is the client's native texture format.
         success = bytes.size() >= 148 && std::memcmp(bytes.data(), "BLP2\1\0\0\0", 8) == 0;
         if (!success) error = "texture is not a supported BLP2 file";
     } else {
-        success = Fail(error, "Retail models reference only M2, SKIN, ANIM and BLP files");
+        success = Fail(error, "Retail models reference only M2, SKIN, ANIM, BLP and WMO files");
     }
 
     if (!success) {

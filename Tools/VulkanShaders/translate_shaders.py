@@ -9,6 +9,7 @@ only, plus glslang.
     python Tools/VulkanShaders/translate_shaders.py --client "C:/Games/World of Warcraft 3.3.5a"
     python Tools/VulkanShaders/translate_shaders.py --client <client> --glslang <path to glslang.exe>
     python Tools/VulkanShaders/translate_shaders.py --client <client> --deploy   # also copy into the client
+    python Tools/VulkanShaders/translate_shaders.py --client <client> --cata <4.3.4 Shaders folder> --deploy
 
 The output is Tools/VulkanShaders/translated/ (gitignored; --out elsewhere). The device reads
 <folder of the executable>\\VulkanShaders\\manifest.txt with vertex\\ and pixel\\ beside it, or the
@@ -72,6 +73,35 @@ def deploy(out, client):
                 os.remove(p)
                 removed += 1
     print('deployed %d file(s) to %s (%d stale removed)' % (copied, dst, removed))
+    deploy_data(out, client, dst)
+
+
+def deploy_data(out, client, shaders_dir):
+    """The repacked Cataclysm shaders (--cata) as loose files in <client>/Data/, where the engine finds
+    them by name; VulkanShaders/cata.txt lists what was put there, so a later run removes what it no
+    longer makes."""
+    src = os.path.join(out, 'data')
+    listing = os.path.join(shaders_dir, 'cata.txt')
+    old = set()
+    if os.path.isfile(listing):
+        with open(listing, encoding='utf-8') as f:
+            old = {ln.strip() for ln in f if ln.strip()}
+    new = set()
+    for root, _, files in os.walk(src):
+        for name in files:
+            rel = os.path.relpath(os.path.join(root, name), src)
+            dst = os.path.join(client, 'Data', rel)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copy2(os.path.join(root, name), dst)
+            new.add(rel)
+    for rel in old - new:
+        p = os.path.join(client, 'Data', rel)
+        if os.path.isfile(p):
+            os.remove(p)
+    with open(listing, 'w', encoding='utf-8') as f:
+        f.write(''.join(rel + '\n' for rel in sorted(new)))
+    if new or old:
+        print('deployed %d Cataclysm shader(s) to %s (%d stale removed)' % (len(new), os.path.join(client, 'Data'), len(old - new)))
 
 
 def main(argv):
@@ -84,6 +114,9 @@ def main(argv):
     ap.add_argument('--print', action='store_true', help='print the GLSL of each emitted record')
     ap.add_argument('--retail-palette', action='store_true',
                     help='1024 vertex constant rows, for clients built with WOWDECOMP_RETAIL_MODELS (Retail bone palettes)')
+    ap.add_argument('--cata', default=None,
+                    help="a Cataclysm (4.3.4) client's Shaders folder, extracted (holding Vertex\\ and Pixel\\): the "
+                         "retail model shaders 3.3.5 lacks, deployed as loose files in <client>/Data/Shaders/")
     args = ap.parse_args(argv)
 
     data = find_data(args.client)
@@ -104,6 +137,8 @@ def main(argv):
     argv2 = ['--data', data, '--glslang', glslang]
     if args.retail_palette:
         argv2.append('--retail-palette')
+    if args.cata:
+        argv2 += ['--cata', args.cata]
     if args.names:
         argv2 += ['--names', args.names]
         if args.print:

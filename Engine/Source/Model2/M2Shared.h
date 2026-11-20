@@ -122,4 +122,11 @@ int32_t M2Init(uint8_t* base, uint32_t size, const M2Data& data, M2Particle& par
 int32_t M2Init(uint8_t* base, uint32_t size, M2Data& data);
 void M2HeapSort(int32_t (*compare)(uint32_t, uint32_t, const void*), uint32_t* array, uint32_t count, const void* param);
 
+#if defined(WOWDECOMP_RETAIL_MODELS)
+// Not in the original: the shaders a retail packed batch (Retail::IsRetailPacked) draws with -- retail's
+// own where the client has them, else the stand-in -- and, when `name` is given, its effect's name.
+// `cataFiles`, when given, says whether they include Cataclysm's files (Tools/VulkanShaders --cata).
+void M2RetailBatchShaders(const M2Batch* batch, const char** vertex, const char** pixel, char* name, size_t size, bool* cataFiles = nullptr);
+#endif
+
 #endif

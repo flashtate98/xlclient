@@ -6,6 +6,8 @@
 #include "WoW/Source/DB/Rec/LightParamsRec.h"
 #include "WoW/Source/WorldClient/DayNight__DNInfo.h"
 #include "WoW/Source/WorldClient/World.h"
+#include "Engine/Source/Storm/H/storm.h"
+#include "SXC/Log.h"  // SXC: missing light band rows
 
 // VERIFY: 7c5384b3 manual
 // OFFSET: 0x007EAE70
@@ -113,8 +115,16 @@ void InitLights(bool transform) {
 // VERIFY: b70039a6 auto
 // OFFSET: 0x007EBF30
 CImVector DayNight::LoadLightIntBand(int32_t time, const LightParamsRec* params, int32_t band) {
-    LightIntBandRec rec;
-    g_lightIntBandDB.GetRecord(band + 18 * params->m_id - 17, &rec);
+    // SXC: a missing row left `rec` uninitialised (GetRecord doesn't touch it); now it reads as empty (black).
+    LightIntBandRec rec = {};
+    const int32_t id = band + 18 * params->m_id - 17;
+
+    if (!g_lightIntBandDB.GetRecord(id, &rec)) {
+        char key[64];
+        SStrPrintf(key, sizeof key, "light-int-band %d", id);
+        SXC::LogOnce(key, "Light: LightIntBand %d is missing (LightParams %d, band %d); read as black", id, params->m_id, band);
+    }
+
     return InterpolateIntBand(rec, time);
 }
 

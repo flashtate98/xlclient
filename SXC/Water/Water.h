@@ -38,9 +38,11 @@ namespace SXC::Water {
         float domeRows[8] = {};
         float domeColours[122][4] = {};
         // The mirror (SXC/View: the world drawn mirrored at the water's height, kb: second-camera): drawn
-        // this frame at `mirrorZ` (world z); the water reads it where it lies at that height.
+        // this frame at `mirrorZ` (world z); the water reads it where it lies at that height, `mirrorFade` of
+        // it (fading in while the water is far off).
         bool mirror = false;
         float mirrorZ = 0.0f;
+        float mirrorFade = 1.0f;
         // The look grid (SXC/Water/Surface.h's LookGrid): 64 x 64 chunk indices into up to 64 packed looks of
         // 20 floats; null when there is none (the draws then take their own look).
         const uint8_t* lookIndex = nullptr;
@@ -103,6 +105,10 @@ namespace SXC::Water {
 
     // The setting and the device.
     bool Active();
+
+    // The Water panel's full-screen depth view for the present pass (0 off, 1 the depth buffer, 2 the
+    // copy's distance) and the distance shown white (yd).
+    int DepthView(float* range);
 
     // Liquid::CRenderer::Flush, for each instance: draws it as ours when it is a stock water material
     // and we're active. False: the instance's own material draws it.

@@ -36,6 +36,10 @@
 #include "SXC/Sky/Sky.h"  // SXC:
 #include "SXC/View/View.h"  // SXC: the mirror takes the sky as directions
 #include "SXC/Water/Medium.h"  // SXC: the underwater medium
+#include "SXC/Log.h"  // SXC: which WMO's fog the camera is in
+#include "SXC/Settings/Settings.h"  // SXC: the stock fog and WMO fog switches
+#include "WoW/Source/WorldClient/MapObj.h"
+#include "WoW/Source/WorldClient/MapObjDef.h"
 #include "Engine/Source/ShaderEffect/Types.h"
 
 static const float SUNRISE = 0.22916667f;
@@ -294,8 +298,18 @@ const LightParamsRec* DayNight::GetLightParams(const LightRec* light, int32_t pa
 // VERIFY: 731bfb93 auto
 // OFFSET: 0x007EBF90
 float DayNight::CalcIndividualColorFromDBRec(int32_t time, const LightParamsRec* params, int32_t band) {
-    LightFloatBandRec rec;
-    g_lightFloatBandDB.GetRecord(band + 6 * params->m_id - 5, &rec);
+    // SXC: a missing row left `rec` uninitialised (GetRecord doesn't touch it), and its garbage, NaN included,
+    // reached the fog (Deepholm fogged solid where a ported light's rows sat at the wrong ids, 2026-11-17). Now
+    // it reads as empty (0), logged once.
+    LightFloatBandRec rec = {};
+    const int32_t id = band + 6 * params->m_id - 5;
+
+    if (!g_lightFloatBandDB.GetRecord(id, &rec)) {
+        char key[64];
+        SStrPrintf(key, sizeof key, "light-float-band %d", id);
+        SXC::LogOnce(key, "Light: LightFloatBand %d is missing (LightParams %d, band %d); read as 0", id, params->m_id, band);
+    }
+
     return DayNight::InterpFloatBand(&rec, time, band);
 }
 
@@ -2136,6 +2150,12 @@ void DayNight::DoAreaLights(CurrentLight* light, int32_t underwater) {
     }
 }
 
+// SXC: switches for finding what fogs a place (the overlay's Settings view, Fog).
+static SXC::Settings::Bool s_stockFog("Fog", "StockFog", true, "Stock distance fog",
+    "Off: the sky's and the WMOs' distance fog end far past the far clip (to look at a place; our fog stays).");
+static SXC::Settings::Bool s_wmoFog("Fog", "WmoFog", true, "WMO fog",
+    "Off: a WMO's own fog (MFOG) is ignored when the camera is inside it. The log names the WMO whose fog the camera is in.");
+
 // VERIFY: 729edd43 manual
 // OFFSET: 0x007F16F0
 void DayNight::UpdateFog() {
@@ -2169,12 +2189,48 @@ void DayNight::UpdateFog() {
     float distance;
     bool inside = World::QueryCameraFog(&fog, &mapObjDef, &found, &ids, &distance) == 1;
 
+    // SXC: which WMO's own fog (MFOG) the camera is in, logged when it changes (a retroport's fog sphere can
+    // swallow a whole zone), and the switch to ignore WMO fog.
+    {
+        static CMapObjDef* s_lastFogDef = nullptr;
+        static float s_lastFogEnd = -1.0f;
+        CMapObjDef* def = inside ? mapObjDef : nullptr;
+        const float fogEnd = inside ? fog.m_fog.m_end : -1.0f;
+
+        if (def != s_lastFogDef || fogEnd != s_lastFogEnd) {
+            if (inside) {
+                SXC::Log("Fog: the camera is in a WMO's fog: %s (end %.1f yd, start %.2f of it, radii %.1f / %.1f yd, flags 0x%x)%s",
+                    def && def->m_owner ? def->m_owner->m_wmoName : "?", fog.m_fog.m_end, fog.m_fog.m_startScalar,
+                    fog.m_smallerRadius, fog.m_largerRadius, fog.m_flags, s_wmoFog.Get() ? "" : "; ignored (Settings, Fog)");
+            } else if (s_lastFogDef || s_lastFogEnd >= 0.0f) {
+                SXC::Log("Fog: the camera left the WMO's fog");
+            }
+
+            s_lastFogDef = def;
+            s_lastFogEnd = fogEnd;
+        }
+
+        if (!s_wmoFog.Get()) {
+            inside = false;
+        }
+    }
+
     if (!inside) {
         distance = 0.0f;
     }
 
     int32_t liquidStatus = World::SceneCamLiquidStatus(nullptr);
     float density;
+
+    // SXC: the liquid the camera counts as being in (its fog is the underwater one), logged when it changes.
+    {
+        static int32_t s_lastLiquid = 0;
+
+        if (liquidStatus != s_lastLiquid) {
+            SXC::Log(liquidStatus ? "Fog: the camera is in liquid type %d (underwater fog)" : "Fog: the camera left the liquid", liquidStatus);
+            s_lastLiquid = liquidStatus;
+        }
+    }
 
     if (inside) {
         const LiquidTypeRec* liquid = liquidStatus ? g_liquidTypeDB.GetRecord(liquidStatus) : nullptr;
@@ -2283,6 +2339,29 @@ void DayNight::UpdateFog() {
         } else {
             DayNight::s_lightFlags &= ~1;
         }
+    }
+
+    // SXC: the stock fog's distances and where they come from, logged when they change by a fifth (a place
+    // fogged to a few yards: Deepholm, 2026-11-17).
+    {
+        static float s_loggedEnd = -1.0f;
+        const float fogEnd = info.m_fog.m_end;
+
+        if (s_loggedEnd < 0.0f || fogEnd < s_loggedEnd * 0.8f || fogEnd > s_loggedEnd * 1.25f) {
+            SXC::Log("Fog: stock fog %.1f-%.1f yd, density %.2f (the light's bands: end %.1f yd, start x%.2f, rate %.2f; far clip %.1f; "
+                "%s; WMO fog %s; liquid %d; light flags 0x%x)",
+                info.m_fog.m_start, fogEnd, info.m_fog.m_density, info.m_bands.m_fogEnd, info.m_bands.m_fogStartMul,
+                info.m_bands.m_fogRate, info.m_farClip, s_fogOverride ? "overridden (SetOverrideFog)" : "not overridden",
+                inside ? "applied" : "none", liquidStatus, DayNight::s_lightFlags);
+            s_loggedEnd = fogEnd;
+        }
+    }
+
+    // SXC: the stock distance fog off (Settings, Fog): pushed far past the far clip, its colour kept (ours
+    // reads it).
+    if (!s_stockFog.Get()) {
+        info.m_fog.m_start = info.m_fogInterior.m_start = 99000.0f;
+        info.m_fog.m_end = info.m_fogInterior.m_end = 100000.0f;
     }
 }
 

@@ -62,6 +62,9 @@
 #include "Engine/Source/ConsoleBase/ConsoleVar.h"
 #include "Engine/Source/Gx/CGxMatrixStack.h"
 #include "SXC/Lights/Lights.h"  // SXC: indoor / outdoor surfaces for our lights
+#include "SXC/Wmo/Wmo.h"        // SXC: our WMO shader's seam
+#include <mutex>
+#include <unordered_map>
 
 // STATIC: 0x00AEE008
 uint32_t CMapObj::s_maxLiquidQueryDepth = 2;
@@ -73,7 +76,184 @@ static int32_t s_portalExtCount = 2048;
 static TSGrowableArray<C3Vector> s_portalVerts;
 
 // STATIC: 0x00D1C3D4
-CShaderEffect* CMapObj::s_unifiedShaders[7];
+CShaderEffect* CMapObj::s_unifiedShaders[14];   // SXC: 7 in the original; 7-13 Cataclysm's (MapObjCata)
+
+// SXC: Cataclysm's unified WMO shaders 7-13 (MapObj.h). Its s_shaderInfo, per shader: the textures the
+// shader samples, and whether it reads the second vertex colour and UV set.
+namespace {
+    struct CataShaderInfo { uint8_t textures; bool secondSet; };
+    const CataShaderInfo kCataShaders[14] = {
+        {0, false}, {0, false}, {0, false}, {0, false}, {0, false}, {0, false},
+        {0, true},   //  6 TwoLayerDiffuse where deployed, else 3.3.5's Composite (CMapObj init); no extra setup
+        {3, true},   //  7 TwoLayerEnvMetal
+        {2, true},   //  8 TwoLayerTerrain (the second texture is <name>_s.blp)
+        {2, true},   //  9 DiffuseEmissive
+        {0, false},  // 10 a liquid window in Cataclysm, not an effect
+        {3, true},   // 11 MaskedEnvMetal
+        {3, true},   // 12 EnvMetalEmissive
+        {2, true},   // 13 TwoLayerDiffuseOpaque
+    };
+    std::mutex s_thirdTexturesMutex;
+    std::unordered_map<const SMOMaterial*, CTexture*> s_thirdTextures;
+    std::unordered_map<const SMOMaterial*, MapObjCata::ShaderNote> s_shaderNotes;   // under s_thirdTexturesMutex
+    struct ExtraTextures { CTexture* textures[6]; };
+    std::unordered_map<const SMOMaterial*, ExtraTextures> s_extraTextures;      // under s_thirdTexturesMutex
+}
+
+void MapObjCata::SetExtraTextures(const SMOMaterial& material, CTexture* const (&textures)[6]) {
+    std::lock_guard<std::mutex> lock(s_thirdTexturesMutex);
+    ExtraTextures& e = s_extraTextures[&material];
+    for (int i = 0; i < 6; i++) e.textures[i] = textures[i];
+}
+
+bool MapObjCata::HasExtraTextures(const SMOMaterial& material) {
+    std::lock_guard<std::mutex> lock(s_thirdTexturesMutex);
+    return s_extraTextures.count(&material) != 0;
+}
+
+uint32_t MapObjCata::LayerMask(const SMOMaterial& material) {
+    uint32_t mask = const_cast<SMOMaterial&>(material).Textures()[1] ? 1u : 0u;
+    std::lock_guard<std::mutex> lock(s_thirdTexturesMutex);
+    const auto third = s_thirdTextures.find(&material);
+    mask |= third != s_thirdTextures.end() && third->second ? 2u : 0u;
+    const auto found = s_extraTextures.find(&material);
+    if (found != s_extraTextures.end()) {
+        for (int k = 0; k < 6; k++) {
+            if (found->second.textures[k]) mask |= 4u << k;
+        }
+    }
+    return mask;
+}
+
+void MapObjCata::ReleaseExtraTextures(const SMOMaterial& material) {
+    ExtraTextures e;
+    {
+        std::lock_guard<std::mutex> lock(s_thirdTexturesMutex);
+        const auto found = s_extraTextures.find(&material);
+        if (found == s_extraTextures.end()) return;
+        e = found->second;
+        s_extraTextures.erase(found);
+    }
+    for (CTexture* texture : e.textures) {
+        if (texture) HandleClose(reinterpret_cast<HOBJECT>(texture));
+    }
+}
+
+MapObjCata::ShaderNote MapObjCata::Note(const SMOMaterial& material) {
+    std::lock_guard<std::mutex> lock(s_thirdTexturesMutex);
+    const auto found = s_shaderNotes.find(&material);
+    return found == s_shaderNotes.end() ? ShaderNote() : found->second;
+}
+
+void MapObjCata::SetNote(const SMOMaterial& material, uint32_t retail, const char* reason) {
+    std::lock_guard<std::mutex> lock(s_thirdTexturesMutex);
+    s_shaderNotes[&material] = ShaderNote{ retail, reason, true };
+}
+
+void MapObjCata::ClearNote(const SMOMaterial& material) {
+    std::lock_guard<std::mutex> lock(s_thirdTexturesMutex);
+    s_shaderNotes.erase(&material);
+}
+
+uint32_t MapObjCata::OurShaderId(const SMOMaterial& material, uint32_t shader) {
+    if (!SXC::Wmo::OurShader()) {
+        return shader;
+    }
+
+    // Only the ids past Cataclysm's (CreateMaterial's "we don't have it yet" fallbacks): a lower id drawn as
+    // another lost a texture its shader samples and stays as drawn.
+    const ShaderNote note = Note(material);
+    return note.known && note.retail >= 15 && SXC::Wmo::Covers(note.retail) ? note.retail : shader;
+}
+
+bool MapObjCata::Drawn(uint32_t shader) {
+    return shader >= 7 && shader < 14 && kCataShaders[shader].textures && CMapObj::s_unifiedShaders[shader];
+}
+
+uint32_t MapObjCata::TextureCount(uint32_t shader) {
+    return shader >= 7 && shader < 14 ? kCataShaders[shader].textures : 0;
+}
+
+bool MapObjCata::SecondVertexSet(uint32_t shader) {
+    return shader < 14 && kCataShaders[shader].secondSet;
+}
+
+CTexture* MapObjCata::ThirdTexture(const SMOMaterial& material) {
+    std::lock_guard<std::mutex> lock(s_thirdTexturesMutex);
+    const auto found = s_thirdTextures.find(&material);
+    return found == s_thirdTextures.end() ? nullptr : found->second;
+}
+
+void MapObjCata::SetThirdTexture(const SMOMaterial& material, CTexture* texture) {
+    std::lock_guard<std::mutex> lock(s_thirdTexturesMutex);
+    if (texture) {
+        s_thirdTextures[&material] = texture;
+    } else {
+        s_thirdTextures.erase(&material);
+    }
+}
+
+void MapObjCata::Apply(const SMOMaterial& material, uint32_t shader) {
+    const EGxTexWrapMode wrapU = static_cast<EGxTexWrapMode>((material.m_flags & 0x40) == 0);
+    const EGxTexWrapMode wrapV = static_cast<EGxTexWrapMode>((material.m_flags & 0x80) == 0);
+    CTexture* const textures[2] = { const_cast<SMOMaterial&>(material).Textures()[1], ThirdTexture(material) };
+    CGxTex* third = nullptr;
+
+    for (uint32_t i = 0; i < 2; i++) {
+        CGxTex* gxTex = textures[i] ? TextureGetGxTex(textures[i], 0, nullptr) : nullptr;
+
+        if (gxTex) {
+            GxTexSetWrap(gxTex, wrapU, wrapV);
+        }
+
+        if (i == 1) {
+            third = gxTex;
+        }
+    }
+
+    g_theGxDevicePtr->RsSet(GxRs_Texture2, third);
+
+    // Retail's 22 and 23 under our shader: their further textures on stages 8-13 (Shaders/Wmo.frag s8..s13).
+    if (!SXC::Wmo::OurShader()) {
+        return;
+    }
+
+    ExtraTextures e;
+    {
+        std::lock_guard<std::mutex> lock(s_thirdTexturesMutex);
+        const auto found = s_extraTextures.find(&material);
+        if (found == s_extraTextures.end()) return;
+        e = found->second;
+    }
+
+    for (int k = 0; k < 6; k++) {
+        CGxTex* gxTex = e.textures[k] ? TextureGetGxTex(e.textures[k], 0, nullptr) : nullptr;
+        if (gxTex) GxTexSetWrap(gxTex, wrapU, wrapV);
+        g_theGxDevicePtr->RsSet(static_cast<EGxRenderState>(GxRs_Texture8 + k), gxTex);
+    }
+}
+
+void MapObjCata::ApplyMatrices(uint32_t shader) {
+    // 3.3.5's WMO vertex shaders never read the texture matrices; Cataclysm's do: identity, a texgen from
+    // the view position for TwoLayerTerrain's second texture, a slow scroll for MaskedEnvMetal's. Set right
+    // before the draw: CMapObjGroup::SetLighting writes the ambient colour into c9 too, the second matrix's
+    // V row (3.3.5's shaders don't read it), which slid the second texture with the time of day.
+    CShaderEffect::SetTexMtx_Identity(0);
+
+    if (shader == 8) {
+        C44Matrix texGen;
+        texGen.d0 = CWorldScene::s_activeWorldView.x;
+        texGen.d1 = CWorldScene::s_activeWorldView.y;
+        texGen.d2 = CWorldScene::s_activeWorldView.z;
+        CShaderEffect::SetTexMtx_TexGen(static_cast<EGxTexGen>(2), texGen, 1);
+    } else if (shader == 11) {
+        C44Matrix scroll;
+        scroll.d0 = static_cast<float>(static_cast<double>(FrameTime::s_curTimeMs % 10000) * 0.001 * 0.1);
+        CShaderEffect::SetTexMtx(scroll, 1);
+    } else {
+        CShaderEffect::SetTexMtx_Identity(1);
+    }
+}
 
 // STATIC: 0x00D1C3F0
 CShaderEffect* CMapObj::s_classicShaders[7];
@@ -999,6 +1179,10 @@ void CMapObj::UnifiedRender(CMapObjGroup* group, uint32_t index) {
         g_theGxDevicePtr->RsSet(GxRs_Texture1, gxTex1);
         effect->SetCurrent();
 
+        if (MapObjCata::Drawn(shader) || MapObjCata::ThirdTexture(material) || MapObjCata::HasExtraTextures(material)) {
+            MapObjCata::Apply(material, shader);   // SXC: Cataclysm's effects 7-13; retail's 18 and 20's third texture, 22 and 23's further ones
+        }
+
         if (i >= group->m_transparencyBatchesCount) {
             if (group->m_flags & 0x48) {
                 CMapObjGroup::SetLighting(group, (material.m_flags & 0x1) == 0);
@@ -1028,13 +1212,20 @@ void CMapObj::UnifiedRender(CMapObjGroup* group, uint32_t index) {
             GxRsSet(GxRs_BlendingMode, static_cast<int32_t>(material.m_blendMode));
             CShaderEffect::SetAlphaRefDefault();
             CMapObj::SelectWorldShaders();
+
+            if (MapObjCata::Drawn(shader)) {
+                MapObjCata::ApplyMatrices(shader);   // SXC: after the lighting (it writes c9)
+            }
+
             CGxBatch draw;
             draw.m_primType = GxPrim_Triangles;
             draw.m_start = batch.m_indexStart;
             draw.m_count = batch.m_indexCount;
             draw.m_minIndex = batch.m_vertexStart;
             draw.m_maxIndex = batch.m_vertexEnd;
+            SXC::Wmo::BeginDraw(MapObjCata::OurShaderId(material, shader), material.m_blendMode, group, MapObjCata::LayerMask(material));   // SXC: our WMO shader may draw it (kb: our-shaders)
             g_theGxDevicePtr->Draw(&draw, 1);
+            SXC::Wmo::EndDraw();
             continue;
         }
 
@@ -1051,13 +1242,20 @@ void CMapObj::UnifiedRender(CMapObjGroup* group, uint32_t index) {
             GxRsSet(GxRs_BlendingMode, static_cast<int32_t>(9));
             CShaderEffect::SetAlphaRefDefault();
             CMapObj::SelectWorldShaders();
+
+            if (MapObjCata::Drawn(shader)) {
+                MapObjCata::ApplyMatrices(shader);
+            }
+
             CGxBatch draw;
             draw.m_primType = GxPrim_Triangles;
             draw.m_start = batch.m_indexStart;
             draw.m_count = batch.m_indexCount;
             draw.m_minIndex = batch.m_vertexStart;
             draw.m_maxIndex = batch.m_vertexEnd;
+            SXC::Wmo::BeginDraw(MapObjCata::OurShaderId(material, shader), material.m_blendMode, group, MapObjCata::LayerMask(material));
             g_theGxDevicePtr->Draw(&draw, 1);
+            SXC::Wmo::EndDraw();
 
             CMapObjGroup::SetLighting(group, 3);
             SetShaderFogFromDayNight((material.m_flags & 0x2) == 0 ? fogMode : 0);
@@ -1070,13 +1268,20 @@ void CMapObj::UnifiedRender(CMapObjGroup* group, uint32_t index) {
             GxRsSet(GxRs_BlendingMode, static_cast<int32_t>(7));
             CShaderEffect::SetAlphaRefDefault();
             CMapObj::SelectWorldShaders();
+
+            if (MapObjCata::Drawn(shader)) {
+                MapObjCata::ApplyMatrices(shader);
+            }
+
             CGxBatch draw2;
             draw2.m_primType = GxPrim_Triangles;
             draw2.m_start = batch.m_indexStart;
             draw2.m_count = batch.m_indexCount;
             draw2.m_minIndex = batch.m_vertexStart;
             draw2.m_maxIndex = batch.m_vertexEnd;
+            SXC::Wmo::BeginDraw(MapObjCata::OurShaderId(material, shader), material.m_blendMode, group, MapObjCata::LayerMask(material));
             g_theGxDevicePtr->Draw(&draw2, 1);
+            SXC::Wmo::EndDraw();
             continue;
         }
 
@@ -1876,6 +2081,15 @@ void CMapObj::Clear() {
                 this->m_materialList[i].Textures()[j] = nullptr;
             }
         }
+
+        // SXC: the third texture of Cataclysm's shaders, kept beside the material
+        if (CTexture* third = MapObjCata::ThirdTexture(this->m_materialList[i])) {
+            HandleClose(reinterpret_cast<HOBJECT>(third));
+            MapObjCata::SetThirdTexture(this->m_materialList[i], nullptr);
+        }
+
+        MapObjCata::ReleaseExtraTextures(this->m_materialList[i]);
+        MapObjCata::ClearNote(this->m_materialList[i]);
     }
 
     for (uint32_t i = 0; i < static_cast<uint32_t>(this->m_mapObjGroupCount); i++) {
@@ -2204,6 +2418,21 @@ void CMapObj::Initialize() {
     CMapObj::s_unifiedShaders[4] = CShaderEffectManager::GetEffect("MapObjUOpaque");
     CMapObj::s_unifiedShaders[5] = CShaderEffectManager::GetEffect("MapObjUEnvMetal");
     CMapObj::s_unifiedShaders[6] = CShaderEffectManager::GetEffect("MapObjUComposite");
+    // SXC: 6 is Cataclysm's TwoLayerDiffuse where deployed, as Cataclysm draws every WMO (Icecrown's 11 stock ones
+    // too; it has no Composite). The same colour wherever the second texture is opaque; it also lays the second
+    // texture over by its own alpha, and takes the alpha from the first. Retail's 6 (612 materials in 262 of the
+    // 1,989 WMOs in Seyri's export, 2026-11-17) is made for it.
+    if (CShaderEffect* twoLayer = CShaderEffectManager::GetEffect("MapObjUTwoLayerDiffuse")) {
+        CMapObj::s_unifiedShaders[6] = twoLayer;
+    }
+    // SXC: Cataclysm's (CataMapObjU.wfx; null when not deployed, then CreateMaterial draws them as one of ours).
+    CMapObj::s_unifiedShaders[7] = CShaderEffectManager::GetEffect("MapObjUTwoLayerEnvMetal");
+    CMapObj::s_unifiedShaders[8] = CShaderEffectManager::GetEffect("MapObjUTwoLayerTerrain");
+    CMapObj::s_unifiedShaders[9] = CShaderEffectManager::GetEffect("MapObjUDiffuseEmissive");
+    CMapObj::s_unifiedShaders[10] = nullptr;
+    CMapObj::s_unifiedShaders[11] = CShaderEffectManager::GetEffect("MapObjUMaskedEnvMetal");
+    CMapObj::s_unifiedShaders[12] = CShaderEffectManager::GetEffect("MapObjUEnvMetalEmissive");
+    CMapObj::s_unifiedShaders[13] = CShaderEffectManager::GetEffect("MapObjUTwoLayerDiffuseOpaque");
 
     CMapObj::bPoolsDirty = 1;
     CMapObj::occluderHeap = new (__FILE__, __LINE__) uint32_t(ObjectAllocAddHeap(sizeof(CMapObjOccluder), 128, "MAPOBJOCC", true));
@@ -4053,6 +4282,12 @@ int32_t CMapObj::IsAllDrawable() {
         CTexture* texture1 = this->m_materialList[i].Textures()[1];
 
         if (texture1 && !TextureGetGxTex(texture1, 0, nullptr)) {
+            return 0;
+        }
+
+        CTexture* texture2 = MapObjCata::ThirdTexture(this->m_materialList[i]);   // SXC
+
+        if (texture2 && !TextureGetGxTex(texture2, 0, nullptr)) {
             return 0;
         }
     }
