@@ -79,7 +79,8 @@ namespace gxvk::vk::ground
         // The ground's wetness on 16 reads the covers' maps from their own set, bound as the WMO's set 4 (Wmo.frag's
         // GROUND build declares it): no covers, no table. Made here if not yet (Init is idempotent): the WMO pixel module
         // is chosen before Pipelines makes the covers' set.
-        if (props.limits.maxBoundDescriptorSets < 5 || !gxvk::vk::cover::Init()) return false;
+        // Wmo.frag declares the covers' textures as their indexed array (COVER_BINDLESS): not with their 16 slots.
+        if (props.limits.maxBoundDescriptorSets < 5 || !gxvk::vk::cover::Init() || !gxvk::vk::cover::Bindless()) return false;
         // The WMO pixel stage's own samplers (16 stages, the lights' few) beside the array, and the covers' set
         // (its maps, textures, marks and shore; declared in the layout though Wmo.frag reads only the maps).
         const uint32_t samplers = kSlots + 32 + gxvk::vk::cover::TextureSlots() + 16;

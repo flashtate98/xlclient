@@ -15,7 +15,7 @@ namespace gxvk::vk::ground
     constexpr uint32_t kSlots       = 2048;  ///< textures (SXC::Ground::kMaxTextures)
     constexpr uint32_t kGrid        = 32;    ///< map chunks per side of the window (SXC::Ground::kGrid)
     constexpr uint32_t kMaxEntries  = 1024;  ///< chunk entries (SXC::Ground::kMaxEntries)
-    constexpr uint32_t kEntryBytes  = 112;   ///< one entry (SXC::Ground::Entry; Shaders/Ground.glsl)
+    constexpr uint32_t kEntryBytes  = 128;   ///< one entry (SXC::Ground::Entry; Shaders/Ground.glsl)
     constexpr uint32_t kColours     = 145;   ///< a map chunk's vertex colours (SXC::Ground::kColours)
     constexpr uint32_t kTableBinding    = 1; ///< set 2 of our WMO pipelines
     constexpr uint32_t kTexturesBinding = 2;

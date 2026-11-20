@@ -176,6 +176,9 @@ namespace SXC::Ground {
             e.alphaTex = slotOf(n.alpha, true);
             e.layers = n.layers;
             e.flags = n.flags;
+            e.coverPainted = n.coverPainted;
+            e.coverLooks = n.coverLooks;
+            e.liquid = n.liquid;
             out.entryCount++;
 
             for (uint32_t c = 0; c < n.centreCount && c < 2; c++) {
