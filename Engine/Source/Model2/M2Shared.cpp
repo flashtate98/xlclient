@@ -1351,21 +1351,35 @@ int32_t CM2Shared::InitializeSkinProfile() {
 #endif
     {
 #if defined(WOWDECOMP_RETAIL_MODELS)
-        // Not in the original: a 3.3.5-format model may carry retail's packed ids, kept by a retroport.
-        // 3.3.5 stores none (it makes 0x8000..0x8003 itself, in SubstituteSpecializedShaders, numbered one
-        // off from retail; of 27,055 stock skins only an orphan one, M2512E00.skin with no model, stores
-        // one), so a stored packed id is retail's: tagged and drawn as retail models draw it. The layer
+        // Not in the original: stored packed ids in a 3.3.5-format model. Blizzard stores none (3.3.5 makes
+        // 0x8000..0x8003 itself, in SubstituteSpecializedShaders), but stock draws stored ones by its own
+        // table (GetEffect: 0x8001 Mod2xNA_Alpha, 0x8002 AddAlpha, 0x8003 AddAlpha_Alpha; 0x8000 nothing),
+        // and exporters for 3.3.5 store them (Project Reforged's ogres and rams): those keep 3.3.5's meaning.
+        // Retail's table (Cataclysm's) is numbered one off and goes further; an id past 0x8003, which stock
+        // can't draw, can only mean retail's, so a model with one is read by retail's table throughout
+        // (a retroport that kept retail's ids; logged once). Retroports keeping retail's ids within
+        // 0x8000..0x8003 alone draw as stock draws them (Seyri, 2026-11-20: no guessing past that). The layer
         // merging packs two texture slots and would mangle the tagged batches' texture runs, so a model
-        // with any is drawn unmerged.
+        // read as retail's is drawn unmerged.
         bool retailIds = false;
 
-        for (uint32_t i = 0; i < this->m_skinData->m_batches.m_count; i++) {
-            M2Batch* batch = &this->m_skinData->m_batches[i];
-            const uint16_t index = batch->m_shader & 0x7FFF;
+        for (uint32_t i = 0; i < this->m_skinData->m_batches.m_count && !retailIds; i++) {
+            const uint16_t shader = this->m_skinData->m_batches[i].m_shader;
+            retailIds = (shader & 0x8000) && (shader & 0x7FFF) > 3 && (shader & 0x7FFF) <= Retail::kRetailIndexMask;
+        }
 
-            if ((batch->m_shader & 0x8000) && index <= Retail::kRetailIndexMask) {
-                batch->m_shader = static_cast<uint16_t>(Retail::kRetailPackedTag | index);
-                retailIds = true;
+        if (retailIds) {
+            char key[300];
+            SStrPrintf(key, sizeof(key), "retailids|%s", this->m_fileName);
+            SXC::LogOnce(key, "model %s stores packed shader ids past 3.3.5's (0x8003): all its packed ids read by retail's table", this->m_fileName);
+
+            for (uint32_t i = 0; i < this->m_skinData->m_batches.m_count; i++) {
+                M2Batch* batch = &this->m_skinData->m_batches[i];
+                const uint16_t index = batch->m_shader & 0x7FFF;
+
+                if ((batch->m_shader & 0x8000) && index <= Retail::kRetailIndexMask) {
+                    batch->m_shader = static_cast<uint16_t>(Retail::kRetailPackedTag | index);
+                }
             }
         }
 #endif
