@@ -138,6 +138,27 @@ float GroundProximity(vec3 world, float above, float ceiling)
                     : 1.0 - smoothstep(max(ceiling - 0.5, 0.0), max(ceiling, 1e-3), -d);
 }
 
+// How much the ground maps' values at xy (the fields' moisture, later snow: one value per spot, for the terrain's
+// surface there) belong to a surface at `world`: all where it lies at or above the terrain or just under it, none
+// under terrain more than `ceiling` yd higher (fading over its last half yard): a tunnel under a hill isn't the
+// rained-on hillside. Over holes too (the terrain's height there as its mesh would lie); 1 where there's no chunk.
+float GroundMapsReach(vec3 world, float ceiling)
+{
+    ivec2 c = ivec2(floor((vec2(groundGrid.y) - world.xy) / groundGrid.x)) - groundWindow.xy;
+
+    if (any(lessThan(c, ivec2(0))) || any(greaterThanEqual(c, ivec2(groundWindow.z))) || groundCells[c.y * groundWindow.z + c.x] == 0u)
+    {
+        return 1.0;
+    }
+
+    uvec3 at;
+    vec3 w;
+    bool hole;
+    GroundTriangle(world.xy, c, at, w, hole);
+    float z = groundHeights[at.x] * w.x + groundHeights[at.y] * w.y + groundHeights[at.z] * w.z;
+    return 1.0 - smoothstep(max(ceiling - 0.5, 0.0), max(ceiling, 1e-3), z - world.z);
+}
+
 layout(set = 2, binding = 2) uniform sampler2D groundTex[2048];
 
 // A view-space position of the world scene in the world.
@@ -167,6 +188,22 @@ vec3 GroundHighlight(vec3 viewPos, vec3 n)
     vec3 toEye = normalize(GroundDirToWorld(-viewPos));
     vec3 h = normalize(toEye + groundLight[0].xyz);
     return pow(max(dot(h, n), 0.0), max(groundLight[3].w, 1.0)) * groundLight[3].xyz;
+}
+
+// The wet shine on top of it (TerrainCover.glsl's CoverWetShine: the exponent sharpened by the wetness, by the gloss
+// made stronger by it, beyond the dry gloss), untinted like the highlight. Nothing dry or with terrain specular off.
+vec3 GroundWetShine(vec3 viewPos, vec3 n, float wet, float gloss)
+{
+    if (wet <= 0.0 || all(equal(groundLight[3].xyz, vec3(0.0))))
+    {
+        return vec3(0.0);
+    }
+
+    vec3 toEye = normalize(GroundDirToWorld(-viewPos));
+    vec3 h = normalize(toEye + groundLight[0].xyz);
+    float e = max(groundLight[3].w, 1.0) * (1.0 + 3.0 * wet);
+    float mask = clamp(gloss * (1.0 + 2.0 * wet), 0.0, 1.0) - gloss;
+    return pow(max(dot(h, n), 0.0), e) * max(mask, 0.0) * groundLight[3].xyz;
 }
 
 // The window cell at world xy, and the entry of its chunk, or -1 (outside the window, or a chunk not drawn yet).

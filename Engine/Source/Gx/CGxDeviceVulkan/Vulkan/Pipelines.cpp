@@ -352,7 +352,10 @@ namespace gxvk::vk::pipelines
         const VkDescriptorSet set3 = cover ? gxvk::vk::lights::FrameSet(slot, serial, gxvk::vk::lights::kSurfaceOutdoor)
                                      : (lit || water) ? gxvk::vk::lights::FrameSet(slot, serial, draw.lightsSurface)
                                            : VK_NULL_HANDLE;
-        if (((cover || water || wmo) && set2 == VK_NULL_HANDLE) || ((cover || lit || water) && set3 == VK_NULL_HANDLE))
+        // SXC: set 4, the covers' again, for our WMO shader with the terrain's table (16's ground wetness: the maps).
+        const bool wmoCover = wmo && gxvk::vk::wmoextra::Ground();
+        const VkDescriptorSet set4 = wmoCover ? gxvk::vk::cover::FrameSet(slot, serial) : VK_NULL_HANDLE;
+        if (((cover || water || wmo) && set2 == VK_NULL_HANDLE) || ((cover || lit || water) && set3 == VK_NULL_HANDLE) || (wmoCover && set4 == VK_NULL_HANDLE))
         {
             ++s.stats.skipped;
             return false;
@@ -383,6 +386,7 @@ namespace gxvk::vk::pipelines
             b.set1   = VK_NULL_HANDLE;
             b.set2   = VK_NULL_HANDLE;  // SXC:
             b.set3   = VK_NULL_HANDLE;
+            b.set4   = VK_NULL_HANDLE;
             b.have1  = false;
             b.pushed = false;
         }
@@ -407,6 +411,11 @@ namespace gxvk::vk::pipelines
         {
             d.CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout.layout, 3, 1, &set3, 0, nullptr);
             b.set3 = set3;
+        }
+        if (wmoCover && b.set4 != set4)  // SXC:
+        {
+            d.CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout.layout, 4, 1, &set4, 0, nullptr);
+            b.set4 = set4;
         }
 
         VkBuffer     vbs[kMaxStreams + 1];

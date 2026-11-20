@@ -1,7 +1,8 @@
 // The descriptor set layouts and the pipeline layouts: set 0 is one combined image sampler per
 // declared sampler slot (one layout per distinct slot set), set 1 the translated interface's
 // dynamic uniform buffer; every pipeline layout is {set 0, set 1} plus the push range (SXC: our terrain
-// shader's {set 0, set 1, the covers' set 2, the lights' set 3}).
+// shader's {set 0, set 1, the covers' set 2, the lights' set 3}; our WMO shader's {set 0, set 1, its extra data and the
+// terrain's table, the lights', the covers' as set 4}).
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Pipelines/Internal.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"  // SXC:
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Lights.hpp" // SXC:
@@ -119,10 +120,12 @@ namespace gxvk::vk::pipelines::detail
         push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         push.offset     = 0;
         push.size       = kPushBytes;
-        const VkDescriptorSetLayout sets[4] = { e.set0, s.regsLayout, set2, lightsLayout };
+        // SXC: our WMO shader with the terrain's table also reads the covers' maps (16's ground wetness), their set as set 4.
+        const bool wmoCover = extra == kExtraWmo && gxvk::vk::wmoextra::Ground();
+        const VkDescriptorSetLayout sets[5] = { e.set0, s.regsLayout, set2, lightsLayout, wmoCover ? gxvk::vk::cover::SetLayout() : VK_NULL_HANDLE };
         VkPipelineLayoutCreateInfo layout = {};
         layout.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        layout.setLayoutCount         = extra != kExtraNone ? 4 : 2;
+        layout.setLayoutCount         = wmoCover ? 5 : extra != kExtraNone ? 4 : 2;
         layout.pSetLayouts            = sets;
         layout.pushConstantRangeCount = 1;
         layout.pPushConstantRanges    = &push;

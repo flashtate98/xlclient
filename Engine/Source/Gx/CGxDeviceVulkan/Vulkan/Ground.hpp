@@ -40,9 +40,9 @@ namespace gxvk::vk::ground
     using Provider = bool (*)(Frame& out);
     void SetProvider(Provider provider);
 
-    /// Whether the device can take the table: per-pixel indexing of a sampler array (Vulkan 1.2) and the limits
-    /// for kSlots more samplers in the WMO pixel stage. Decided from the device alone (the WMO pixel module is
-    /// chosen by it before the sets exist).
+    /// Whether the device can take the table: per-pixel indexing of a sampler array (Vulkan 1.2), the limits
+    /// for kSlots more samplers in the WMO pixel stage, and the covers' set as a fifth set (the ground's wetness;
+    /// makes it if not yet). The WMO pixel module is chosen by it before the WMO sets exist.
     bool Possible();
 
     bool Init();

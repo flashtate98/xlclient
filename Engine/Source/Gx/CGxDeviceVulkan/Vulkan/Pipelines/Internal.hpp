@@ -163,6 +163,7 @@ namespace gxvk::vk::pipelines::detail
         VkDescriptorSet  set1     = VK_NULL_HANDLE;
         VkDescriptorSet  set2     = VK_NULL_HANDLE;   ///< SXC: the covers' (our terrain shader)
         VkDescriptorSet  set3     = VK_NULL_HANDLE;   ///< SXC: the lights' (our terrain shader)
+        VkDescriptorSet  set4     = VK_NULL_HANDLE;   ///< SXC: the covers' for our WMO shader (16's ground wetness)
         uint32_t         offset1  = 0;
         bool             have1    = false;
         VkBuffer         vbs[kMaxStreams + 1]     = {};

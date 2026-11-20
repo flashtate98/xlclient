@@ -61,6 +61,26 @@ layout(std140, set = 1, binding = 0) uniform Regs {
 #if GROUND
 // 16's terrain blend: the terrain under the camera (built with GROUND where the device indexes per pixel).
 #include "Ground.glsl"
+// And the ground's wetness on its share (the covers' maps: the fields' moisture above rest, the water line), from the
+// covers' own set bound as set 4.
+#define COVER_SET 4
+#define COVER_MAPS_ONLY 1
+#include "TerrainCover.glsl"
+
+// 16: the ground's wetness at a spot of the terrain's share as the terrain takes it (TerrainCover.glsl's Covers: the
+// moisture above rest, soaked under the water line), where the maps' values belong to this surface (GroundMapsReach:
+// a tunnel's floor under a rained-on hill stays dry; `ceiling` is the nearness blend's). 0 while the covers are off.
+float GroundWetness(vec3 world, float ceiling)
+{
+    if (cover.enable.x < 0.5)
+    {
+        return 0.0;
+    }
+
+    vec4 g = CoverGround(world.xy);
+    float wet = max(clamp(g.z, 0.0, 1.0), smoothstep(0.0, 0.3, g.w - world.z));
+    return wet * GroundMapsReach(world, ceiling);
+}
 #endif
 
 // Parallax (22): the view in the surface's tangent space, as retail's MapObjParallax vertex shader computes it
@@ -184,6 +204,7 @@ void main()
     float terrainShare = 0.0;
     vec3 terrainMaterial = vec3(0.0);
     float terrainGloss = 0.0;
+    float terrainWet = 0.0;
 #endif
     vec4 t0 = texture(s0, inTex0);
     vec3 material = t0.rgb;
@@ -274,6 +295,10 @@ void main()
         {
             material = vec3(proximity);                                          // the proximity share alone
         }
+        else if (debugView == 8)
+        {
+            material = vec3(GroundWetness(groundWorld, pc.xform[3].z));         // the ground's wetness
+        }
         else if (debugView == 1 || debugView >= 4)
         {
             material = found ? terrain : vec3(1.0, 0.0, 1.0);                     // the terrain alone
@@ -288,9 +313,11 @@ void main()
         }
         else if (found && pc.xform[2].z > 0.5)
         {
-            // Mixed after the light (below): the WMO's share lit as the WMO, the terrain's as the terrain.
+            // Mixed after the light (below): the WMO's share lit as the WMO, the terrain's as the terrain; darkened
+            // where the ground is wet, as the terrain's covers darken it (cover.enable.z).
             terrainShare = share;
-            terrainMaterial = terrain;
+            terrainWet = GroundWetness(groundWorld, pc.xform[3].z);
+            terrainMaterial = terrain * (1.0 - cover.enable.z * terrainWet);
             terrainGloss = gloss;
         }
 #endif
@@ -336,12 +363,12 @@ void main()
         vec3 room = texture(s10, (inTex0 - shift * pc.xform[0].y) * pc.xform[3].xy + pc.xform[3].zw).rgb;
         // How the glass sits over what's behind it (Wmo/ParallaxGlassMode, retail's unknown): 0 its alpha covers
         // (retail's parallax), 1 its alpha is how much shows through, 2 the glass added over all of it.
-        float cover = glassMode == 0 ? glass.a : glassMode == 1 ? 1.0 - glass.a : 0.0;
-        float through = glassMode == 2 ? 1.0 : 1.0 - cover;
+        float glassCover = glassMode == 0 ? glass.a : glassMode == 1 ? 1.0 - glass.a : 0.0;
+        float through = glassMode == 2 ? 1.0 : 1.0 - glassCover;
         float glowShare = clamp(pc.xform[0].w, 0.0, 1.0);
         vec3 roomSeen = room * (1.0 - curtain) * through;
-        material = (glassMode == 2 ? glass.rgb : glass.rgb * cover) + fabric * curtain * through + roomSeen * (1.0 - glowShare);
-        added = roomSeen * pc.xform[0].w + texture(s1, inTex1).rgb * (glassMode == 2 ? glass.a : cover);
+        material = (glassMode == 2 ? glass.rgb : glass.rgb * glassCover) + fabric * curtain * through + roomSeen * (1.0 - glowShare);
+        added = roomSeen * pc.xform[0].w + texture(s1, inTex1).rgb * (glassMode == 2 ? glass.a : glassCover);
         alpha = inColor.a;
     }
     else if (kShader == 23)
@@ -403,10 +430,11 @@ void main()
 #if GROUND
     // 16: the terrain's share as the terrain draws itself (Terrain.frag: the layers x the shadow's 0.7..1 x twice its
     // light x the vertex colour, terrainMaterial carrying twice the vertex colour already; plus the sun's highlight in
-    // the layers' gloss where unshadowed, untinted).
+    // the layers' gloss where unshadowed, untinted, and the wet shine on top of it).
     if (kShader == 16 && terrainShare > 0.0)
     {
-        vec3 highlight = terrainGloss * GroundHighlight(inView, groundNormal) * sunShadow;
+        vec3 highlight = (terrainGloss * GroundHighlight(inView, groundNormal) + GroundWetShine(inView, groundNormal, terrainWet, terrainGloss)) *
+                         sunShadow;
         colour = mix(colour, groundLit * shade * terrainMaterial + highlight, terrainShare);
     }
 #endif

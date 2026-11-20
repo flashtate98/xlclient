@@ -57,12 +57,13 @@ namespace {
             "1: the alpha as painted; retail's baked blend meshes may read it differently (unknown)."};
         SXC::Settings::Bool invert{"Wmo", "TerrainBlendInvert", false, "WMOs: terrain blend read inverted",
             "Off: the blend alpha's 1 is the WMO's texture, 0 the terrain (as the two-layer shaders read it). On: the other way round."};
-        SXC::Settings::Int debug{"Wmo", "TerrainBlendDebug", 0, 0, 7, "WMOs: terrain blend debug view",
+        SXC::Settings::Int debug{"Wmo", "TerrainBlendDebug", 0, 0, 8, "WMOs: terrain blend debug view",
             "Recolours the WMO's shader-16 surfaces only (the terrain itself stays as it is): 0 normal; 1 the terrain's colour "
             "alone (magenta: no terrain chunk known there); 2 the terrain's share as grey (authored and proximity together); "
             "3 the terrain chunk under each spot, one colour per chunk; 4 that chunk's alpha map (layers 1-3 as red, green, blue); "
             "5 the layers' final weights (layer 0 red, 1 green, 2 blue, 3 yellow); 6 the terrain's vertex colour (mid grey: "
-            "neutral); 7 the proximity share alone."};
+            "neutral); 7 the proximity share alone; 8 the ground's wetness the terrain share takes (white: soaked; black under "
+            "terrain higher than the nearness ceiling, where the ground fields' value is the surface above's)."};
         SXC::Settings::Bool proximity{"Wmo", "TerrainBlendProximity", true, "WMOs: terrain blend by nearness",
             "Also blend the terrain in wherever the shader-16 surface lies at or under the terrain (not over its holes), on top "
             "of the authored blend: soft seams where a WMO is sunk deeper than its authored blend reaches."};
@@ -71,7 +72,8 @@ namespace {
             "edge of the shader-16 material on badly placed WMOs (Seyri, 2026-11-20: 0.5 did)."};
         SXC::Settings::Float ceiling{"Wmo", "TerrainBlendCeiling", 3.0f, 0.5f, 20.0f, "WMOs: nearness ceiling (yd)",
             "Terrain more than this far above the surface is a roof, not ground at a seam: no nearness blend under it (fading "
-            "over its last half yard). 3 yd is about 2.7 m, room for a character."};
+            "over its last half yard), and no wetness from the ground fields either (their value there is the rained-on "
+            "surface above). 3 yd is about 2.7 m, room for a character."};
     };
 
     TerrainBlendSettings& TerrainBlend() {

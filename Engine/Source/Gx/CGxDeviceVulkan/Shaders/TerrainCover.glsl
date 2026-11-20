@@ -5,7 +5,8 @@
 // terrain is tessellated (Terrain.tese); the look (Terrain.frag) follows the same rules.
 //
 // Included by Terrain.frag (everything) and Terrain.tese (COVER_DEPTH_ONLY: the height). The includer
-// declares `regs` first and defines LAYERS.
+// declares `regs` first and defines LAYERS. Wmo.frag includes the maps alone (COVER_MAPS_ONLY: the block
+// and CoverGround, no registers) from its set 4 (COVER_SET; the terrain's 2), for 16's terrain share.
 //
 // Pixel registers (set per chunk by SXC::Cover::BeforeChunkDraw): p11 each layer's painted entry, p12
 // each layer's fallen-snow look (entry indices as floats, 0 = none), p13.x whether the chunk is raised,
@@ -18,8 +19,11 @@
 #ifndef LAYERS
 #define LAYERS 1
 #endif
+#ifndef COVER_SET
+#define COVER_SET 2
+#endif
 
-layout(std140, set = 2, binding = 0) uniform CoverBlock {
+layout(std140, set = COVER_SET, binding = 0) uniform CoverBlock {
     vec4 enable;      // on, debug view, wet darkening, plain brightness
     vec4 nearMap;     // cell (yd), size, first i, first j
     vec4 farMap;
@@ -44,10 +48,12 @@ layout(std140, set = 2, binding = 0) uniform CoverBlock {
     vec4 entries[127 * 5];
 } cover;
 
-layout(set = 2, binding = 1) uniform sampler2D sCoverNear;
-layout(set = 2, binding = 2) uniform sampler2D sCoverFar;
-layout(set = 2, binding = 3) uniform sampler2D sTrailFine;    // per cell: pressed to (world z; 1e6 untouched), when, rim strength, when
-layout(set = 2, binding = 4) uniform sampler2D sTrailCoarse;
+layout(set = COVER_SET, binding = 1) uniform sampler2D sCoverNear;
+layout(set = COVER_SET, binding = 2) uniform sampler2D sCoverFar;
+#if !COVER_MAPS_ONLY
+layout(set = COVER_SET,binding = 3) uniform sampler2D sTrailFine;    // per cell: pressed to (world z; 1e6 untouched), when, rim strength, when
+layout(set = COVER_SET,binding = 4) uniform sampler2D sTrailCoarse;
+#endif
 
 const uint kCoverPreventUnderwater = 1u;
 const uint kCoverPreventOnLand     = 2u;
@@ -133,6 +139,7 @@ vec4 CoverGround(vec2 xy)
     return g;
 }
 
+#if !COVER_MAPS_ONLY
 // --- entries -----------------------------------------------------------------------------------------
 vec4 CoverEntry(int e, int row) { return cover.entries[(e - 1) * 5 + row]; }
 
@@ -493,24 +500,24 @@ float CoverHeight(vec2 xy, float groundZ, float up, vec4 w)
 // The cover textures: one array indexed per pixel (COVER_BINDLESS: a Vulkan 1.2 device with non-uniform
 // indexing), else 16 slots the client gives to the textures in view.
 #if COVER_BINDLESS
-layout(set = 2, binding = 7) uniform sampler2D sCoverTex[1024];
+layout(set = COVER_SET,binding = 7) uniform sampler2D sCoverTex[1024];
 #else
-layout(set = 2, binding = 7) uniform sampler2D sCoverTex1;
-layout(set = 2, binding = 8) uniform sampler2D sCoverTex2;
-layout(set = 2, binding = 9) uniform sampler2D sCoverTex3;
-layout(set = 2, binding = 10) uniform sampler2D sCoverTex4;
-layout(set = 2, binding = 11) uniform sampler2D sCoverTex5;
-layout(set = 2, binding = 12) uniform sampler2D sCoverTex6;
-layout(set = 2, binding = 13) uniform sampler2D sCoverTex7;
-layout(set = 2, binding = 14) uniform sampler2D sCoverTex8;
-layout(set = 2, binding = 15) uniform sampler2D sCoverTex9;
-layout(set = 2, binding = 16) uniform sampler2D sCoverTex10;
-layout(set = 2, binding = 17) uniform sampler2D sCoverTex11;
-layout(set = 2, binding = 18) uniform sampler2D sCoverTex12;
-layout(set = 2, binding = 19) uniform sampler2D sCoverTex13;
-layout(set = 2, binding = 20) uniform sampler2D sCoverTex14;
-layout(set = 2, binding = 21) uniform sampler2D sCoverTex15;
-layout(set = 2, binding = 22) uniform sampler2D sCoverTex16;
+layout(set = COVER_SET,binding = 7) uniform sampler2D sCoverTex1;
+layout(set = COVER_SET,binding = 8) uniform sampler2D sCoverTex2;
+layout(set = COVER_SET,binding = 9) uniform sampler2D sCoverTex3;
+layout(set = COVER_SET,binding = 10) uniform sampler2D sCoverTex4;
+layout(set = COVER_SET,binding = 11) uniform sampler2D sCoverTex5;
+layout(set = COVER_SET,binding = 12) uniform sampler2D sCoverTex6;
+layout(set = COVER_SET,binding = 13) uniform sampler2D sCoverTex7;
+layout(set = COVER_SET,binding = 14) uniform sampler2D sCoverTex8;
+layout(set = COVER_SET,binding = 15) uniform sampler2D sCoverTex9;
+layout(set = COVER_SET,binding = 16) uniform sampler2D sCoverTex10;
+layout(set = COVER_SET,binding = 17) uniform sampler2D sCoverTex11;
+layout(set = COVER_SET,binding = 18) uniform sampler2D sCoverTex12;
+layout(set = COVER_SET,binding = 19) uniform sampler2D sCoverTex13;
+layout(set = COVER_SET,binding = 20) uniform sampler2D sCoverTex14;
+layout(set = COVER_SET,binding = 21) uniform sampler2D sCoverTex15;
+layout(set = COVER_SET,binding = 22) uniform sampler2D sCoverTex16;
 #endif
 
 layout(location = 11) in vec4 coverWorld;   // world position (raised onto the covers), how much the terrain faces up
@@ -522,14 +529,14 @@ layout(location = 14) in vec4 coverTint;    // the factor the vertex colour put 
 // back (units, the camera, effects at units' feet). Per cell: the surface's z, the cell's tag ((i &
 // 4095) * 4096 + (j & 4095): the client takes only a cell's own), the bare ground's z, 1. Only cells in
 // the window around the player (far terrain would wrap onto near cells).
-layout(set = 2, binding = 5, rgba32f) uniform writeonly image2D sCoverSurface;
+layout(set = COVER_SET,binding = 5, rgba32f) uniform writeonly image2D sCoverSurface;
 
 // The terrain's distance per pixel of the target (step 5e: the client's projected textures, Decal.frag,
 // project onto the raised covers through it): the nearest terrain pixel's view depth (its clip w, the
 // same under any projection's near and far and any viewport depth range) with its lowest bit taken for
 // "the cover is raised here", by an atomic minimum (a positive float's bits order like it; overdraw keeps
 // the nearest). Cleared to all ones each frame.
-layout(set = 2, binding = 6, r32ui) uniform coherent uimage2D sCoverDepth;
+layout(set = COVER_SET,binding = 6, r32ui) uniform coherent uimage2D sCoverDepth;
 
 void CoverWriteDepth(bool raised)
 {
@@ -882,3 +889,4 @@ vec3 CoverDebug(CoverResult r, int view)
     return mix(mix(vec3(0.3), vec3(0.1, 0.2, 1.0), far), vec3(0.1, 0.9, 0.1), near);
 }
 #endif
+#endif  // !COVER_MAPS_ONLY
