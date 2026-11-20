@@ -13,9 +13,10 @@ namespace {
     uint64_t s_serial = 0;
 
     SXC::Settings::Bool& Setting() {
-        static SXC::Settings::Bool s_setting("Wmo", "OurShader", false, "Our WMO shader (Vulkan)",
-            "Draw WMOs with our own shader instead of the translated stock and Cataclysm ones (kb: our-shaders). "
-            "It aims at the same look; off by default until it matches. Shader 8 and the liquid windows stay translated.");
+        static SXC::Settings::Bool s_setting("Wmo", "OurShader", true, "Our WMO shader (Vulkan)",
+            "Draw WMOs with our own shader instead of the translated stock and Cataclysm ones (kb: our-shaders): retail's "
+            "maths per shader id, the sun shadow on all of them, our reconstructions of 22 and 23, 16's terrain blend. On by "
+            "default since 2026-11-20 (Seyri). The liquid windows (10, 14), 17 and the LOD groups (21) stay translated.");
         return s_setting;
     }
 
