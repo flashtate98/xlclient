@@ -25045,16 +25045,34 @@ static const ConditionalVisual s_conditionalVisuals[] = {
     { 20108,  990810, "Slayer Execute", HasDeathWish },
 };
 
-static const SpellVisualRec* ChooseConditionalVisual(const CGUnit_C* unit, const SpellRec* spell) {
+// Logs, for the active player, what each condition saw (Logs/Animations.log, "conditional look").
+static void LogConditionalCheck(const CGUnit_C* unit, const SpellRec* spell, const ConditionalVisual& entry, int32_t visualId,
+                                bool passed, bool alternateFound) {
+    if (unit->m_obj->m_guid != ClntObjMgrGetActivePlayer()) {
+        return;
+    }
+
+    const CGUnitVirtualItem* offHand = unit->GetVirtualItem(VIRTUAL_MONSTER_SLOT_OFFHAND, false);
+    ChargeLog(unit, "conditional look %s: spell %u visual %d (packet visual %d) class %u level %u form %u off hand %d/%d "
+              "death wish %d auras %u -> %s%s", entry.name, spell->m_id, spell->m_spellVisualID[0], visualId,
+              unit->m_unit->m_unitFieldBytes0[1], unit->m_unit->m_unitFieldLevel, unit->GetShapeshiftForm(),
+              offHand ? static_cast<int32_t>(offHand->m_classID) : -1, offHand ? static_cast<int32_t>(offHand->m_subclassID) : -1,
+              const_cast<CGUnit_C*>(unit)->HasAuraBySpellId(12292) ? 1 : 0, const_cast<CGUnit_C*>(unit)->GetAuraCount(),
+              passed ? "condition met" : "condition not met", passed && !alternateFound ? ", alternate visual missing from SpellVisual.dbc" : "");
+}
+
+static const SpellVisualRec* ChooseConditionalVisual(const CGUnit_C* unit, const SpellRec* spell, int32_t visualId) {
     for (const auto& entry : s_conditionalVisuals) {
-        if (spell->m_spellVisualID[0] != entry.visual || !entry.test(unit)) {
+        if (spell->m_spellVisualID[0] != entry.visual) {
             continue;
         }
 
-        const SpellVisualRec* alternate = g_spellVisualDB.GetRecord(entry.alternate);
+        const bool passed = entry.test(unit);
+        const SpellVisualRec* alternate = passed ? g_spellVisualDB.GetRecord(entry.alternate) : nullptr;
+        LogConditionalCheck(unit, spell, entry, visualId, passed, alternate != nullptr);
 
-        if (alternate && unit->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
-            ChargeLog(unit, "spell %u plays as %s (visual %d)", spell->m_id, entry.name, entry.alternate);
+        if (!passed) {
+            continue;
         }
 
         return alternate;
@@ -25078,11 +25096,16 @@ const SpellVisualRec* CGUnit_C::GetAppropriateSpellVisual(const SpellRec* spell,
 
         base = g_spellVisualDB.GetRecord(id);
         primary = GetSpellVisual(spell);
+
+        // Not in the original: FlashWOW conditional spell looks. The kits come from `primary` here, so swap that.
+        if (const SpellVisualRec* alternate = ChooseConditionalVisual(this, spell, visualId)) {
+            primary = alternate;
+        }
     } else {
         base = GetSpellVisual(spell);
 
         // Not in the original: FlashWOW conditional spell looks (see ChooseConditionalVisual).
-        if (const SpellVisualRec* alternate = ChooseConditionalVisual(this, spell)) {
+        if (const SpellVisualRec* alternate = ChooseConditionalVisual(this, spell, 0)) {
             base = alternate;
         }
     }
