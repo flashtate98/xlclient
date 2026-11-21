@@ -2183,9 +2183,11 @@ void DayNight::UpdateFog() {
     }
 
     SMOFog fog;
-    CMapObjDef* mapObjDef;
-    uint8_t found;
-    TSGrowableArray<uint32_t>* ids;
+    // SXC: QueryCameraFog returns 1 but leaves mapObjDef and ids unset when none of the camera's groups
+    // counts (the "found" flag stays 0), so start them empty; the fog log below reads mapObjDef.
+    CMapObjDef* mapObjDef = nullptr;
+    uint8_t found = 0;
+    TSGrowableArray<uint32_t>* ids = nullptr;
     float distance;
     bool inside = World::QueryCameraFog(&fog, &mapObjDef, &found, &ids, &distance) == 1;
 
