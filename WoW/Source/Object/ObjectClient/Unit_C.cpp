@@ -25009,6 +25009,60 @@ void CGUnit_C::OnSpecialMountAnim() {
     this->PlayBaseAnimation(ANIM_MOUNT_SPECIAL, 0);
 }
 
+// Not in the original: FlashWOW conditional spell looks. Retail gives one spell different looks by a condition on the
+// caster (SpellXSpellVisual's caster conditions: weapon, auras, spec); 3.3.5 has one visual per spell. Here a spell
+// whose visual is `visual` plays `alternate` instead while the caster meets `test`. The alternates are our own rows in
+// SpellVisual.dbc (fx-tools/make_variants_test.py). The client knows these things for every unit, so other players see
+// them too: auras with an icon, stance, the items held and level. Passive talent auras never reach the client.
+struct ConditionalVisual {
+    int32_t visual;             // the spell's own visual
+    int32_t alternate;          // the visual played instead
+    const char* name;
+    bool (*test)(const CGUnit_C* unit);
+};
+
+static bool IsWarrior(const CGUnit_C* unit) {
+    return unit->m_unit->m_unitFieldBytes0[1] == 1;
+}
+
+// A protection warrior: level 60 or higher, in Defensive Stance (form 18), with a shield in the off hand.
+static bool IsProtectionWarrior(const CGUnit_C* unit) {
+    if (!IsWarrior(unit) || unit->m_unit->m_unitFieldLevel < 60 || unit->GetShapeshiftForm() != 18) {
+        return false;
+    }
+
+    const CGUnitVirtualItem* offHand = unit->GetVirtualItem(VIRTUAL_MONSTER_SLOT_OFFHAND, false);
+    return offHand && offHand->m_classID == 4 && offHand->m_subclassID == 6;
+}
+
+// A warrior with Death Wish up.
+static bool HasDeathWish(const CGUnit_C* unit) {
+    return IsWarrior(unit) && const_cast<CGUnit_C*>(unit)->HasAuraBySpellId(12292);
+}
+
+static const ConditionalVisual s_conditionalVisuals[] = {
+    { 990500, 990800, "Thunder Blast (Mountain Thane Thunder Clap)", IsProtectionWarrior },
+    { 20108,  990810, "Slayer Execute", HasDeathWish },
+};
+
+static const SpellVisualRec* ChooseConditionalVisual(const CGUnit_C* unit, const SpellRec* spell) {
+    for (const auto& entry : s_conditionalVisuals) {
+        if (spell->m_spellVisualID[0] != entry.visual || !entry.test(unit)) {
+            continue;
+        }
+
+        const SpellVisualRec* alternate = g_spellVisualDB.GetRecord(entry.alternate);
+
+        if (alternate && unit->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
+            ChargeLog(unit, "spell %u plays as %s (visual %d)", spell->m_id, entry.name, entry.alternate);
+        }
+
+        return alternate;
+    }
+
+    return nullptr;
+}
+
 // VERIFY: d5c90727 manual
 // OFFSET: 0x00720F80
 const SpellVisualRec* CGUnit_C::GetAppropriateSpellVisual(const SpellRec* spell, SpellVisualRec& visual, int32_t visualId, int32_t lowViolenceVisualId) const {
@@ -25026,6 +25080,11 @@ const SpellVisualRec* CGUnit_C::GetAppropriateSpellVisual(const SpellRec* spell,
         primary = GetSpellVisual(spell);
     } else {
         base = GetSpellVisual(spell);
+
+        // Not in the original: FlashWOW conditional spell looks (see ChooseConditionalVisual).
+        if (const SpellVisualRec* alternate = ChooseConditionalVisual(this, spell)) {
+            base = alternate;
+        }
     }
 
     if (spell->m_attributes & 0x2) {
