@@ -4814,6 +4814,8 @@ static const uint32_t s_offHandAnims[][2] = {
     { 824,  1320 },   // CombatAbility1HBig01 / CombatAbility1H03Off
 };
 
+static const uint32_t kCombatWhirlwind = 814;      // Retail's CombatWhirlwind: a full spin with both weapons
+
 static bool IsDualWielding(const CGUnit_C* unit) {
     const CGUnitVirtualItem* offHand = unit->GetVirtualItem(VIRTUAL_MONSTER_SLOT_OFFHAND, false);
     return offHand && offHand->m_classID == 2;
@@ -4836,7 +4838,7 @@ static uint32_t ChooseOffHandAnim(const CGUnit_C* unit, uint32_t mainAnim, bool 
         return off;
     }
 
-    struct Pick { uint32_t at; uint32_t main; bool off; };
+    struct Pick { uint32_t at; uint32_t main; uint32_t anim; };
     static std::unordered_map<uint64_t, Pick> s_picks;
     static uint32_t s_seed = OsGetAsyncTimeMs() | 1;
     const uint32_t now = OsGetAsyncTimeMs();
@@ -4847,11 +4849,25 @@ static uint32_t ChooseOffHandAnim(const CGUnit_C* unit, uint32_t mainAnim, bool 
         s_seed ^= s_seed >> 17;
         s_seed ^= s_seed << 5;
         pick.main = mainAnim;
-        pick.off = (s_seed & 1) != 0;
+        pick.anim = (s_seed & 1) ? off : mainAnim;
+
+        // FlashWOW: a dual-wielding warrior spins (Retail's CombatWhirlwind) on about one press in four, when her
+        // model has it. Retail plays it only for its whirlwind abilities; here it is a flourish on her one-hand ones.
+        if (unit->m_unit->m_unitFieldBytes0[1] == 1 && ((s_seed >> 8) & 3) == 0) {
+            CM2Model* model = unit->GetObjectModel();
+
+            if (model && model->IsLoaded(0, 0) && model->HasSequence(kCombatWhirlwind)) {
+                pick.anim = kCombatWhirlwind;
+
+                if (unit->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
+                    ChargeLog(unit, "dual-wield spin instead of %u %s", mainAnim, AnimName(mainAnim));
+                }
+            }
+        }
     }
 
     pick.at = now;
-    return pick.off ? off : mainAnim;
+    return pick.anim;
 }
 
 uint32_t ChooseWeaponVariantAnim(const CGUnit_C* unit, uint32_t animId) {
