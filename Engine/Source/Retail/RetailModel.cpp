@@ -1361,7 +1361,13 @@ bool PrepareSkin(std::vector<uint8_t>& b, const std::vector<uint8_t>& m, std::st
     for (uint32_t i = 0; i < U32(b, 36); ++i) {
         size_t p = U32(b, 40) + size_t(i) * 24 + 2;
         uint16_t shader = U16(b, p);
-        if (!(shader & 0x8000)) continue;
+        if (!(shader & 0x8000)) {
+            // A non-packed id is decoded from its two low nibbles, one per stage, in retail as in 3.3.5: retail
+            // samples only the first two textures of such a batch, whatever its count says (Thunder Blast's
+            // ground cracks, 0x4014 with three). Give the batch the two it draws.
+            if (U16(b, p + 12) > 2) Put16(b, p + 12, 2);
+            continue;
+        }
         const uint16_t index = shader & 0x7FFF;
         // Without degradeShaders, an id we know nothing about fails the model instead.
         if (index > kRetailIndexMask || (!degradeShaders && !IsKnownRetailPacked(index)))
