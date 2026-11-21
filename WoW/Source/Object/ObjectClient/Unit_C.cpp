@@ -25045,6 +25045,65 @@ static const ConditionalVisual s_conditionalVisuals[] = {
     { 20108,  990810, "Slayer Execute", HasDeathWish },
 };
 
+// A visual's extra kit that plays on one hit target only, picked at random (Retail's Mountain Thane Lightning Strike
+// lands on one enemy of a Thunder Blast). The kits are our own rows in SpellVisualKit.dbc (make_variants_test.py).
+struct OneTargetKit {
+    int32_t visual;     // the visual as played (after any conditional look)
+    int32_t kit;
+};
+
+static const OneTargetKit s_oneTargetKits[] = {
+    { 990800, 990820 },   // Thunder Blast: Lightning Strike, a bolt from the sky
+};
+
+void PlayOneTargetKit(CGUnit_C* caster, const SpellRec* spell, const SpellVisualRec* visual, const TSStackArray<WOWGUID>& targets) {
+    if (!caster || !spell || !visual || !targets.m_count) {
+        return;
+    }
+
+    for (const auto& entry : s_oneTargetKits) {
+        if (visual->m_id != entry.visual) {
+            continue;
+        }
+
+        SpellVisualKitRec* kit = g_spellVisualKitDB.GetRecord(entry.kit);
+
+        if (!kit) {
+            return;
+        }
+
+        // The hit targets other than the caster; pick one.
+        CGObject_C* candidates[64];
+        uint32_t count = 0;
+
+        for (uint32_t i = 0; i < targets.m_count && count < 64; i++) {
+            CGObject_C* object = ClntObjMgrObjectPtr(targets.m_data[i], TYPE_OBJECT, __FILE__, __LINE__);
+
+            if (object && object != caster) {
+                candidates[count++] = object;
+            }
+        }
+
+        if (!count) {
+            return;
+        }
+
+        static uint32_t s_seed = OsGetAsyncTimeMs() | 1;
+        s_seed = s_seed * 1103515245u + 12345u;
+        CGObject_C* target = candidates[(s_seed >> 16) % count];
+
+        PlaySpellVisuaKitData data(spell, kit, 1);
+        data.m_harmful = SpellRec::IsHelpfulOrHarmful(spell) == 2;
+        target->PlaySpellVisualKit(data);
+
+        if (caster->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
+            ChargeLog(caster, "spell %u: one-target kit %d on 1 of %u targets", spell->m_id, entry.kit, count);
+        }
+
+        return;
+    }
+}
+
 // Logs, for the active player, what each condition saw (Logs/Animations.log, "conditional look").
 static void LogConditionalCheck(const CGUnit_C* unit, const SpellRec* spell, const ConditionalVisual& entry, int32_t visualId,
                                 bool passed, bool alternateFound) {

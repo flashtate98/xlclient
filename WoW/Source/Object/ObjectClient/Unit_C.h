@@ -1189,4 +1189,8 @@ const SpellVisualKitRec* ChooseTrapCastKit(CGUnit_C* unit, const SpellRec* spell
 // rogue animations each hit (Unit_C.cpp).
 const SpellVisualKitRec* ChooseRogueComboKit(CGUnit_C* unit, const SpellRec* spell, const SpellVisualKitRec* kit);
 
+// Not in the original: FlashWOW conditional spell looks. Plays a visual's extra kit on ONE random hit target (Thunder
+// Blast's Lightning Strike), beside the impact every target gets (Unit_C.cpp).
+void PlayOneTargetKit(CGUnit_C* caster, const SpellRec* spell, const SpellVisualRec* visual, const TSStackArray<WOWGUID>& targets);
+
 #endif

@@ -2158,6 +2158,7 @@ void PendingSpellCast::OnSpellGo(CDataStore* msg) {
 
         if (spell.m_speed <= 0.0f) {
             PlayImpactVisual(&spell, hits, unit, visual);
+            PlayOneTargetKit(unit, &spell, visual, hits);   // Not in the original: FlashWOW conditional spell looks
 
             if (unit) {
                 for (uint32_t i = 0; i < missCount; i++) {
