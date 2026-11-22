@@ -1501,6 +1501,10 @@ void CGObject_C::AuraEffectHandler(CM2Model* model, uint32_t boneId, uint32_t se
     } else if (effect->m_model->HasSequence(158)) {
         effect->m_model->SetSequenceCallback(reinterpret_cast<void*>(&CGObject_C::AuraEffectHoldHandler), reinterpret_cast<uintptr_t>(effect));
         effect->m_model->SetBoneSequence(0xFFFFFFFF, 158, 0xFFFFFFFF, 0, 1.0f, 1, 1);
+    } else if (sequenceId == 127) {
+        // Not in the original: FlashWOW Retail spell effects. A Retail aura model's Birth (CEffect::CreateModelFromEffect)
+        // ended and it has no Hold: go on with its Stand.
+        effect->m_model->SetBoneSequence(0xFFFFFFFF, 0, 0xFFFFFFFF, 0, 1.0f, 1, 1);
     }
 }
 

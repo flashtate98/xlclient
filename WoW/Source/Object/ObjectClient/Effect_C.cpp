@@ -370,6 +370,15 @@ void CEffect::CreateModelFromEffect(CM2Model* model, void* arg) {
         effect->SetEmissionRateIgnoresDistance(1);
     }
 
+    // Not in the original: FlashWOW Retail spell effects. A Retail aura model opens with its own Birth (127): the
+    // Shield Wall shields fly in, then it stands (0) or holds (158) and ends with Decay (159), which 3.3.5 already
+    // plays. 3.3.5's aura models have no Birth; they start straight on 0. (CGObject_C::AuraEffectHandler goes on
+    // from the Birth.)
+    if ((effect->m_flags & 0x1000) && model->HasSequence(127)) {
+        model->SetBoneSequence(0xFFFFFFFF, 127, 0xFFFFFFFF, 0, 1.0f, 1, 1);
+        return;
+    }
+
     model->SetBoneSequence(0xFFFFFFFF, 0, 0xFFFFFFFF, 0, 1.0f, 1, 1);
 }
 
