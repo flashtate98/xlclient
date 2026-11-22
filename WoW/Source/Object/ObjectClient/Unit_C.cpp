@@ -25045,7 +25045,7 @@ static const ConditionalVisual s_conditionalVisuals[] = {
     { 20108,  990810, "Slayer Execute", HasDeathWish },
 };
 
-// A visual's extra kit that plays on one hit target only, picked at random (Retail's Mountain Thane Lightning Strike
+// A visual's extra kit that plays on one hit target only, the nearest to the caster (Retail's Mountain Thane Lightning Strike
 // lands on one enemy of a Thunder Blast). The kits are our own rows in SpellVisualKit.dbc (make_variants_test.py).
 struct OneTargetKit {
     int32_t visual;     // the visual as played (after any conditional look)
@@ -25088,16 +25088,31 @@ void PlayOneTargetKit(CGUnit_C* caster, const SpellRec* spell, const SpellVisual
             return;
         }
 
-        static uint32_t s_seed = OsGetAsyncTimeMs() | 1;
-        s_seed = s_seed * 1103515245u + 12345u;
-        CGObject_C* target = candidates[(s_seed >> 16) % count];
+        // The nearest to the caster, so the bolt lands right in front of them.
+        const C3Vector from = caster->GetPosition();
+        CGObject_C* target = nullptr;
+        float best = 0.0f;
+
+        for (uint32_t i = 0; i < count; i++) {
+            const C3Vector at = candidates[i]->GetPosition();
+            const float dx = at.x - from.x;
+            const float dy = at.y - from.y;
+            const float dz = at.z - from.z;
+            const float distance = dx * dx + dy * dy + dz * dz;
+
+            if (!target || distance < best) {
+                target = candidates[i];
+                best = distance;
+            }
+        }
 
         PlaySpellVisuaKitData data(spell, kit, 1);
         data.m_harmful = SpellRec::IsHelpfulOrHarmful(spell) == 2;
         target->PlaySpellVisualKit(data);
 
         if (caster->m_obj->m_guid == ClntObjMgrGetActivePlayer()) {
-            ChargeLog(caster, "spell %u: one-target kit %d on 1 of %u targets", spell->m_id, entry.kit, count);
+            ChargeLog(caster, "spell %u: one-target kit %d on the nearest of %u targets (%.1f yards)", spell->m_id, entry.kit, count,
+                      sqrtf(best));
         }
 
         return;
