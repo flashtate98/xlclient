@@ -80,6 +80,12 @@ bool OutOfView()
     return left || right || below || above || near || far;
 }
 
+// Cover thinner than this is drawn flat (its look stays: the colour, the wet, the mud): splitting the
+// ground for a centimetre of rise cost the most of the terrain's GPU where a thin cover lies everywhere
+// (Elwynn's dirt is 0.01 yd: about 7.5 of 10.8 ms in Goldshire, FlashWOW 2026-11-23). Snow and sand
+// drifts are tenths of a yard, and trails show in them as before.
+const float kSplitFrom = 0.03;
+
 // The covers' height at a point of the triangle (position and normal interpolated like Terrain.tese does).
 float HeightAt(vec3 position, vec3 normal)
 {
@@ -101,7 +107,7 @@ float EdgeLevel(int a, int b, float ha, float hb)
 
     float hm = HeightAt((pa + pb) * 0.5, (patchNormal[a] + patchNormal[b]) * 0.5);
 
-    if (max(max(ha, hb), hm) <= 0.0)
+    if (max(max(ha, hb), hm) < kSplitFrom)
     {
         return 1.0;
     }
@@ -159,7 +165,7 @@ void main()
             vec3 centre = (patchPosition[0] + patchPosition[1] + patchPosition[2]) / 3.0;
             float distance = length(View(centre));
 
-            if (cover.tess.w > 0.5 && distance <= cover.tess.y && HeightAt(centre, patchNormal[0] + patchNormal[1] + patchNormal[2]) > 0.0)
+            if (cover.tess.w > 0.5 && distance <= cover.tess.y && HeightAt(centre, patchNormal[0] + patchNormal[1] + patchNormal[2]) >= kSplitFrom)
             {
                 float side = max(length(patchPosition[1] - patchPosition[0]), length(patchPosition[2] - patchPosition[0]));
                 inner = clamp(side / max(distance * cover.tess.x, 0.05), 1.0, max(cover.tess.z, 1.0));
