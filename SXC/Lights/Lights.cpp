@@ -1624,6 +1624,7 @@ namespace {
             const auto held = slotOf.find(f.key);
             uint32_t slot = 0;
             bool draw = false, usable = false;
+            const char* why = nullptr;   // why its map is drawn (the redraw log, below)
 
             if (held != slotOf.end()) {
                 slot = held->second;
@@ -1632,6 +1633,7 @@ namespace {
                 const bool moved = d.x * d.x + d.y * d.y + d.z * d.z > kShadowMoved * kShadowMoved || std::fabs(s.radius - radius) > 0.05f * radius;
                 usable = s.valid && !moved;
                 draw = !usable;
+                why = !s.valid ? "its map was dropped (not drawn last time)" : (moved ? "the light moved or changed radius" : nullptr);
 
                 // Its surroundings, now and then (an old map still serves while a new one waits).
                 if (usable && nowMs >= s.checkMs && checks < kShadowChecksPerFrame) {
@@ -1643,6 +1645,7 @@ namespace {
                     SXC::Profiler::Scope p(SXC::Profiler::kShadowChecks);
                     SXC::Profiler::CountDraw(0);   // the row's draws: checks run
                     draw = Gather(sig) != s.signature;
+                    why = draw ? (s.signature == 0 ? "a texture was still loading last time" : "its surroundings changed") : why;
 
                     if (!draw) {
                         s.incomplete = 0;   // the last map came out whole
@@ -1674,6 +1677,7 @@ namespace {
 
                 slot = best;
                 ShadowSlot& s = s_shadowSlots[slot];
+                why = s.key ? "a new light took the slot of one unused longest" : "a new light, a free slot";
                 slotOf.erase(s.key);
                 s = ShadowSlot{};
                 s.key = f.key;
@@ -1701,6 +1705,21 @@ namespace {
                 s.signature = Gather(g);
                 SXC::Profiler::CountDraw(g.added / 3);   // the row's draws: maps gathered, ktris: their triangles
                 SXC::Profiler::Leave(SXC::Profiler::kShadowGather);
+
+                // FlashWOW: why maps are drawn while nothing moves (Goldshire: 1 to 2 a frame standing still).
+                // Each light at most once per 10 s, 300 lines a session.
+                {
+                    static std::unordered_map<uint64_t, uint32_t> s_loggedMs;
+                    static uint32_t s_lines = 0;
+                    auto& last = s_loggedMs[f.key];
+
+                    if (s_lines < 300 && (!last || nowMs - last > 10000)) {
+                        last = nowMs ? nowMs : 1;
+                        s_lines++;
+                        SXC::Log("lights: shadow map for the light at %.1f %.1f %.1f (key %016llx, slot %u, %.1f yd away): %s; %u triangles", f.pos.x, f.pos.y,
+                                 f.pos.z, static_cast<unsigned long long>(f.key), slot, f.distance, why ? why : "?", g.added / 3);
+                    }
+                }
 
                 if (g.truncated) {
                     SXC::LogOnce("lights-shadow-full", "lights: a shadow map was cut short at %u triangles (light at %.1f %.1f %.1f, radius %.1f)", g.added / 3, f.pos.x,
