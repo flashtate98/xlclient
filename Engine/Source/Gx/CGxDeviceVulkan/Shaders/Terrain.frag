@@ -252,13 +252,15 @@ vec2 Parallax(sampler2D h, int k, float depth, float smoothing, vec3 view, vec3 
         return uv + full * (1.0 - textureGrad(h, uv, gx, gy).a) * fade;
     }
 
-    // Stepped: down until the ray is deeper than the surface there (1 - height).
-    int steps = int(mix(8.0, 24.0, 1.0 - across));
+    // Stepped: down until the ray is deeper than the surface there (1 - height). FlashWOW: 6..12 steps
+    // (were 8..24) and 4 halvings after (were 5): the halvings find the crossing the coarser steps
+    // leave, and the parallax was about 3.5 ms of GPU in Goldshire.
+    int steps = int(mix(6.0, 12.0, 1.0 - across));
     float step = 1.0 / float(steps);
     float ray = 0.0;
     float surface = 1.0 - textureGrad(h, uv, gx, gy).a;
 
-    for (int i = 0; i < 24 && ray < surface; i++)
+    for (int i = 0; i < 12 && ray < surface; i++)
     {
         ray += step;
         surface = 1.0 - textureGrad(h, uv + full * ray, gx, gy).a;
@@ -268,7 +270,7 @@ vec2 Parallax(sampler2D h, int k, float depth, float smoothing, vec3 view, vec3 
     // the stones' tops at larger depths (the steps showing).
     float above = max(ray - step, 0.0), below = ray;
 
-    for (int i = 0; i < 5; i++)
+    for (int i = 0; i < 4; i++)
     {
         float middle = (above + below) * 0.5;
 
@@ -399,20 +401,20 @@ void main()
         vec3 vv = -normalize(coverView.xyz);
         vec3 view = vec3(dot(regs.v[0].xyz, vv), dot(regs.v[1].xyz, vv), dot(regs.v[2].xyz, vv));
         float distance = length(coverView.xyz);
-        vec4 shown = CoverLayerWeights(alpha, kBigAlpha);
+        vec4 shown = CoverLayerWeights(alpha, kBigAlpha);   // a layer under 5% here: no parallax (FlashWOW; was 1%)
         vec4 depth = regs.v[59] * kept;
 
 #if !CUBE
-        if (shown.x > 0.01) gUV[0] = Parallax(sH0, 0, depth.x, regs.v[60].x, view, n, distance);
+        if (shown.x > 0.05) gUV[0] = Parallax(sH0, 0, depth.x, regs.v[60].x, view, n, distance);
 #endif
 #if LAYERS >= 2
-        if (shown.y > 0.01) gUV[1] = Parallax(sH1, 1, depth.y, regs.v[60].y, view, n, distance);
+        if (shown.y > 0.05) gUV[1] = Parallax(sH1, 1, depth.y, regs.v[60].y, view, n, distance);
 #endif
 #if LAYERS >= 3
-        if (shown.z > 0.01) gUV[2] = Parallax(sH2, 2, depth.z, regs.v[60].z, view, n, distance);
+        if (shown.z > 0.05) gUV[2] = Parallax(sH2, 2, depth.z, regs.v[60].z, view, n, distance);
 #endif
 #if LAYERS >= 4
-        if (shown.w > 0.01) gUV[3] = Parallax(sH3, 3, depth.w, regs.v[60].w, view, n, distance);
+        if (shown.w > 0.05) gUV[3] = Parallax(sH3, 3, depth.w, regs.v[60].w, view, n, distance);
 #endif
     }
 
