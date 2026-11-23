@@ -984,6 +984,11 @@ namespace {
     std::unordered_map<uint64_t, Anchor> s_anchors;
 
     constexpr float kShadowMoved = 0.35f;
+    // A light's radius may stray this share from its map's before the map is drawn again; meanwhile it lights
+    // with its map's radius. Fires on scale-animated bones pulse their radius (radius x the bone's scale):
+    // at 5% their maps were gathered again at every look, 10 lights in Goldshire every 2 s (FlashWOW
+    // 2026-11-23, the redraw log). Their brightness still flickers.
+    constexpr float kShadowRadiusSlack = 0.25f;
     constexpr uint32_t kShadowSettleMs = 1000;
     constexpr uint32_t kShadowChecksPerFrame = 8;
     constexpr uint32_t kShadowMaxPerLight = 256 * 1024;   // vertices
@@ -1630,7 +1635,7 @@ namespace {
                 slot = held->second;
                 ShadowSlot& s = s_shadowSlots[slot];
                 const C3Vector d = f.pos - s.pos;
-                const bool moved = d.x * d.x + d.y * d.y + d.z * d.z > kShadowMoved * kShadowMoved || std::fabs(s.radius - radius) > 0.05f * radius;
+                const bool moved = d.x * d.x + d.y * d.y + d.z * d.z > kShadowMoved * kShadowMoved || std::fabs(s.radius - radius) > kShadowRadiusSlack * s.radius;
                 usable = s.valid && !moved;
                 draw = !usable;
                 why = !s.valid ? "its map was dropped (not drawn last time)" : (moved ? "the light moved or changed radius" : nullptr);
@@ -1744,6 +1749,9 @@ namespace {
 
             if (usable) {
                 light.shadow = static_cast<float>(slot + 1);
+                // The map's radius, which its depths were drawn for (Lights.glsl reads them with the light's
+                // radius): a light whose radius pulses within kShadowRadiusSlack keeps its map's.
+                light.invRadius = 1.0f / std::fmax(s_shadowSlots[slot].radius, 0.5f);
                 s_stats.shadowed++;
             }
         }
