@@ -128,6 +128,22 @@ void main()
             return;
         }
 
+        // Beyond the reach (or no raising): whole, without reading the covers at its corners. Each edge's
+        // level checks its own middle's distance; that is at most half the longest edge nearer than the
+        // nearest corner.
+        float d0 = length(View(patchPosition[0])), d1 = length(View(patchPosition[1])), d2 = length(View(patchPosition[2]));
+        float longest = max(length(patchPosition[1] - patchPosition[0]),
+                            max(length(patchPosition[2] - patchPosition[1]), length(patchPosition[0] - patchPosition[2])));
+
+        if (cover.tess.w < 0.5 || min(d0, min(d1, d2)) - longest * 0.5 > cover.tess.y)
+        {
+            gl_TessLevelOuter[0] = 1.0;
+            gl_TessLevelOuter[1] = 1.0;
+            gl_TessLevelOuter[2] = 1.0;
+            gl_TessLevelInner[0] = 1.0;
+            return;
+        }
+
         float h0 = HeightAt(patchPosition[0], patchNormal[0]);
         float h1 = HeightAt(patchPosition[1], patchNormal[1]);
         float h2 = HeightAt(patchPosition[2], patchNormal[2]);
