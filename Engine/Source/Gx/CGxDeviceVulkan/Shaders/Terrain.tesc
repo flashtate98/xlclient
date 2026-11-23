@@ -39,6 +39,47 @@ vec3 View(vec3 p)
     return (regs.v[0] * p.x + regs.v[1] * p.y + regs.v[2] * p.z + regs.v[3]).xyz;
 }
 
+// The clip position of a world point, as TerrainVertex.glsl makes it (v0..v3 world x view, v4..v7 the
+// projection; D3D clip space: x, y within +-w, z within 0..w).
+vec4 Clip(vec3 p)
+{
+    vec4 pos = regs.v[0] * p.x + regs.v[1] * p.y + regs.v[2] * p.z + regs.v[3];
+    return regs.v[4] * pos.x + regs.v[5] * pos.y + regs.v[6] * pos.z + regs.v[7] * pos.w;
+}
+
+// The most the covers raise a point and the most the trails press it below the ground (yd), with room.
+const float kMostRaise = 6.0;
+const float kMostBelow = 2.0;
+
+// True when no point of the triangle, raised or pressed anywhere within those, can be in view: all six
+// corners of its prism beyond one side of the view. The chunks are culled whole before they are drawn;
+// a chunk at the edge of the view or under the camera is mostly out of it, and its triangles there were
+// subdivided all the same (FlashWOW, 2026-11-23: about 18 ms of GPU on the snow at Everlook).
+bool OutOfView()
+{
+    vec4 c[6];
+
+    for (int k = 0; k < 3; k++)
+    {
+        c[k * 2] = Clip(patchPosition[k] - vec3(0.0, 0.0, kMostBelow));
+        c[k * 2 + 1] = Clip(patchPosition[k] + vec3(0.0, 0.0, kMostRaise));
+    }
+
+    bool left = true, right = true, below = true, above = true, near = true, far = true;
+
+    for (int k = 0; k < 6; k++)
+    {
+        left = left && c[k].x < -c[k].w;
+        right = right && c[k].x > c[k].w;
+        below = below && c[k].y < -c[k].w;
+        above = above && c[k].y > c[k].w;
+        near = near && c[k].z < 0.0;
+        far = far && c[k].z > c[k].w;
+    }
+
+    return left || right || below || above || near || far;
+}
+
 // The covers' height at a point of the triangle (position and normal interpolated like Terrain.tese does).
 float HeightAt(vec3 position, vec3 normal)
 {
@@ -77,6 +118,16 @@ void main()
 
     if (gl_InvocationID == 0)
     {
+        // Out of view: levels of 0 drop the triangle before anything is made from it.
+        if (OutOfView())
+        {
+            gl_TessLevelOuter[0] = 0.0;
+            gl_TessLevelOuter[1] = 0.0;
+            gl_TessLevelOuter[2] = 0.0;
+            gl_TessLevelInner[0] = 0.0;
+            return;
+        }
+
         float h0 = HeightAt(patchPosition[0], patchNormal[0]);
         float h1 = HeightAt(patchPosition[1], patchNormal[1]);
         float h2 = HeightAt(patchPosition[2], patchNormal[2]);
