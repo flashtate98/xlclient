@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstring>
 #include <new>
+#include <vector>
 #include <xmmintrin.h>
 #include "Engine/Source/Model2/M2Log.h"
 #include "Engine/Source/Model2/M2Scene.h"
@@ -27,6 +28,8 @@
 #include "Engine/Source/Tempest/NTempest.h"
 #include <chrono>
 #include "SXC/Log.h"  // SXC:
+#include "SXC/Settings/Settings.h"  // SXC: [Models] AnimateThreads
+#include "Engine/Source/Model2/M2AnimatePool.h"  // SXC: the bones over more threads
 #include "SXC/Lights/Lights.h"  // SXC: the world's lights only on the world's scene
 
 // SXC: the mesh IntersectHitTestTriangles is testing, for its out-of-range check and report: set by
@@ -1793,7 +1796,38 @@ int32_t CM2Scene::Animate(const C3Vector& cameraPos) {
 
     const SxcClock::time_point sxcBones = SxcClock::now();
 
-    if (this->m_cache->m_flags & 4) {
+    // SXC (FlashWOW): the bones over the pool's threads and this one (M2AnimatePool), each taking the next
+    // model as it is free, where the stock way gave every other model to one more thread. The same
+    // AnimateMT calls on the same models: only how many run at once changes.
+    static SXC::Settings::Bool s_poolSetting("Models", "AnimateThreads", true, "Models: bones on more threads",
+                                              "Animate the models' bones over several threads (the client's own way: two).");
+    static std::vector<CM2Model*> s_roots;
+
+    if ((this->m_cache->m_flags & 4) && s_poolSetting.Get()) {
+        s_roots.clear();
+
+        for (CM2Model* model = this->m_animateList; model; model = model->m_animateNext) {
+            if (!model->m_attachParent) {
+                s_roots.push_back(model);
+            }
+        }
+
+        struct Job {
+            CM2Scene* scene;
+            CM2Model* const* models;
+        } job = { this, s_roots.data() };
+
+        M2AnimatePool::ForEach(static_cast<uint32_t>(s_roots.size()), [](void* param, uint32_t i) {
+            const Job& j = *static_cast<const Job*>(param);
+            CM2Model* model = j.models[i];
+
+            if (model->m_fFlags & 0x1000) {
+                model->AnimateMTSimple(&j.scene->m_view, C3Vector(1.0f, 1.0f, 1.0f), C3Vector(0.0f, 0.0f, 0.0f), 1.0f, 1.0f);
+            } else {
+                model->AnimateMT(&j.scene->m_view, C3Vector(1.0f, 1.0f, 1.0f), C3Vector(0.0f, 0.0f, 0.0f), 1.0f, 1.0f);
+            }
+        }, &job, this->m_cache->m_propContext);
+    } else if (this->m_cache->m_flags & 4) {
         this->m_cache->BeginThread(&CM2Scene::AnimateThread, this);
 
         for (CM2Model* model = this->m_animateList; model; ) {
