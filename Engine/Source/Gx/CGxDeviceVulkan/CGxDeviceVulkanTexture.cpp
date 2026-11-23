@@ -63,6 +63,7 @@ namespace {
     struct TexRec {
         texture::Image image;                ///< VK_NULL_HANDLE when the texture cannot have one
         uint64_t       lastUsed     = 0;     ///< serial of the last frame a draw sampled it in
+        uint64_t       usedBefore   = 0;     ///< the frame it was sampled in before lastUsed's (Stamp): ready since then
         uint64_t       lastRef      = 0;     ///< serial of the last frame a fill was recorded inline (the main buffer) in
         uint64_t       prePass      = 0;     ///< serial of the last frame a pre-pass fill named it in
         bool           genMips      = false; ///< a generated chain: level 0 uploaded, the rest derived
@@ -71,6 +72,17 @@ namespace {
         bool           decode       = false; ///< the callback's texels are decoded to RGBA8 before the upload
         bool           renderTarget = false;
     };
+
+    // Sampled this frame. The frame before, if it was another, is kept: a texture sampled in an earlier
+    // frame is on the GPU, whatever this frame's draws stamp (SxcShadowTexture).
+    void Stamp(TexRec& r) {
+        const uint64_t now = frame::Serial();
+
+        if (r.lastUsed != now) {
+            r.usedBefore = r.lastUsed;
+            r.lastUsed = now;
+        }
+    }
 
     struct Region {
         uint32_t x;
@@ -628,7 +640,7 @@ int32_t CGxDeviceVulkan::ITexResolve(CGxTex* texId, uint32_t stage, pipelines::D
         return 0;
     }
 
-    r->lastUsed = frame::Serial();
+    Stamp(*r);
     pipelines::Texture& t = draw.textures[stage];
     t.view = r->image.view;
     t.imageId = r->image.id;
@@ -644,7 +656,14 @@ int32_t CGxDeviceVulkan::ITexResolve(CGxTex* texId, uint32_t stage, pipelines::D
 VkImageView CGxDeviceVulkan::SxcShadowTexture(CGxTex* texId) {
     TexRec* r = texId ? RecOf(texId) : nullptr;
 
-    if (!r || r->image.handle == VK_NULL_HANDLE || r->image.cube || r->renderTarget || !r->lastUsed || r->lastUsed >= frame::Serial()) {
+    // Ready: sampled in an earlier frame (its upload is done). Not only "last sampled before this frame":
+    // a doodad in view stamps its texture every frame before the maps ask, and its map was taken as
+    // missing it every time, so drawn again every 16 s for good (FlashWOW 2026-11-23: most of Goldshire's
+    // lamps; their maps were 1 to 2 gatherings a frame).
+    const uint64_t now = frame::Serial();
+    const bool ready = r && ((r->lastUsed && r->lastUsed < now) || (r->usedBefore && r->usedBefore < now));
+
+    if (!r || r->image.handle == VK_NULL_HANDLE || r->image.cube || r->renderTarget || !ready) {
         // One no draw has sampled (a doodad the camera never drew): its upload is asked for at the frame's
         // end (SxcShadowUploads; the caller is inside a draw, no transfer can be recorded now). Without it
         // the map stayed incomplete and was gathered again and again.
@@ -656,7 +675,7 @@ VkImageView CGxDeviceVulkan::SxcShadowTexture(CGxTex* texId) {
         return VK_NULL_HANDLE;
     }
 
-    r->lastUsed = frame::Serial();
+    Stamp(*r);
     return r->image.view;
 }
 
@@ -668,7 +687,7 @@ void CGxDeviceVulkan::SxcShadowUploads() {
         TexRec* r = RecOf(texId);
 
         if (r && r->image.handle != VK_NULL_HANDLE) {
-            r->lastUsed = frame::Serial();
+            Stamp(*r);
         }
     }
 
