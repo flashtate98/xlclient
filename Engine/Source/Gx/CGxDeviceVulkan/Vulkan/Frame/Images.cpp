@@ -172,9 +172,11 @@ namespace gxvk::vk::frame::detail
             return false;
         }
         if (s.imagesInFlight[image] != VK_NULL_HANDLE && s.imagesInFlight[image] != slot.fence)
+        {
             SXC::Profiler::Enter(SXC::Profiler::kGpuWait);   // SXC: the profiler's row for the CPU waiting on the GPU
             s.dapi->WaitForFences(s.device, 1, &s.imagesInFlight[image], VK_TRUE, UINT64_MAX);
             SXC::Profiler::Leave(SXC::Profiler::kGpuWait);
+        }
         s.imagesInFlight[image] = slot.fence;
         s.image    = image;
         s.acquired = true;
