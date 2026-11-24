@@ -68,6 +68,8 @@ namespace {
         { "covers (ours): frame data", kCpuOnly },
         { "grass (ours): chunks, runs", kCpuOnly },
         { "draw calls: the Vulkan backend's share (in all of the above)", kCpuOnly },
+        { "draw calls: shader constants (in the above)", kCpuOnly },
+        { "draw calls: textures, their descriptors (in the above)", kCpuOnly },
         { "pre-pass: uploads", 0 },
         { "pre-pass: shadow maps (ours)", 0 },
     };
@@ -381,7 +383,7 @@ namespace SXC::Profiler {
         int c = kOther;
 
         for (int i = s_depth - 1; i >= 0; i--) {
-            if (s_stack[i] != kBackendDraw) {
+            if (s_stack[i] != kBackendDraw && s_stack[i] != kBackendRegs && s_stack[i] != kBackendTex) {
                 c = s_stack[i];
                 break;
             }

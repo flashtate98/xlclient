@@ -254,11 +254,15 @@ bool CGxDeviceVulkan::IDrawState(pipelines::Draw& d) {
     this->IShaderConstantsFlush();
     const uint32_t samplerMask = this->IShaderPrograms(d);
 
+    SXC::Profiler::Enter(SXC::Profiler::kBackendTex);
+
     for (uint32_t stage = 0; stage < pipelines::kTextureStages; stage++) {
         if (samplerMask & (1u << stage)) {
             this->ITexResolve(static_cast<CGxTex*>(this->m_appRenderStates[GxRs_Texture0 + stage].m_value.m_data.p), stage, d);
         }
     }
+
+    SXC::Profiler::Leave(SXC::Profiler::kBackendTex);
 
     // The alpha test, the textured stages and the ops of stages 0 and 1 (Shaders/Push.glsl's
     // params: stage 1's ops in bits 3..5), the stage-0 ops alone in the translated interface's misc
@@ -308,6 +312,7 @@ bool CGxDeviceVulkan::IDrawState(pipelines::Draw& d) {
     d.fog[3] = fogOn ? 1.0f : 0.0f;
     d.pixelRegs = pixelRows;
     d.vertexRegs = this->m_vertexRegs;
+    d.vertexRegsGen = SxcVertexRegsGen();   // SXC: the uniform ring compares the vertex rows by this
 
     if (!this->IPlaceD3d(d.viewport, d.scissor)) {
         return false;

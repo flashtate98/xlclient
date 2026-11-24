@@ -240,6 +240,9 @@ namespace gxvk::vk::pipelines
         const float* vertexRegs = nullptr;
         uint32_t     vertexRows = kVertexRowsSmall;
         uint32_t     vertexRowsUsed = 0;   ///< rows of vertexRegs worth uploading (0 = all vertexRows)
+        /// SXC: which state of the device's vertex register file vertexRegs holds (bumped at every flush that
+        /// changes it); 0 = not known (a copy, other registers): the slice is compared or written whole.
+        uint64_t     vertexRegsGen = 0;
         const float* pixelRegs  = nullptr;
         float        misc[4]    = {};
 

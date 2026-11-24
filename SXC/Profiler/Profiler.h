@@ -62,6 +62,8 @@ namespace SXC::Profiler {
         kGrassPrepare,  // our grass: chunks taken, runs built
         kBackendDraw,   // inside any category: the Vulkan backend's work per draw call (state sync, pipeline,
                         // descriptors, constants, recording); the draw still counts to the category around it
+        kBackendRegs,   // inside it: the shader constants into the uniform ring (RegsSlice)
+        kBackendTex,    // inside it: the textures resolved and their descriptor set (ITexResolve, set 0)
         // The pre-pass (GPU only): recorded ahead of the frame's draws.
         kUploads,       // texture and buffer uploads, the descriptor work
         kShadowMaps,    // our point lights' cube shadow maps

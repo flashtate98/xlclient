@@ -390,6 +390,14 @@ void CGxDeviceVulkan::IShaderFolder(char* folder, size_t size) {
 // set, so a draw uploads only up to here instead of the whole (Retail-sized) register file.
 static uint32_t s_vertexRowsWritten = 0;
 
+// SXC: which state m_vertexRegs is in: bumped by every flush that changes it (Draw::vertexRegsGen; the
+// uniform ring binds the last slice again while it holds). Starts past 0, which means "not known".
+static uint64_t s_vertexRegsGen = 1;
+
+uint64_t CGxDeviceVulkan::SxcVertexRegsGen() {
+    return s_vertexRegsGen;
+}
+
 // Mirrors CGxDeviceD3d::IShaderConstantsFlush (0x006A9FE0): the shadow constants' dirty ranges
 // become the device's registers (index 1 of s_shadowConstants is the vertex file, 0 the pixel one,
 // as ShaderConstantsSet files them), and the ranges are reset.
@@ -399,6 +407,7 @@ void CGxDeviceVulkan::IShaderConstantsFlush() {
     if (vs.dirtyMin <= vs.dirtyMax && vs.dirtyMax < ShadowConstants::Count) {
         memcpy(&this->m_vertexRegs[vs.dirtyMin * 4], &vs.constants[vs.dirtyMin * 4], (vs.dirtyMax - vs.dirtyMin + 1) * 4 * sizeof(float));
         g_stats.flushes++;
+        s_vertexRegsGen++;
 
         if (vs.dirtyMax + 1 > s_vertexRowsWritten) {
             s_vertexRowsWritten = vs.dirtyMax + 1;

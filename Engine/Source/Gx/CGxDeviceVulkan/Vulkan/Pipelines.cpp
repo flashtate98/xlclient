@@ -1,4 +1,5 @@
 // The graphics pipelines a draw binds: the module's life and the record of one draw.
+#include "SXC/Profiler/Profiler.h"  // SXC: the backend's rows in the frame profiler
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Pipelines/Internal.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"  // SXC:
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Lights.hpp" // SXC:
@@ -315,7 +316,10 @@ namespace gxvk::vk::pipelines
         // unconditionally, so every slot binds a valid image of its kind).
         Texture stages[kTextureStages];
         uint32_t mismatched = 0;
-        if (!StageImages(draw, layout, cubeMask, stages, mismatched))
+        SXC::Profiler::Enter(SXC::Profiler::kBackendTex);   // SXC: the frame profiler (FlashWOW)
+        const bool staged = StageImages(draw, layout, cubeMask, stages, mismatched);
+        SXC::Profiler::Leave(SXC::Profiler::kBackendTex);
+        if (!staged)
         {
             ++s.stats.skipped;
             return false;
@@ -325,7 +329,9 @@ namespace gxvk::vk::pipelines
             Write(Warn, "vulkan: pipelines: a draw binds a texture of the other kind than its sampler (2D / cube); "
                         "drawn with white there instead (counted in the cube mismatches)");
         }
+        SXC::Profiler::Enter(SXC::Profiler::kBackendTex);
         const VkDescriptorSet set0 = DescriptorFor(slot, serial, layout, stages);
+        SXC::Profiler::Leave(SXC::Profiler::kBackendTex);
         if (set0 == VK_NULL_HANDLE)
         {
             ++s.stats.skipped;
@@ -335,7 +341,10 @@ namespace gxvk::vk::pipelines
         // Set 1: the constant slice, for the translated family.
         VkDescriptorSet set1    = VK_NULL_HANDLE;
         uint32_t        offset1 = 0;
-        if (translated && !RegsSlice(slot, serial, draw, set1, offset1))
+        SXC::Profiler::Enter(SXC::Profiler::kBackendRegs);
+        const bool sliced = !translated || RegsSlice(slot, serial, draw, set1, offset1);
+        SXC::Profiler::Leave(SXC::Profiler::kBackendRegs);
+        if (!sliced)
         {
             ++s.stats.skipped;
             return false;

@@ -71,8 +71,8 @@ namespace gxvk::vk::pipelines::detail
      * One uniform slice for a draw of the translated family: p[16] from the pixel register file,
      * misc, then v[rows] from the vertex register file, written at the next aligned offset of the
      * slot's ring (the ring is rewound when a new frame opens on the slot: its last frame has
-     * completed). A slice identical to the one written just before is bound again rather than
-     * written.
+     * completed). A slice identical to the one written just before (the same head, the same state of
+     * the vertex registers, as many rows) is bound again rather than written.
      *
      * @param VkDescriptorSet& set : receives the chunk's set-1 descriptor
      * @param uint32& offset : receives the dynamic offset of the slice
@@ -96,12 +96,35 @@ namespace gxvk::vk::pipelines::detail
             ss.lastSliceSet   = VK_NULL_HANDLE;
         }
 
-        uint8_t slice[kSliceBytesLarge];
-        std::memcpy(slice, draw.pixelRegs, kPixelRows * 16);
-        std::memcpy(slice + kPixelRows * 16, draw.misc, 16);
-        std::memcpy(slice + kSliceHeadBytes, draw.vertexRegs, used * 16);
+        // SXC (FlashWOW): the head (pixel rows, misc) is compared; the vertex rows by the state they come
+        // from (Draw::vertexRegsGen), not row by row. A slice was built on the stack, compared whole and
+        // kept whole (up to 16 KiB three times a draw with retail bone palettes): about 9 ms of a frame
+        // with 24 players in view went to the backend's draws.
+        uint8_t head[kSliceHeadBytes];
+        std::memcpy(head, draw.pixelRegs, kPixelRows * 16);
+        std::memcpy(head + kPixelRows * 16, draw.misc, 16);
 
-        if (ss.lastSliceSet != VK_NULL_HANDLE && ss.lastSliceBytes == bytes && std::memcmp(ss.lastSlice, slice, bytes) == 0)
+        // Registers of no known state (the mirror's copies): identified by a hash of their rows instead
+        // (64-bit FNV-1a over 8-byte words, with the top bit set so it never reads as a known state).
+        uint64_t gen = draw.vertexRegsGen;
+
+        if (gen == 0)
+        {
+            uint64_t h = 14695981039346656037ull;
+            const uint8_t* rowsAt = reinterpret_cast<const uint8_t*>(draw.vertexRegs);
+
+            for (uint32_t i = 0; i + 8 <= used * 16; i += 8)
+            {
+                uint64_t w;
+                std::memcpy(&w, rowsAt + i, 8);
+                h = (h ^ w) * 1099511628211ull;
+            }
+
+            gen = h | (1ull << 63);
+        }
+
+        if (ss.lastSliceSet != VK_NULL_HANDLE && ss.lastSliceBytes == bytes && ss.lastVertexGen == gen
+            && std::memcmp(ss.lastHead, head, kSliceHeadBytes) == 0)
         {
             set    = ss.lastSliceSet;
             offset = ss.lastSliceOffset;
@@ -120,7 +143,9 @@ namespace gxvk::vk::pipelines::detail
                 if (at + kSliceBytesLarge <= kRegsChunkBytes)
                 {
                     memory::Buffer& b = ss.regs[ss.regsUsed - 1];
-                    std::memcpy(static_cast<uint8_t*>(b.block.mapped) + at, slice, bytes);
+                    uint8_t* to = static_cast<uint8_t*>(b.block.mapped) + at;
+                    std::memcpy(to, head, kSliceHeadBytes);
+                    std::memcpy(to + kSliceHeadBytes, draw.vertexRegs, used * 16);
                     memory::FlushHost(b.block);
                     ss.regsCursor = at + bytes;
                     set    = ss.regsSet[ss.regsUsed - 1];
@@ -142,7 +167,8 @@ namespace gxvk::vk::pipelines::detail
             ss.regsCursor = 0;
         }
 
-        std::memcpy(ss.lastSlice, slice, bytes);
+        std::memcpy(ss.lastHead, head, kSliceHeadBytes);
+        ss.lastVertexGen   = gen;
         ss.lastSliceBytes  = bytes;
         ss.lastSliceSet    = set;
         ss.lastSliceOffset = offset;

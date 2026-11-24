@@ -223,8 +223,11 @@ namespace gxvk::vk::pipelines::detail
         uint32_t        regsUsed   = 0;        ///< chunks written this frame (the current one included)
         uint32_t        regsCursor = 0;        ///< next free byte of the current chunk
         uint64_t        regsSerial = 0;        ///< the frame the ring was last reset for
-        /// The last slice written this frame, to bind again rather than write twice.
-        uint8_t         lastSlice[kSliceBytesLarge] = {};
+        /// The last slice written this frame, to bind again rather than write twice: its head (the pixel
+        /// rows and misc) and which state of the vertex registers it holds (SXC: compared by that, not
+        /// row by row; 0 = written from registers of no known state).
+        uint8_t         lastHead[kSliceHeadBytes] = {};
+        uint64_t        lastVertexGen   = 0;
         uint32_t        lastSliceBytes  = 0;
         VkDescriptorSet lastSliceSet    = VK_NULL_HANDLE;
         uint32_t        lastSliceOffset = 0;

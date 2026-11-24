@@ -235,6 +235,7 @@ namespace gxvk::vk::view
         }
 
         pipelines::Draw c = draw;
+        c.vertexRegsGen = 0;   // SXC: its own registers (the projection swapped): no known state, its slice written whole
 
         // The grass's plants near the player only, without their density copies: a reflection shows little of
         // it, and its far plants and the copies near the player are most of its triangles.
