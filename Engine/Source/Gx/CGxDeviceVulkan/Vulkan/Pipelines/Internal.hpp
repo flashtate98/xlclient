@@ -150,7 +150,12 @@ namespace gxvk::vk::pipelines::detail
     {
         Key        key;
         VkPipeline pipeline = VK_NULL_HANDLE;   ///< VK_NULL_HANDLE: the key was refused, remembered so it is not retried
+        uint64_t   hash     = 0;                ///< SXC: KeyHash(key), for the index below
     };
+
+    /// SXC (FlashWOW): the entries' index, open addressing on the key's hash: Lookup scanned every entry
+    /// with a whole-key memcmp (hundreds of pipelines with the retail models), per draw.
+    constexpr uint32_t kIndexSlots = 4096;   ///< a power of two, at least twice kMaxPipelines
 
     /// What is bound on the command buffer being recorded; stale across command buffers and frames.
     struct Bound
@@ -251,6 +256,7 @@ namespace gxvk::vk::pipelines::detail
         VkPipelineCache       cache      = VK_NULL_HANDLE;
         memory::Buffer        constant;                       ///< the constant stream (kConstantBytes)
         Entry*                entries    = nullptr;           ///< kMaxPipelines, heap
+        uint16_t              index[kIndexSlots] = {};        ///< SXC: entry + 1 per slot, 0 = empty (Lookup)
         uint32_t              entryCount = 0;
         uint32_t              passGen    = 0;                 ///< the generation the entries were built for
         Bound                 bound;

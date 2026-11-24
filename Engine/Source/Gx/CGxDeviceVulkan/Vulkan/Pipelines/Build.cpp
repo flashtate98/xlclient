@@ -624,10 +624,32 @@ namespace gxvk::vk::pipelines::detail
 {
     /// The entry of a key: found, or built and remembered -- a refused key too, with a null
     /// pipeline, so its draws are skipped without a second attempt. Null when the table is full.
+    // SXC: 64-bit FNV-1a over the key's bytes, padding included (Record zeroes the key first).
+    static uint64_t KeyHash(const Key& k)
+    {
+        const uint8_t* p = reinterpret_cast<const uint8_t*>(&k);
+        uint64_t h = 14695981039346656037ull;
+        size_t i = 0;
+        for (; i + 8 <= sizeof k; i += 8)
+        {
+            uint64_t w;
+            std::memcpy(&w, p + i, 8);
+            h = (h ^ w) * 1099511628211ull;
+        }
+        for (; i < sizeof k; ++i) h = (h ^ p[i]) * 1099511628211ull;
+        return h ^ (h >> 29);
+    }
+
     const Entry* Lookup(const Key& k)
     {
-        for (uint32_t i = 0; i < s.entryCount; ++i)
-            if (std::memcmp(&s.entries[i].key, &k, sizeof k) == 0) return &s.entries[i];
+        static_assert(kIndexSlots >= 2 * kMaxPipelines && (kIndexSlots & (kIndexSlots - 1)) == 0, "the index must stay sparse");
+        const uint64_t hash = KeyHash(k);
+        uint32_t slot = static_cast<uint32_t>(hash) & (kIndexSlots - 1);
+        for (; s.index[slot] != 0; slot = (slot + 1) & (kIndexSlots - 1))
+        {
+            Entry& e = s.entries[s.index[slot] - 1];
+            if (e.hash == hash && std::memcmp(&e.key, &k, sizeof k) == 0) return &e;
+        }
         if (s.entryCount == kMaxPipelines)
         {
             if (!s.warnedFull)
@@ -643,6 +665,8 @@ namespace gxvk::vk::pipelines::detail
         // Bytewise, padding included: the lookup above compares the whole struct.
         std::memcpy(&e.key, &k, sizeof k);
         e.pipeline = pipeline;
+        e.hash     = hash;
+        s.index[slot] = static_cast<uint16_t>(s.entryCount);   // the empty slot the probe above ended on
         if (pipeline != VK_NULL_HANDLE) ++s.stats.pipelines;
         return &e;
     }
@@ -655,6 +679,7 @@ namespace gxvk::vk::pipelines::detail
             if (s.entries[i].pipeline != VK_NULL_HANDLE) s.dapi->DestroyPipeline(s.device, s.entries[i].pipeline, nullptr);
         s.entryCount      = 0;
         s.stats.pipelines = 0;
+        std::memset(s.index, 0, sizeof s.index);   // SXC: the index with them
         s.bound           = Bound();
     }
 }
