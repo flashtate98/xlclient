@@ -47,6 +47,8 @@ namespace SXC::Profiler {
         kSceneObjects,  // the world's Gxu scene objects, drawn after the clear
         kPresent,      // the present pass and the tools overlay (ImGui); on the CPU also the acquire's wait
         kFrameCap,      // the CPU waiting for the frame rate cap (maxfps)
+        kGpuWait,       // SXC: the CPU waiting for the GPU: a frame slot's fence, a swapchain image (in the backend's
+                        // first draw of a frame, where the frame opens: it was booked to the backend's share)
         // Ours, CPU only (their GPU work is in the pass they run in, or in the pre-pass).
         kLightsScan,    // our lights: the scene's models walked, their lights placed
         kLightsMerge,   // our lights: near lights merged, the nearest picked, inside or outside

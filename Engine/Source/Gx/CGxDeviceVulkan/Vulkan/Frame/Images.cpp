@@ -1,5 +1,6 @@
 // The swapchain-derived objects: the image list, the per-image views and semaphores, the scene image
 // at the swapchain's size and the present pass over them, and the acquire.
+#include "SXC/Profiler/Profiler.h"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Frame/Internal.hpp"
 
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Present.hpp"
@@ -147,7 +148,9 @@ namespace gxvk::vk::frame::detail
         // again next time. OUT_OF_DATE is a rebuild; SURFACE_LOST a rebuild of the surface as well.
         // The semaphore stays unsignalled on every failure, so the slot keeps it.
         uint32_t image = 0;
+        SXC::Profiler::Enter(SXC::Profiler::kGpuWait);   // SXC: the acquire waits when every image is still queued
         VkResult r = s.dapi->AcquireNextImageKHR(s.device, h->swapchain, kAcquireTimeoutNs, slot.imageAvailable, VK_NULL_HANDLE, &image);
+        SXC::Profiler::Leave(SXC::Profiler::kGpuWait);
         if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_ERROR_SURFACE_LOST_KHR || r == VK_TIMEOUT || r == VK_NOT_READY)
         {
             s.noImage = true;
@@ -169,7 +172,9 @@ namespace gxvk::vk::frame::detail
             return false;
         }
         if (s.imagesInFlight[image] != VK_NULL_HANDLE && s.imagesInFlight[image] != slot.fence)
+            SXC::Profiler::Enter(SXC::Profiler::kGpuWait);   // SXC: the profiler's row for the CPU waiting on the GPU
             s.dapi->WaitForFences(s.device, 1, &s.imagesInFlight[image], VK_TRUE, UINT64_MAX);
+            SXC::Profiler::Leave(SXC::Profiler::kGpuWait);
         s.imagesInFlight[image] = slot.fence;
         s.image    = image;
         s.acquired = true;

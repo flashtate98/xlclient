@@ -1,5 +1,6 @@
 // The frame: opening a frame slot and its render pass on the current target, the clear, the target
 // switch, the submit and the present, the frame serials and the retirement of resources by serial.
+#include "SXC/Profiler/Profiler.h"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Frame/Internal.hpp"
 
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Present.hpp"
@@ -80,7 +81,10 @@ namespace gxvk::vk::frame::detail
 
         const loader::Device& d    = *s.dapi;
         FrameSlot&            slot = s.slots[s.fi];
+        // SXC: the wait on its own row: it happens in the frame's first draw, and was read as the backend's cost.
+        SXC::Profiler::Enter(SXC::Profiler::kGpuWait);
         VkResult r = d.WaitForFences(s.device, 1, &slot.fence, VK_TRUE, UINT64_MAX);
+        SXC::Profiler::Leave(SXC::Profiler::kGpuWait);
         if (r != VK_SUCCESS)
         {
             Fail("vkWaitForFences (frame slot)", r);

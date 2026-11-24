@@ -55,6 +55,7 @@ namespace {
         { "world: scene objects", 0 },
         { "present, tools overlay", 0 },
         { "waiting: frame rate cap", kCpuOnly },
+        { "waiting: the GPU (behind by a frame)", kCpuOnly },
         { "lights (ours): scan", kCpuOnly },
         { "lights (ours): scan: merge, pick", kCpuOnly },
         { "lights (ours): shadow assignment", kCpuOnly },
