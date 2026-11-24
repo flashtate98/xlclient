@@ -524,6 +524,24 @@ void CLayoutFrame::AddToResizeList() {
         return;
     }
 
+    // SXC (FlashWOW): the walk below looks for a pending frame anchored to this one, over the whole
+    // pending list, for every frame added: quadratic, and with a crowd's nameplates and an addon's bars
+    // the pending list runs to hundreds (CLayoutFrame::AddToResizeList was 2.4% of the client's CPU
+    // in Goldshire with 24 players in view). Every frame anchored to this one is in its m_resizeList
+    // (SetPoint and SetAllPoints register it): when none of those is pending the walk can find nothing,
+    // so this one goes to the tail at once, as the walk would have put it.
+    bool anyPending = false;
+
+    for (CLayoutFrame::FRAMENODE* node = this->m_resizeList.Head(); node && !anyPending; node = this->m_resizeList.Next(node)) {
+        anyPending = node->m_frame && s_resizePendingList.IsLinked(node->m_frame);
+    }
+
+    if (!anyPending) {
+        s_resizePendingList.LinkToTail(this);
+        this->m_layoutFlags = (this->m_layoutFlags & ~0xFFu) | 6;
+        return;
+    }
+
     CLayoutFrame* dependent = nullptr;
 
     for (CLayoutFrame* frame = s_resizePendingList.Head(); frame; frame = s_resizePendingList.Next(frame)) {
