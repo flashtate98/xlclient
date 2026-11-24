@@ -75,6 +75,10 @@ void CGxDeviceVulkan::Draw(CGxBatch* batch, int32_t count) {
         return;
     }
 
+    // SXC: the backend's share of the frame's CPU, per draw (FlashWOW: with 24 players in view, "models"
+    // grew about 0.17 ms a player; how much of that is here, how much in the scene's own walk).
+    SXC::Profiler::Scope sxcBackend(SXC::Profiler::kBackendDraw);
+
     this->IRsSync(0);
 
     if (!batch || !this->m_drawPath || !this->m_primVertexMask) {

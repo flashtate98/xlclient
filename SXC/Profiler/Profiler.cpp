@@ -67,6 +67,7 @@ namespace {
         { "lights (ours): cells", kCpuOnly },
         { "covers (ours): frame data", kCpuOnly },
         { "grass (ours): chunks, runs", kCpuOnly },
+        { "draw calls: the Vulkan backend's share (in all of the above)", kCpuOnly },
         { "pre-pass: uploads", 0 },
         { "pre-pass: shadow maps (ours)", 0 },
     };
@@ -376,7 +377,16 @@ namespace SXC::Profiler {
             return;
         }
 
-        const int c = Current();
+        // The category the draw belongs to: the one around the backend's own row.
+        int c = kOther;
+
+        for (int i = s_depth - 1; i >= 0; i--) {
+            if (s_stack[i] != kBackendDraw) {
+                c = s_stack[i];
+                break;
+            }
+        }
+
         s_frame.draws[c]++;
         s_frame.tris[c] += triangles;
     }

@@ -60,6 +60,8 @@ namespace SXC::Profiler {
         kLightsGrid,    // our lights: the cells built
         kCoverFrame,    // our covers: the frame's data resolved for the terrain shader
         kGrassPrepare,  // our grass: chunks taken, runs built
+        kBackendDraw,   // inside any category: the Vulkan backend's work per draw call (state sync, pipeline,
+                        // descriptors, constants, recording); the draw still counts to the category around it
         // The pre-pass (GPU only): recorded ahead of the frame's draws.
         kUploads,       // texture and buffer uploads, the descriptor work
         kShadowMaps,    // our point lights' cube shadow maps
