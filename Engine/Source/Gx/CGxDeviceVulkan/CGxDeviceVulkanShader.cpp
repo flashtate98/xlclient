@@ -520,7 +520,12 @@ uint32_t CGxDeviceVulkan::IShaderPrograms(pipelines::Draw& draw) {
 
                 if (raise > 0.5f && gxvk::vk::cover::Tessellation() && !(v.options & pipelines::terrain::kVertexEnv)) {
                     draw.terrainVertex |= pipelines::terrain::kVertexTess | ((p.options & pipelines::terrain::kFragmentBigAlpha) ? pipelines::terrain::kVertexBigAlpha : 0u);
-                    draw.terrainUnderlay = true;
+                    // SXC (FlashWOW): a switch to measure it: the underlay shades the chunk a second time, wholly
+                    // hidden but for the hairlines (its image writes keep the depth test after the shader).
+                    static SXC::Settings::Bool s_underlay("Terrain", "CoverUnderlay", true, "Covers: flat ground under raised chunks",
+                                                          "Draw each raised chunk flat and lowered first, so a hairline where two chunks' covers don't meet shows ground. "
+                                                          "Off: about half the raised terrain's pixel work, hairlines may show.");
+                    draw.terrainUnderlay = s_underlay.Get();
                 }
                 // The covers' set for this frame, made now: its textures resolve like the draw's own
                 // stages, before the draw takes the pass (an inline upload may end it).
