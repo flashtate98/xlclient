@@ -30,6 +30,8 @@
 #include "Engine/Source/Tempest/CRect.h"
 #include "Engine/Source/lua-5.1/src/lauxlib.h"
 #include "Engine/Source/lua-5.1/src/lua.h"
+#include "SXC/Settings/Settings.h"  // SXC: [Interface] SkipStillRegions
+#include <unordered_map>
 
 // STATIC: 0x00AC154C
 int32_t CSimpleFrame::s_metatable = LUA_NOREF;
@@ -1402,6 +1404,7 @@ void CSimpleFrame::RegisterRegion(CSimpleRegion* region) {
     }
 
     this->m_regions.LinkToTail(region);
+    ++SXC::g_regionAnimGeneration;  // SXC: the frames' cached "any region animates" is stale
 }
 
 // VERIFY: a3acb818 manual
@@ -1442,14 +1445,54 @@ void CSimpleFrame::OnLayerUpdate(float elapsedSec) {
 
     this->PreOnAnimUpdate();
 
-    for (CSimpleRegion* region = this->m_regions.Head(); region; region = this->m_regions.Next(region)) {
-        region->PreOnAnimUpdate();
+    // SXC (FlashWOW): a region's steps do nothing unless it has animation groups (PreOnAnimUpdate acts only on one
+    // mid-animation, which its own group started; OnAnimUpdate only on one with groups), yet every region of every
+    // shown frame was walked twice a frame: ~1.5% of the client's CPU with DragonUI (VS, Goldshire). Per frame,
+    // whether any region has groups is kept as of SXC::g_regionAnimGeneration (bumped by RegisterAnimGroup and
+    // RegisterRegion), and the walks are skipped when none has. The frame's own steps stay.
+    static SXC::Settings::Bool s_skipSetting("Interface", "SkipStillRegions", true, "Interface: skip regions with no animations",
+                                             "Skip the per-frame animation step of a frame's textures and texts when none of them has an animation.");
+    bool walk = true;
+
+    if (s_skipSetting.Get()) {
+        struct Known {
+            uint32_t generation;
+            bool animated;
+        };
+        static std::unordered_map<const CSimpleFrame*, Known> s_known;
+        Known& k = s_known[this];
+        bool animated = k.animated;
+
+        if (k.generation != SXC::g_regionAnimGeneration) {
+            k.generation = SXC::g_regionAnimGeneration;
+            k.animated = false;
+
+            for (CSimpleRegion* region = this->m_regions.Head(); region && !k.animated; region = this->m_regions.Next(region)) {
+                k.animated = region->m_animGroups != nullptr || region->m_animating;
+            }
+
+            animated = k.animated;
+
+            if (s_known.size() > 65536) {
+                s_known.clear();   // destroyed frames' entries: dropped wholesale (each is worked out again)
+            }
+        }
+
+        walk = animated;
+    }
+
+    if (walk) {
+        for (CSimpleRegion* region = this->m_regions.Head(); region; region = this->m_regions.Next(region)) {
+            region->PreOnAnimUpdate();
+        }
     }
 
     this->OnAnimUpdate(elapsedSec);
 
-    for (CSimpleRegion* region = this->m_regions.Head(); region; region = this->m_regions.Next(region)) {
-        region->OnAnimUpdate(elapsedSec);
+    if (walk) {
+        for (CSimpleRegion* region = this->m_regions.Head(); region; region = this->m_regions.Next(region)) {
+            region->OnAnimUpdate(elapsedSec);
+        }
     }
 }
 

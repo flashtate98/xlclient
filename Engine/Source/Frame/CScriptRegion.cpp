@@ -286,6 +286,8 @@ void CScriptRegion::RegisterAnimGroup(CSimpleAnimGroup* group) {
         return;
     }
 
+    ++SXC::g_regionAnimGeneration;  // SXC: the frames' cached "any region animates" is stale
+
     if (!this->m_animGroups) {
         this->m_animGroups = new (SMemAlloc(sizeof(*this->m_animGroups), __FILE__, __LINE__, 0)) TSExplicitList<CSimpleAnimGroup, offsetof(CSimpleAnimGroup, m_regionLink)>;
     }
@@ -341,4 +343,8 @@ void CScriptRegion::AddAnimScale(FRAMEPOINT origin, const C2Vector& offset, cons
 // VERIFY: db7e550e auto
 // OFFSET: 0x00632050
 void CScriptRegion::AddAnimAlpha(int16_t alpha) {
+}
+
+namespace SXC {
+    uint32_t g_regionAnimGeneration = 1;
 }

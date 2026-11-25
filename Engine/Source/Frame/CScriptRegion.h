@@ -58,4 +58,10 @@ class CScriptRegion : public CScriptObject, public CLayoutFrame {
     void RegisterAnimGroup(CSimpleAnimGroup* group);
 };
 
+// SXC (FlashWOW): bumped whenever a region (or frame) gets an animation group and whenever a frame gets a region;
+// CSimpleFrame::OnLayerUpdate keeps, per frame, whether any of its regions has animation groups, as of this count.
+namespace SXC {
+    extern uint32_t g_regionAnimGeneration;
+}
+
 #endif
