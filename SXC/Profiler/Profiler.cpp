@@ -39,6 +39,7 @@ namespace {
         { "world: culling: doodads", kCpuOnly },
         { "world: culling: occlusion buffer", kCpuOnly },
         { "world: culling: horizon, occlusion volumes", kCpuOnly },
+        { "world: culling: terrain chunks prepared", kCpuOnly },
         { "models: animation", 0 },
         { "terrain", 0 },
         { "WMOs", 0 },

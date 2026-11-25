@@ -31,6 +31,7 @@ namespace SXC::Profiler {
         kCullDoodads,
         kCullOcclusion, // the horizon occlusion buffer, chunk by chunk
         kCullHorizon,   // CullHorizon, CreateOcclusionVolumes
+        kCullChunkPrep, // CMapChunk::RenderPrep for each chunk drawn (inside CullChunks)
         kAnimation,     // the M2 scene: time advanced, bones animated
         kTerrain,
         kWmo,           // the world map objects and their portals

@@ -2,6 +2,7 @@
 #include <malloc.h>
 #include <cmath>
 #include <cstring>
+#include <emmintrin.h>  // SXC: the occlusion buffer's columns four at a time
 #include "Engine/Source/Tempest/C44Matrix.h"
 #include "Engine/Source/Tempest/CAaBox.h"
 #include "Engine/Source/Tempest/CAaSphere.h"
@@ -333,6 +334,46 @@ static WorldOccluderData s_worldOccluders[5] = {
 void CWorldOccluder::Initialize() {
 }
 
+// SXC (FlashWOW): the horizon buffer's column loops, four columns at a time (SSE2, every x64 CPU). The same
+// results as the stock one-column loops: a max, and "any column below". In Goldshire (24 players, a wide view)
+// filling the buffer was 2.6 ms, column by column for every edge of every terrain chunk in view.
+namespace {
+    inline void RaiseColumns(float* buffer, int32_t x0, int32_t x1, float height) {
+        const __m128 h = _mm_set1_ps(height);
+        int32_t x = x0;
+
+        for (; x + 3 <= x1; x += 4) {
+            _mm_storeu_ps(buffer + x, _mm_max_ps(_mm_loadu_ps(buffer + x), h));
+        }
+
+        for (; x <= x1; x++) {
+            if (height > buffer[x]) {
+                buffer[x] = height;
+            }
+        }
+    }
+
+    // Whether y is above the buffer in any column of [first, last] (the stock loop's "return 0": seen).
+    inline bool AboveAny(const float* buffer, int32_t first, int32_t last, float y) {
+        const __m128 v = _mm_set1_ps(y);
+        int32_t i = first;
+
+        for (; i + 3 <= last; i += 4) {
+            if (_mm_movemask_ps(_mm_cmpgt_ps(v, _mm_loadu_ps(buffer + i)))) {
+                return true;
+            }
+        }
+
+        for (; i <= last; i++) {
+            if (y > buffer[i]) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+}
+
 // VERIFY: 4db2afc6 manual
 // OFFSET: 0x0078F6A0
 void CWorldOcclusion::UpdateBufferChunk(const C3Vector* verts, const float* heights, const uint32_t* indices, int32_t count, const C3Vector* offset, int32_t holes) {
@@ -410,11 +451,7 @@ void CWorldOcclusion::UpdateBufferChunk(const C3Vector* verts, const float* heig
             x1 = 383;
         }
 
-        for (; x0 <= x1; x0++) {
-            if (height > CWorldScene::s_clipBuffer[x0]) {
-                CWorldScene::s_clipBuffer[x0] = height;
-            }
-        }
+        RaiseColumns(CWorldScene::s_clipBuffer, x0, x1, height);
     }
 }
 
@@ -522,10 +559,8 @@ uint32_t CWorldOcclusion::QueryBuffer(const C3Vector& center, float radius, uint
         last = 383;
     }
 
-    for (int32_t i = first; i <= last; i++) {
-        if (view.y > CWorldScene::s_clipBuffer[i]) {
-            return 0;
-        }
+    if (AboveAny(CWorldScene::s_clipBuffer, first, last, view.y)) {
+        return 0;
     }
 
     return 2;
@@ -583,10 +618,8 @@ uint32_t CWorldOcclusion::QueryBuffer(CAaBox* box, uint8_t flags) {
         last = 383;
     }
 
-    for (int32_t i = first; i <= last; i++) {
-        if (maxY > CWorldScene::s_clipBuffer[i]) {
-            return 0;
-        }
+    if (AboveAny(CWorldScene::s_clipBuffer, first, last, maxY)) {
+        return 0;
     }
 
     return 2;

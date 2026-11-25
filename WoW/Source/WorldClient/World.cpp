@@ -4106,12 +4106,19 @@ void CWorldScene::CullChunks(CSortEntry* entry, uint32_t index) {
         chunk->m_sortListLink.Unlink();
 
         if (CWorldScene::frustumStack[CWorldScene::frustumIndex].Cull(chunk->m_bbox) && !CWorldOcclusion::QueryVolumes(&chunk->m_sphere) && !CWorldOcclusion::QueryBuffer(&chunk->m_bbox, 0)) {
-            CWorldScene::CullDoodadsExterior(&chunk->m_doodadDefLinkList, CWorldView::GetFadeLevelForDistance(chunk->m_distToCamera));
+            {
+                SXC::Profiler::Scope p(SXC::Profiler::kCullDoodads);  // SXC: its own row (it was "terrain chunks")
+                CWorldScene::CullDoodadsExterior(&chunk->m_doodadDefLinkList, CWorldView::GetFadeLevelForDistance(chunk->m_distToCamera));
+            }
 
             if (CWorldScene::frustumStack[CWorldScene::frustumIndex].Cull(chunk->m_bbox2) && !CWorldOcclusion::QueryBuffer(&chunk->m_bbox2, 0)) {
                 if (chunk->m_header->m_holes != 0xFFFF) {
                     CWorldScene::s_chunksRendered++;
-                    chunk->RenderPrep();
+
+                    {
+                        SXC::Profiler::Scope p(SXC::Profiler::kCullChunkPrep);  // SXC: its own row
+                        chunk->RenderPrep();
+                    }
 
                     CMapRenderChunk* renderChunk = chunk->m_renderChunk;
 
