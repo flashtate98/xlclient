@@ -2,6 +2,7 @@
 // from WXL's env/Lights and features/DoodadLightTable (port plan, step 6a), reading the client's own
 // structures instead of offsets.
 
+#include "SXC/Math/FastMath.h"  // in-line fmax, fmin, floor
 #include "SXC/Lights/Lights.h"
 
 #include <algorithm>
@@ -129,7 +130,7 @@ namespace {
                     f.suppress = f.suppress || (a.flags & SXC_LIGHTS_SUPPRESS_MODEL_LIGHTS) != 0;
                     f.glows = f.glows || a.glow_id != 0;
                     f.lands = f.lands || (a.flags & kLands) != 0;
-                    f.rowOffset = std::fmax(f.rowOffset, std::sqrt(a.offset[0] * a.offset[0] + a.offset[1] * a.offset[1] + a.offset[2] * a.offset[2]));
+                    f.rowOffset = fastmath::FastMax(f.rowOffset, std::sqrt(a.offset[0] * a.offset[0] + a.offset[1] * a.offset[1] + a.offset[2] * a.offset[2]));
                 }
             }
         }
@@ -226,7 +227,7 @@ namespace {
 
     bool Settled() { return s_available && s_haveSettings && s_settings.enabled; }
 
-    float Brightest(const C3Vector& c) { return std::fmax(c.x, std::fmax(c.y, c.z)); }
+    float Brightest(const C3Vector& c) { return fastmath::FastMax(c.x, fastmath::FastMax(c.y, c.z)); }
 
     // A direction through a matrix's rotation and scale (row vectors), and the length it came out with.
     C3Vector Dir(const C3Vector& v, const C44Matrix& m) {
@@ -392,11 +393,11 @@ namespace {
             l.placed = toWater || toGround;
 
             if (toWater && water <= ground) {
-                l.at = from + dir * std::fmax(water - kSurfaceGap, 0.0f);
+                l.at = from + dir * fastmath::FastMax(water - kSurfaceGap, 0.0f);
                 l.surface = SXC_LIGHTS_SURFACE_WATER;
                 l.liquid = liquid;
             } else if (toGround) {
-                l.at = from + dir * std::fmax(ground - kSurfaceGap, 0.0f);
+                l.at = from + dir * fastmath::FastMax(ground - kSurfaceGap, 0.0f);
                 l.surface = SXC_LIGHTS_SURFACE_GROUND;
             }
         }
@@ -544,7 +545,7 @@ namespace {
 
         if (k.type == SXC_LIGHTS_SPOT) {
             constexpr float kRad = 3.14159265f / 180.0f;
-            const float inner = std::cos(std::fmin(k.inner_angle, k.outer_angle) * kRad);
+            const float inner = std::cos(fastmath::FastMin(k.inner_angle, k.outer_angle) * kRad);
             f.cosOuter = std::cos(k.outer_angle * kRad);
             f.spotScale = inner - f.cosOuter > 1e-4f ? 1.0f / (inner - f.cosOuter) : 1e4f;
         }
@@ -598,20 +599,20 @@ namespace {
             // its reach: its bounds and the farthest of its lights, attachments and emitters, plus the
             // rows' offsets.
             if (fileRows.reach < 0.0f) {
-                float r = std::fmax(data->m_bounds.m_radius, 0.0f);
+                float r = fastmath::FastMax(data->m_bounds.m_radius, 0.0f);
                 bool carries = fileRows.rows != nullptr;
 
                 for (uint32_t i = 0; i < data->m_lights.m_count; i++) {
-                    r = std::fmax(r, Length(data->m_lights[i].m_position));
+                    r = fastmath::FastMax(r, Length(data->m_lights[i].m_position));
                     carries = carries || data->m_lights[i].m_type == 1;
                 }
 
                 for (uint32_t i = 0; i < data->m_attachments.m_count; i++) {
-                    r = std::fmax(r, Length(data->m_attachments[i].m_position));
+                    r = fastmath::FastMax(r, Length(data->m_attachments[i].m_position));
                 }
 
                 for (uint32_t i = 0; i < data->m_particles.m_count; i++) {
-                    r = std::fmax(r, Length(data->m_particles[i].m_position));
+                    r = fastmath::FastMax(r, Length(data->m_particles[i].m_position));
                 }
 
                 fileRows.reach = r + fileRows.rowOffset;
@@ -710,8 +711,8 @@ namespace {
 
         const float inv = 1.0f / distance, d2 = distance * distance;
         auto key = [inv](const C3Vector& p, int dx, int dy, int dz) {
-            const int64_t x = static_cast<int64_t>(std::floor(p.x * inv)) + dx, y = static_cast<int64_t>(std::floor(p.y * inv)) + dy,
-                          z = static_cast<int64_t>(std::floor(p.z * inv)) + dz;
+            const int64_t x = static_cast<int64_t>(fastmath::FastFloor(p.x * inv)) + dx, y = static_cast<int64_t>(fastmath::FastFloor(p.y * inv)) + dy,
+                          z = static_cast<int64_t>(fastmath::FastFloor(p.z * inv)) + dz;
             return (static_cast<uint64_t>(x + 1048576) & 0x1FFFFF) | ((static_cast<uint64_t>(y + 1048576) & 0x1FFFFF) << 21) |
                    ((static_cast<uint64_t>(z + 1048576) & 0x1FFFFF) << 42);
         };
@@ -760,8 +761,8 @@ namespace {
                     const float share = wa + wb > 0.0f ? wb / (wa + wb) : 0.5f;
                     keep.pos = keep.pos + (other.pos - keep.pos) * share;
                     keep.color = keep.color + other.color;
-                    keep.radius = std::fmax(keep.radius, other.radius);
-                    keep.distance = std::fmin(keep.distance, other.distance);
+                    keep.radius = fastmath::FastMax(keep.radius, other.radius);
+                    keep.distance = fastmath::FastMin(keep.distance, other.distance);
                     keep.still = keep.still && other.still;
                     wa += wb;
                     other.merged = true;
@@ -796,14 +797,14 @@ namespace {
         if (mode == SXC_LIGHTS_FLICKER_NOISE || mode == SXC_LIGHTS_FLICKER_STEPS) {
             const double u = t * 6.0;
             const uint32_t seed = static_cast<uint32_t>(phase * 1000.0);
-            const uint32_t k = static_cast<uint32_t>(static_cast<int64_t>(std::floor(u)));
+            const uint32_t k = static_cast<uint32_t>(static_cast<int64_t>(fastmath::FastFloor(u)));
             const float a = Unit(k * 2654435761u + seed), b = Unit((k + 1) * 2654435761u + seed);
 
             if (mode == SXC_LIGHTS_FLICKER_STEPS) {
                 return a;
             }
 
-            float f = static_cast<float>(u - std::floor(u));
+            float f = static_cast<float>(u - fastmath::FastFloor(u));
             f = f * f * (3.0f - 2.0f * f);
             return a + (b - a) * f;
         }
@@ -818,7 +819,7 @@ namespace {
     void BuildGrid(const C3Vector& camera, float range, float cell, uint32_t perCell) {
         const int half = std::min(static_cast<int>(std::ceil(range / cell)), static_cast<int>(kMaxCells / 2));
         const int cells = std::max(1, half * 2);
-        const float ox = (std::floor(camera.x / cell) - half) * cell, oy = (std::floor(camera.y / cell) - half) * cell;
+        const float ox = (fastmath::FastFloor(camera.x / cell) - half) * cell, oy = (fastmath::FastFloor(camera.y / cell) - half) * cell;
         s_frame.originX = ox;
         s_frame.originY = oy;
         s_frame.cellSize = cell;
@@ -839,19 +840,19 @@ namespace {
         for (uint32_t i = 0; i < s_lights.size(); i++) {
             const GpuLight& l = s_lights[i];
             const float r = 1.0f / l.invRadius, lx = l.pos[0] - ox, ly = l.pos[1] - oy;
-            const int x0 = std::max(0, static_cast<int>(std::floor((lx - r) / cell))), y0 = std::max(0, static_cast<int>(std::floor((ly - r) / cell)));
-            const int x1 = std::min(cells - 1, static_cast<int>(std::floor((lx + r) / cell))), y1 = std::min(cells - 1, static_cast<int>(std::floor((ly + r) / cell)));
+            const int x0 = std::max(0, static_cast<int>(fastmath::FastFloor((lx - r) / cell))), y0 = std::max(0, static_cast<int>(fastmath::FastFloor((ly - r) / cell)));
+            const int x1 = std::min(cells - 1, static_cast<int>(fastmath::FastFloor((lx + r) / cell))), y1 = std::min(cells - 1, static_cast<int>(fastmath::FastFloor((ly + r) / cell)));
 
             for (int y = y0; y <= y1; y++) {
                 for (int x = x0; x <= x1; x++) {
-                    const float nx = std::fmax(x * cell, std::fmin(lx, (x + 1) * cell)) - lx, ny = std::fmax(y * cell, std::fmin(ly, (y + 1) * cell)) - ly;
+                    const float nx = fastmath::FastMax(x * cell, fastmath::FastMin(lx, (x + 1) * cell)) - lx, ny = fastmath::FastMax(y * cell, fastmath::FastMin(ly, (y + 1) * cell)) - ly;
 
                     if (nx * nx + ny * ny > r * r) {
                         continue;
                     }
 
                     const float cx = (x + 0.5f) * cell - lx, cy = (y + 0.5f) * cell - ly;
-                    const float t = 1.0f - std::fmin(std::sqrt(cx * cx + cy * cy) / (r + halfDiagonal), 1.0f);
+                    const float t = 1.0f - fastmath::FastMin(std::sqrt(cx * cx + cy * cy) / (r + halfDiagonal), 1.0f);
                     entries.push_back(Entry{ static_cast<uint32_t>(y * cells + x), s_strength[i] * t * t, i });
                 }
             }
@@ -891,7 +892,7 @@ namespace {
 
     // `budgeted`: the lights' 48 a frame apply (the models count their own).
     bool IsIndoor(const C3Vector& p, uint32_t nowMs, bool budgeted = true) {
-        const auto q = [](float v) { return static_cast<uint64_t>(static_cast<int64_t>(std::floor(v * 2.0f)) + 1048576) & 0x1FFFFF; };
+        const auto q = [](float v) { return static_cast<uint64_t>(static_cast<int64_t>(fastmath::FastFloor(v * 2.0f)) + 1048576) & 0x1FFFFF; };
         const uint64_t key = q(p.x) | (q(p.y) << 21) | (q(p.z) << 42);
         auto it = s_indoor.find(key);
 
@@ -1011,8 +1012,8 @@ namespace {
     // A triangle's box against a sphere (conservative).
     bool TriangleReaches(const C3Vector& a, const C3Vector& b, const C3Vector& c, const C3Vector& centre, float r) {
         CAaBox box;
-        box.b = C3Vector(std::fmin(a.x, std::fmin(b.x, c.x)), std::fmin(a.y, std::fmin(b.y, c.y)), std::fmin(a.z, std::fmin(b.z, c.z)));
-        box.t = C3Vector(std::fmax(a.x, std::fmax(b.x, c.x)), std::fmax(a.y, std::fmax(b.y, c.y)), std::fmax(a.z, std::fmax(b.z, c.z)));
+        box.b = C3Vector(fastmath::FastMin(a.x, fastmath::FastMin(b.x, c.x)), fastmath::FastMin(a.y, fastmath::FastMin(b.y, c.y)), fastmath::FastMin(a.z, fastmath::FastMin(b.z, c.z)));
+        box.t = C3Vector(fastmath::FastMax(a.x, fastmath::FastMax(b.x, c.x)), fastmath::FastMax(a.y, fastmath::FastMax(b.y, c.y)), fastmath::FastMax(a.z, fastmath::FastMax(b.z, c.z)));
         return BoxReaches(box, centre, r);
     }
 
@@ -1070,17 +1071,17 @@ namespace {
         C3Vector lo(1e30f, 1e30f, 1e30f), hi(-1e30f, -1e30f, -1e30f);
 
         for (uint32_t i = 0; i < vertices; i++) {
-            lo = C3Vector(std::fmin(lo.x, v[i].x), std::fmin(lo.y, v[i].y), std::fmin(lo.z, v[i].z));
-            hi = C3Vector(std::fmax(hi.x, v[i].x), std::fmax(hi.y, v[i].y), std::fmax(hi.z, v[i].z));
+            lo = C3Vector(fastmath::FastMin(lo.x, v[i].x), fastmath::FastMin(lo.y, v[i].y), fastmath::FastMin(lo.z, v[i].z));
+            hi = C3Vector(fastmath::FastMax(hi.x, v[i].x), fastmath::FastMax(hi.y, v[i].y), fastmath::FastMax(hi.z, v[i].z));
         }
 
         if (!vertices) {
             lo = hi = C3Vector(0.0f, 0.0f, 0.0f);
         }
 
-        const float extent = std::fmax(hi.x - lo.x, std::fmax(hi.y - lo.y, hi.z - lo.z));
+        const float extent = fastmath::FastMax(hi.x - lo.x, fastmath::FastMax(hi.y - lo.y, hi.z - lo.z));
         x.min = lo;
-        x.cell = std::fmax(4.0f, extent / kGroupCellsPerAxis);
+        x.cell = fastmath::FastMax(4.0f, extent / kGroupCellsPerAxis);
         x.nx = std::min(kGroupCellsPerAxis, static_cast<int32_t>((hi.x - lo.x) / x.cell) + 1);
         x.ny = std::min(kGroupCellsPerAxis, static_cast<int32_t>((hi.y - lo.y) / x.cell) + 1);
         x.nz = std::min(kGroupCellsPerAxis, static_cast<int32_t>((hi.z - lo.z) / x.cell) + 1);
@@ -1105,8 +1106,8 @@ namespace {
             const C3Vector& a = v[i[0]];
             const C3Vector& b = v[i[1]];
             const C3Vector& d = v[i[2]];
-            const float lx = std::fmin(a.x, std::fmin(b.x, d.x)), ly = std::fmin(a.y, std::fmin(b.y, d.y)), lz = std::fmin(a.z, std::fmin(b.z, d.z));
-            const float hx = std::fmax(a.x, std::fmax(b.x, d.x)), hy = std::fmax(a.y, std::fmax(b.y, d.y)), hz = std::fmax(a.z, std::fmax(b.z, d.z));
+            const float lx = fastmath::FastMin(a.x, fastmath::FastMin(b.x, d.x)), ly = fastmath::FastMin(a.y, fastmath::FastMin(b.y, d.y)), lz = fastmath::FastMin(a.z, fastmath::FastMin(b.z, d.z));
+            const float hx = fastmath::FastMax(a.x, fastmath::FastMax(b.x, d.x)), hy = fastmath::FastMax(a.y, fastmath::FastMax(b.y, d.y)), hz = fastmath::FastMax(a.z, fastmath::FastMax(b.z, d.z));
             c[0] = std::clamp(static_cast<int32_t>((lx - x.min.x) / x.cell), 0, x.nx - 1);
             c[1] = std::clamp(static_cast<int32_t>((ly - x.min.y) / x.cell), 0, x.ny - 1);
             c[2] = std::clamp(static_cast<int32_t>((lz - x.min.z) / x.cell), 0, x.nz - 1);
@@ -1320,8 +1321,8 @@ namespace {
 
         for (int k = 0; k < 8; k++) {
             const C3Vector corner = C3Vector(k & 1 ? e.t.x : e.b.x, k & 2 ? e.t.y : e.b.y, k & 4 ? e.t.z : e.b.z) * model->m_worldTransform;
-            o.box.b = C3Vector(std::fmin(o.box.b.x, corner.x), std::fmin(o.box.b.y, corner.y), std::fmin(o.box.b.z, corner.z));
-            o.box.t = C3Vector(std::fmax(o.box.t.x, corner.x), std::fmax(o.box.t.y, corner.y), std::fmax(o.box.t.z, corner.z));
+            o.box.b = C3Vector(fastmath::FastMin(o.box.b.x, corner.x), fastmath::FastMin(o.box.b.y, corner.y), fastmath::FastMin(o.box.b.z, corner.z));
+            o.box.t = C3Vector(fastmath::FastMax(o.box.t.x, corner.x), fastmath::FastMax(o.box.t.y, corner.y), fastmath::FastMax(o.box.t.z, corner.z));
         }
 
         static_cast<std::vector<CasterObject>*>(param)->push_back(o);
@@ -1385,7 +1386,7 @@ namespace {
                 }
 
                 const auto clampCell = [&](float value, float origin, int32_t n) {
-                    return std::clamp(static_cast<int32_t>(std::floor((value - origin) / index.cell)), 0, n - 1);
+                    return std::clamp(static_cast<int32_t>(fastmath::FastFloor((value - origin) / index.cell)), 0, n - 1);
                 };
                 const int32_t x0 = clampCell(localCentre.x - localRadius, index.min.x, index.nx), x1 = clampCell(localCentre.x + localRadius, index.min.x, index.nx);
                 const int32_t y0 = clampCell(localCentre.y - localRadius, index.min.y, index.ny), y1 = clampCell(localCentre.y + localRadius, index.min.y, index.ny);
@@ -1751,7 +1752,7 @@ namespace {
                 light.shadow = static_cast<float>(slot + 1);
                 // The map's radius, which its depths were drawn for (Lights.glsl reads them with the light's
                 // radius): a light whose radius pulses within kShadowRadiusSlack keeps its map's.
-                light.invRadius = 1.0f / std::fmax(s_shadowSlots[slot].radius, 0.5f);
+                light.invRadius = 1.0f / fastmath::FastMax(s_shadowSlots[slot].radius, 0.5f);
                 s_stats.shadowed++;
             }
         }
@@ -2065,7 +2066,7 @@ namespace {
         if (!s_emitterStamp || now - s_emitterStamp > 1) {
             s_emitters.clear();
             const C3Vector camera(scene->m_viewInv.d0, scene->m_viewInv.d1, scene->m_viewInv.d2);
-            const float range = s_haveSettings ? std::fmax(s_settings.range, 8.0f) : 256.0f;
+            const float range = s_haveSettings ? fastmath::FastMax(s_settings.range, 8.0f) : 256.0f;
             SweepLandings();
 
             for (CM2Model* model = scene->m_modelList; model; model = model->m_sceneNext) {
@@ -2199,8 +2200,8 @@ namespace SXC::Lights {
 
                 if (g.pulse_speed > 0.0f && g.pulse_amount > 0.0f) {
                     const double t = static_cast<double>(OsGetAsyncTimeMs()) * 0.001 * g.pulse_speed;
-                    const float phase = static_cast<float>(t - std::floor(t));
-                    strength *= 1.0f - std::fmin(g.pulse_amount, 1.0f) * (0.5f - 0.5f * std::cos(phase * 6.2831853f));
+                    const float phase = static_cast<float>(t - fastmath::FastFloor(t));
+                    strength *= 1.0f - fastmath::FastMin(g.pulse_amount, 1.0f) * (0.5f - 0.5f * std::cos(phase * 6.2831853f));
                 }
 
                 s_drawGlow[0] = g.color[0] * strength;
@@ -2298,9 +2299,9 @@ namespace SXC::Lights {
 
         SXC::Profiler::Enter(SXC::Profiler::kLightsScan);
         const sxc_lights_settings& set = s_settings;
-        const float range = std::fmax(set.range, 8.0f);
-        const float radius = std::fmax(set.radius, 1.0f);
-        const float cell = std::fmax(set.cell_size, 4.0f);
+        const float range = fastmath::FastMax(set.range, 8.0f);
+        const float radius = fastmath::FastMax(set.radius, 1.0f);
+        const float cell = fastmath::FastMax(set.cell_size, 4.0f);
         const uint32_t perCell = static_cast<uint32_t>(std::min(std::max(set.max_per_cell, 1), static_cast<int32_t>(kMaxPerCell)));
         // The camera: the scene's view origin in the world (row vectors: world = view x the view's inverse).
         const C3Vector camera(scene->m_viewInv.d0, scene->m_viewInv.d1, scene->m_viewInv.d2);
@@ -2341,21 +2342,21 @@ namespace SXC::Lights {
 
         for (const std::pair<float, uint32_t>& o : order) {
             const Found& f = s_found[o.second];
-            const float fade = f.distance <= fadeStart ? 1.0f : std::fmax(0.0f, 1.0f - (f.distance - fadeStart) / (range - fadeStart));
+            const float fade = f.distance <= fadeStart ? 1.0f : fastmath::FastMax(0.0f, 1.0f - (f.distance - fadeStart) / (range - fadeStart));
 
             if (fade <= 0.0f) {
                 continue;
             }
 
             const int mode = f.flickerMode == SXC_LIGHTS_FLICKER_DEFAULT ? SXC_LIGHTS_FLICKER_SMOOTH : f.flickerMode;
-            const float amount = std::fmin(f.flickerAmount >= 0.0f ? f.flickerAmount : std::fmax(set.flicker, 0.0f), 1.0f);
+            const float amount = fastmath::FastMin(f.flickerAmount >= 0.0f ? f.flickerAmount : fastmath::FastMax(set.flicker, 0.0f), 1.0f);
             const float speed = (f.flickerSpeed >= 0.0f ? f.flickerSpeed : 1.0f) * (set.flicker_speed > 0.0f ? set.flicker_speed : 1.0f);
             const float scale = set.brightness * fade * (1.0f - amount * Flicker(mode, f.pos, now * speed));
             GpuLight l = {};
             l.pos[0] = f.pos.x;
             l.pos[1] = f.pos.y;
             l.pos[2] = f.pos.z;
-            l.invRadius = 1.0f / std::fmax(f.radius > 0.0f ? f.radius : radius, 0.5f);
+            l.invRadius = 1.0f / fastmath::FastMax(f.radius > 0.0f ? f.radius : radius, 0.5f);
             l.color[0] = f.color.x * scale;
             l.color[1] = f.color.y * scale;
             l.color[2] = f.color.z * scale;

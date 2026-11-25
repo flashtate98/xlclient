@@ -5,6 +5,7 @@
 #include <new>
 #include <vector>
 #include <xmmintrin.h>
+#include "SXC/Math/FastMath.h"  // SXC: SelectLights' floors in-line
 #include "Engine/Source/Model2/M2Log.h"
 #include "Engine/Source/Model2/M2Scene.h"
 #include "Engine/Source/Base/ObjectAlloc.h"
@@ -937,10 +938,10 @@ void CM2Scene::SelectLights(CM2Lighting* lighting) {
     }
 
     const CAaSphere& sphere = lighting->m_sphere4;
-    uint32_t maxX = static_cast<int32_t>(floorf((sphere.c.x + sphere.r) * s_lightGridScale + 0.5f)) & 0x3F;
-    uint32_t minY = static_cast<int32_t>(floorf((sphere.c.y - sphere.r) * s_lightGridScale - 0.5f)) & 0x3F;
-    uint32_t maxY = static_cast<int32_t>(floorf((sphere.r + sphere.c.y) * s_lightGridScale + 0.5f)) & 0x3F;
-    uint32_t minX = static_cast<int32_t>(floorf((sphere.c.x - sphere.r) * s_lightGridScale - 0.5f)) & 0x3F;
+    uint32_t maxX = static_cast<int32_t>(fastmath::FastFloor((sphere.c.x + sphere.r) * s_lightGridScale + 0.5f)) & 0x3F;
+    uint32_t minY = static_cast<int32_t>(fastmath::FastFloor((sphere.c.y - sphere.r) * s_lightGridScale - 0.5f)) & 0x3F;
+    uint32_t maxY = static_cast<int32_t>(fastmath::FastFloor((sphere.r + sphere.c.y) * s_lightGridScale + 0.5f)) & 0x3F;
+    uint32_t minX = static_cast<int32_t>(fastmath::FastFloor((sphere.c.x - sphere.r) * s_lightGridScale - 0.5f)) & 0x3F;
 
     for (uint32_t x = minX; ; x = (x + 1) & 0x3F) {
         for (uint32_t y = minY; ; y = (y + 1) & 0x3F) {
