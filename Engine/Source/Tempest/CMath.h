@@ -4,6 +4,9 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#if defined(_M_X64) || defined(__x86_64__) || defined(__SSE__)
+#include <xmmintrin.h>  // SXC: fint_ as one instruction
+#endif
 
 static const float PI = 3.1415927f;
 static const float TWO_PI = 6.2831855f;
@@ -72,8 +75,16 @@ inline float CMath::cos_(float x) {
 }
 
 // INLINED
+// SXC (FlashWOW): cvtss2si, the instruction the original's fistp-era fint_ maps to: it rounds by the current
+// mode (nearest-even by default), as lrintf does, but in-line. MSVC's lrintf is a call into ucrtbase with its
+// own checks: 3.4% of the client's CPU in a wide Goldshire view from the occlusion buffer alone (four per
+// terrain chunk edge), and fint_ has some 300 callers.
 inline int32_t CMath::fint_(float f) {
+#if defined(_M_X64) || defined(__x86_64__) || defined(__SSE__)
+    return _mm_cvtss_si32(_mm_set_ss(f));
+#else
     return static_cast<int32_t>(lrintf(f));
+#endif
 }
 
 // INLINED
