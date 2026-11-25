@@ -11,6 +11,10 @@
 #include "Engine/Source/Tempest/CFrustum.h"
 #include "Engine/Source/Tempest/CImVector.h"
 #include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler (the sun shadows' parts)
+
+// SXC (FlashWOW): which pass the render callback draws (0 units' map, 1 indoor pass, 2 bands), for the
+// profiler's split of the shadow draws (ShadowQuery.cpp).
+namespace SXC { int g_sunPass = 0; }
 #include "SXC/Settings/Settings.h"  // SXC: [Shadows] the bands kept between frames
 #include "Engine/Source/Os/TimeManager.h"
 
@@ -709,6 +713,7 @@ void CShadowCache::RenderBands(CShadowCacheQueryData& data) {
             target = TextureGetGxTex(band.m_textures[data.m_textureIndex[i]], 1, nullptr);
         }
 
+        SXC::g_sunPass = 2;
         CShadowCache::s_renderCallback(data, i, target, colorTarget, band.m_dir);
     }
 }
@@ -1098,6 +1103,7 @@ int32_t CShadowCache::Update(const C3Vector& pos, int32_t useCullFrustum) {
         colorTarget = TextureGetGxTex(CShadowCache::s_intDynShadow, 1, nullptr);
     }
 
+    SXC::g_sunPass = 0;
     CShadowCache::s_renderCallback(data, 0, target, colorTarget, CShadowCache::s_extDynShadow.m_dir);
     }
 
@@ -1120,6 +1126,7 @@ int32_t CShadowCache::Update(const C3Vector& pos, int32_t useCullFrustum) {
             colorTarget = TextureGetGxTex(CShadowCache::s_extDynShadow.m_textures[1], 1, nullptr);
         }
 
+        SXC::g_sunPass = 1;
         CShadowCache::s_renderCallback(data, 0, target, colorTarget, CShadowCache::s_extDynShadow.m_dir);
     }
 

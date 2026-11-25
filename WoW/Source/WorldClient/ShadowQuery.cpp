@@ -35,6 +35,63 @@
 #include "WoW/Source/WorldClient/MapObjGroup.h"
 #include "WoW/Source/WorldClient/CMapBaseObjLink.h"
 #include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler
+#include <unordered_set>
+#include <vector>
+
+// SXC (FlashWOW): the shadow draws split for the frame profiler, by pass (the units' map, the second pass,
+// the bands) and by caster (WMO groups, units' models, other models): which of them are drawn again every
+// frame. Only while the profiler measures; otherwise the draws go as before.
+namespace SXC { extern int g_sunPass; }
+
+namespace {
+    // Models gathered for a unit (its body and what hangs on it), by address; emptied when it grows large.
+    std::unordered_set<const CM2Model*> s_unitModels;
+
+    int SunRow(int kind) {
+        static int s_rows[3][3];
+        static bool s_made = false;
+
+        if (!s_made) {
+            static const char* passes[3] = { "units' map", "indoor pass", "bands" };
+            static const char* kinds[3] = { "WMO groups", "units", "other models" };
+            static char names[3][3][96];
+
+            for (int p = 0; p < 3; p++) {
+                for (int k = 0; k < 3; k++) {
+                    SStrPrintf(names[p][k], sizeof(names[p][k]), "sun shadows (client): %s: %s", passes[p], kinds[k]);
+                    s_rows[p][k] = SXC::Profiler::Register(names[p][k]);
+                }
+            }
+
+            s_made = true;
+        }
+
+        const int pass = SXC::g_sunPass >= 0 && SXC::g_sunPass < 3 ? SXC::g_sunPass : 2;
+        return s_rows[pass][kind];
+    }
+
+    // The list's draws (a run of combined batches is one) split by the first model of each run.
+    void SplitByUnit(const CModelBatchList& list, std::vector<CModelBatch>& units, std::vector<CModelBatch>& others) {
+        units.clear();
+        others.clear();
+
+        for (uint32_t i = 0; i < list.m_count;) {
+            const uint32_t n = list.m_batches[i].m_count ? list.m_batches[i].m_count : 1;
+            const uint32_t end = i + n < list.m_count ? i + n : list.m_count;
+            std::vector<CModelBatch>& into = s_unitModels.count(list.m_batches[i].m_model) ? units : others;
+            into.insert(into.end(), list.m_batches + i, list.m_batches + end);
+            i = end;
+        }
+    }
+
+    CModelBatchList ListOf(std::vector<CModelBatch>& v) {
+        CModelBatchList l;
+        l.m_batches = v.data();
+        l.m_count = static_cast<uint32_t>(v.size());
+        l.m_maxCount = l.m_count;
+        return l;
+    }
+}
 
 // STATIC: 0x00D25300
 uint8_t CShadowQuery::s_stamp;
@@ -411,6 +468,7 @@ int32_t CShadowQuery::RenderCallback(CShadowCacheQueryData& data, int32_t band, 
     g_theGxDevicePtr->ShaderConstantsSet(GxSh_Vertex, 14, &texMatrix.a0, 3);
 
     if (buffers.m_groupCount) {
+        SXC::Profiler::Scope p(SunRow(0));
         CMapObj::RenderMapObjGroupsShadowMap(buffers.m_groups, buffers.m_groupCount, buffers.m_groupData, translation, data.m_frustums[band]);
     }
 
@@ -428,7 +486,22 @@ int32_t CShadowQuery::RenderCallback(CShadowCacheQueryData& data, int32_t band, 
             s_maxTexturedBatches = buffers.m_textured.m_count;
         }
 
-        CM2Model::RenderModelBatchesShadowMap(buffers.m_untextured, buffers.m_textured);
+        if (SXC::Profiler::On()) {
+            // SXC: the units' draws and the rest's under their own rows (the same draws, units first).
+            static std::vector<CModelBatch> unitsU, othersU, unitsT, othersT;
+            SplitByUnit(buffers.m_untextured, unitsU, othersU);
+            SplitByUnit(buffers.m_textured, unitsT, othersT);
+            {
+                SXC::Profiler::Scope p(SunRow(1));
+                CM2Model::RenderModelBatchesShadowMap(ListOf(unitsU), ListOf(unitsT));
+            }
+            {
+                SXC::Profiler::Scope p(SunRow(2));
+                CM2Model::RenderModelBatchesShadowMap(ListOf(othersU), ListOf(othersT));
+            }
+        } else {
+            CM2Model::RenderModelBatchesShadowMap(buffers.m_untextured, buffers.m_textured);
+        }
     }
 
     g_theGxDevicePtr->RsPop();
@@ -528,7 +601,24 @@ void CShadowQuery::GatherShadowCasters(CShadowCacheQueryData& data, int32_t firs
 
             if (extents.t.x >= bbox.b.x && extents.t.y >= bbox.b.y && extents.t.z >= bbox.b.z && extents.b.x <= bbox.t.x && extents.b.y <= bbox.t.y && extents.b.z <= bbox.t.z && minRadius[band] <= entity->m_sphere.r && ((flags & 0x20000) || maxRadius[band] >= entity->m_sphere.r)) {
                 if (data.m_bandFrustums[band].Cull(bbox) && (!data.m_useCullFrustum[band] || data.m_cullFrustums[band].CullInv(bbox) != WorldCull_notOutside)) {
-                    model->GatherModelBatchesShadowMap(CShadowQuery::s_bandBuffers[band].m_untextured, CShadowQuery::s_bandBuffers[band].m_textured);
+                    ShadowQueryBuffers& into = CShadowQuery::s_bandBuffers[band];
+                    const uint32_t untexturedBefore = into.m_untextured.m_count, texturedBefore = into.m_textured.m_count;
+                    model->GatherModelBatchesShadowMap(into.m_untextured, into.m_textured);
+
+                    // SXC: the unit's models (its body, what hangs on it), for the profiler's split.
+                    if (isUnit && SXC::Profiler::On()) {
+                        if (s_unitModels.size() > 8192) {
+                            s_unitModels.clear();
+                        }
+
+                        for (uint32_t k = untexturedBefore; k < into.m_untextured.m_count; k++) {
+                            s_unitModels.insert(into.m_untextured.m_batches[k].m_model);
+                        }
+
+                        for (uint32_t k = texturedBefore; k < into.m_textured.m_count; k++) {
+                            s_unitModels.insert(into.m_textured.m_batches[k].m_model);
+                        }
+                    }
                 }
             }
         }
