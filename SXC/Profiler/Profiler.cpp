@@ -28,6 +28,7 @@ namespace {
         { "game update (objects, Lua OnUpdate)", 0 },
         { "mods' update", 0 },
         { "world update (units, missiles)", 0 },
+        { "unit movement (units moved, relinked to the map)", kCpuOnly },
         { "interface (frames, text)", 0 },
         { "world: rest", 0 },
         { "world: culling, portals, sorting", 0 },

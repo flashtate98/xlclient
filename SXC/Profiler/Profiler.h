@@ -20,6 +20,7 @@ namespace SXC::Profiler {
         kGameUpdate,    // the update event: objects, Lua OnUpdate, the mods' updates
         kMods,          // the mods' update (wxl events), inside the game update
         kWorldUpdate,   // CGWorldFrame::OnWorldUpdate (units, missiles, world state)
+        kUnitMovement,  // SXC: MovementIdleMoveUnits: units moved, transports, their relinking to the map (was "other")
         kInterface,     // the screen's paint around the world: frames, text, the glue
         kWorldRest,     // the world render, not in a more specific category
         kCulling,       // the world: portals, frustum, sort table, the scene's models sorted

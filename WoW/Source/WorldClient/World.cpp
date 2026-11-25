@@ -1026,9 +1026,9 @@ void CMap::ObjectUpdate(CMapEntity* entity, C44Matrix& mat, CAaBox& box, CAaSphe
             // every frame: about 1 ms with 24 players walking in Goldshire. A unit other than the player (the
             // caller sets the flag) whose bounds only moved relinks once it is kRelinkSlack from where it last
             // linked. One without links (new, or its WMO group purged) always links.
-            static SXC::Settings::Bool s_slackSetting("World", "UnitRelinkSlack", true, "World: walking units relink every step",
-                                                      "Other units relink to buildings (indoor or out, the room they are drawn with) once they have "
-                                                      "walked a quarter of a yard, not at every frame's move.");
+            static SXC::Settings::Bool s_slackSetting("World", "UnitRelinkSlack", true, "World: other units relink a step at a time",
+                                                      "On: other units relink to buildings (indoor or out, the room they are drawn with) once they have "
+                                                      "walked a quarter of a yard. Off: at every frame's move, the stock way.");
             static std::unordered_map<const CMapEntity*, C3Vector> s_linkedAt;
             constexpr float kRelinkSlack = 0.25f;
             constexpr float kShape = 0.0001f;
