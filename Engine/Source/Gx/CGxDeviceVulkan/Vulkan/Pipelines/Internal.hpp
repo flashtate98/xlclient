@@ -261,6 +261,8 @@ namespace gxvk::vk::pipelines::detail
         memory::Buffer        constant;                       ///< the constant stream (kConstantBytes)
         Entry*                entries    = nullptr;           ///< kMaxPipelines, heap
         uint16_t              index[kIndexSlots] = {};        ///< SXC: entry + 1 per slot, 0 = empty (Lookup)
+        const Entry*          lastEntry = nullptr;            ///< SXC: the last draw's entry and its key: a run of draws on one
+        Key                   lastKey   = {};                 ///<      pipeline skips the hash (Lookup); cleared with the entries
         uint32_t              entryCount = 0;
         uint32_t              passGen    = 0;                 ///< the generation the entries were built for
         Bound                 bound;

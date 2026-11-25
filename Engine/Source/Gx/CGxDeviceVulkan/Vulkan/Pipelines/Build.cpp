@@ -640,9 +640,24 @@ namespace gxvk::vk::pipelines::detail
         return h ^ (h >> 29);
     }
 
+    const Entry* LookupHashed(const Key& k);
+
     const Entry* Lookup(const Key& k)
     {
         static_assert(kIndexSlots >= 2 * kMaxPipelines && (kIndexSlots & (kIndexSlots - 1)) == 0, "the index must stay sparse");
+        // SXC (FlashWOW): the same key as the draw before (terrain chunks, a model's batches): no hash, no probe.
+        if (s.lastEntry && std::memcmp(&s.lastKey, &k, sizeof k) == 0) return s.lastEntry;
+        const Entry* found = LookupHashed(k);
+        if (found)
+        {
+            std::memcpy(&s.lastKey, &k, sizeof k);
+            s.lastEntry = found;
+        }
+        return found;
+    }
+
+    const Entry* LookupHashed(const Key& k)
+    {
         const uint64_t hash = KeyHash(k);
         uint32_t slot = static_cast<uint32_t>(hash) & (kIndexSlots - 1);
         for (; s.index[slot] != 0; slot = (slot + 1) & (kIndexSlots - 1))
@@ -680,6 +695,7 @@ namespace gxvk::vk::pipelines::detail
         s.entryCount      = 0;
         s.stats.pipelines = 0;
         std::memset(s.index, 0, sizeof s.index);   // SXC: the index with them
+        s.lastEntry       = nullptr;
         s.bound           = Bound();
     }
 }
