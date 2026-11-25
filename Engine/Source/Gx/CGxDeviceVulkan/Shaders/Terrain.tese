@@ -102,5 +102,33 @@ void main()
     }
 
     float stock = 1.0 - clamp(abs(h) / kOwnLightHeight, 0.0, 1.0);   // a print in mud sinks below the terrain
-    TerrainVertexLit(vec4(position.x, position.y, position.z + h, 1.0), vec4(surface, 0.0), colour, position.z, n.z, stock, c0, c1, true, fog);
+
+    // SXC (FlashWOW): seams between raised chunks (Morfium's idea, 2026-11-25). Two chunks raise their shared
+    // border each by its own alpha map, so the heights there can differ and leave a hairline slot. A point on
+    // the chunk's border is moved kSeamOverlap out past it and a hair down: neighbours overlap, and seen from
+    // above the higher one covers the slot (the hair down keeps two at one height from fighting). This is
+    // what the underlay (a second, flat draw of the chunk, shaded in full) was for.
+    vec3 place = vec3(position.xy, position.z + h);
+
+    if (cover.enable.x > 0.5)
+    {
+        const float kChunk = 100.0 / 3.0;
+        const float kEdge = 0.01;
+        vec2 local = position.xy - regs.v[23].xy;   // the chunk's corner (TerrainCoord's v23)
+        vec2 centre = (tessPosition[0].xy + tessPosition[1].xy + tessPosition[2].xy) / 3.0 - regs.v[23].xy;
+        vec2 inward = sign(centre);                  // the chunk lies on this side of its corner, per axis
+        vec2 a = abs(local);
+        vec2 out2 = vec2(0.0);
+        out2.x = a.x < kEdge ? -inward.x : (abs(a.x - kChunk) < kEdge ? inward.x : 0.0);
+        out2.y = a.y < kEdge ? -inward.y : (abs(a.y - kChunk) < kEdge ? inward.y : 0.0);
+
+        if (out2.x != 0.0 || out2.y != 0.0)
+        {
+            const float kSeamOverlap = 0.05;   // yd
+            place.xy += out2 * kSeamOverlap;
+            place.z -= 0.005;
+        }
+    }
+
+    TerrainVertexLit(vec4(place, 1.0), vec4(surface, 0.0), colour, position.z, n.z, stock, c0, c1, true, fog);
 }
