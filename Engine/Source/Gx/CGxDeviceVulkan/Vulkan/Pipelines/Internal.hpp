@@ -76,7 +76,10 @@ namespace gxvk::vk::pipelines::detail
     constexpr uint32_t kMaxLayouts = 32;
 
     /// Set-0 descriptor sets one frame may allocate, and the combined image samplers behind them.
-    constexpr uint32_t kSetsPerSlot        = 4096;
+    // SXC (FlashWOW): the sets are kept across the slot's frames (Descriptors.cpp); the pool holds four times a
+    // frame's old ceiling, and is reset at a frame's start once fewer than kSetsPerFrame are left.
+    constexpr uint32_t kSetsPerFrame       = 4096;
+    constexpr uint32_t kSetsPerSlot        = 4 * kSetsPerFrame;
     constexpr uint32_t kDescriptorsPerSlot = 6 * kSetsPerSlot;  // SXC: our terrain's sets hold up to 13 (heights)
 
     /// The per-slot cache over those sets: twice the sets, a power of two, for short probes.
@@ -206,7 +209,7 @@ namespace gxvk::vk::pipelines::detail
     /// One set-0 descriptor set written this frame, for one (mask, images, samplers) tuple.
     struct CacheEntry
     {
-        uint64_t        serial = 0;   ///< the frame it was written in; another serial means empty
+        uint64_t        serial = 0;   ///< SXC: the pool generation it was written in; another means empty
         uint32_t        mask   = 0;
         uint32_t        imageId[kTextureStages]    = {};
         uint32_t        samplerKey[kTextureStages] = {};
@@ -219,7 +222,8 @@ namespace gxvk::vk::pipelines::detail
     {
         VkDescriptorPool pool      = VK_NULL_HANDLE;
         uint64_t         serial    = 0;        ///< the frame the pool was last reset for
-        uint32_t         allocated = 0;        ///< sets taken from the pool this frame
+        uint32_t         allocated = 0;        ///< sets taken from the pool since its last reset
+        uint64_t         generation = 0;       ///< SXC: bumped at each reset of the pool (the cache's entries carry it)
         CacheEntry*      cache     = nullptr;  ///< kCacheSlots entries, heap
 
         memory::Buffer  regs[kMaxRegsChunks];

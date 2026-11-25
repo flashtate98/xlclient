@@ -2,6 +2,8 @@
 // written from it, and the 1x1 white images a slot without a texture binds.
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Pipelines/Internal.hpp"
 
+#include "SXC/Settings/Settings.h"  // SXC: [Vulkan] KeepDescriptorSets
+
 #include <cstring>
 #include <new>
 
@@ -109,18 +111,31 @@ namespace gxvk::vk::pipelines::detail
 
         if (ss.serial != serial)
         {
-            // A new frame on this slot: every set of its previous frame is free again (that frame
-            // has completed), and the cache entries carry that frame's serial, so they read as empty.
-            d.ResetDescriptorPool(s.device, ss.pool, 0);
-            ss.serial    = serial;
-            ss.allocated = 0;
+            // A new frame on this slot: the slot's previous frame has completed (it waited its fence).
+            // SXC (FlashWOW): its sets are kept: a set is written once and never changed, an image id is
+            // never given to another image, so a set made in an earlier frame still binds what its key
+            // says (one whose image is gone just never matches again). The pool is reset (every set free,
+            // the cache emptied by the generation) once fewer than a frame's old ceiling is left; with the
+            // setting off, at every frame as before. Writing the sets again was 1.7% of the client's CPU
+            // (VS, 24 players in Goldshire).
+            static SXC::Settings::Bool s_keep("Vulkan", "KeepDescriptorSets", true, "Vulkan: keep texture sets across frames",
+                                              "Keep the draws' texture descriptor sets from frame to frame instead of writing them again each frame.");
+            ss.serial = serial;
+
+            if (!s_keep.Get() || ss.allocated + kSetsPerFrame > kSetsPerSlot)
+            {
+                d.ResetDescriptorPool(s.device, ss.pool, 0);
+                ss.allocated = 0;
+                ++ss.generation;
+            }
         }
 
+        const uint64_t generation = ss.generation + 1;   // never 0: a fresh entry's serial reads as empty
         uint32_t p = HashOf(layout.mask, stages);
         for (;; p = (p + 1) & (kCacheSlots - 1))
         {
             CacheEntry& e = ss.cache[p];
-            if (e.serial != serial) break;   // empty this frame
+            if (e.serial != generation) break;   // empty in this generation of the pool
             if (Same(e, layout.mask, stages))
             {
                 ++s.stats.descriptorHits;
@@ -133,7 +148,7 @@ namespace gxvk::vk::pipelines::detail
             if (!s.warnedSets)
             {
                 s.warnedSets = true;
-                Write(Warn, "vulkan: pipelines: a frame drew more than %u distinct texture/sampler tuples; further ones are skipped (logged once)", kSetsPerSlot);
+                Write(Warn, "vulkan: pipelines: a frame drew more than %u distinct texture/sampler tuples; further ones are skipped (logged once)", kSetsPerFrame);
             }
             ++s.stats.descriptorFull;
             return VK_NULL_HANDLE;
@@ -182,7 +197,7 @@ namespace gxvk::vk::pipelines::detail
         if (count) d.UpdateDescriptorSets(s.device, count, writes, 0, nullptr);
 
         CacheEntry& e = ss.cache[p];
-        e.serial = serial;
+        e.serial = generation;
         e.mask   = layout.mask;
         for (uint32_t i = 0; i < kTextureStages; ++i)
         {
