@@ -24,6 +24,13 @@ namespace SXC::Profiler {
         kInterface,     // the screen's paint around the world: frames, text, the glue
         kWorldRest,     // the world render, not in a more specific category
         kCulling,       // the world: portals, frustum, sort table, the scene's models sorted
+        kCullChunks,    // SXC: CullSortTable's steps over its 64 distance bands (in "world: culling" before)
+        kCullWmo,
+        kCullLiquid,
+        kCullUnits,
+        kCullDoodads,
+        kCullOcclusion, // the horizon occlusion buffer, chunk by chunk
+        kCullHorizon,   // CullHorizon, CreateOcclusionVolumes
         kAnimation,     // the M2 scene: time advanced, bones animated
         kTerrain,
         kWmo,           // the world map objects and their portals

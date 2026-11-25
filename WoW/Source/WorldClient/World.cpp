@@ -4252,7 +4252,13 @@ CSortTable::CSortTable() {
 // VERIFY: 4e2f336e manual
 // OFFSET: 0x0079A790
 void CWorldScene::CullSortTable(CRect* rect) {
-    CWorldScene::CreateOcclusionVolumes(&CWorldScene::s_activeWorldView, CWorldScene::s_frustumCorners, 0);
+    namespace prof = SXC::Profiler;  // SXC: the frame profiler: each step its own row (all were "world: culling")
+
+    {
+        prof::Scope p(prof::kCullHorizon);
+        CWorldScene::CreateOcclusionVolumes(&CWorldScene::s_activeWorldView, CWorldScene::s_frustumCorners, 0);
+    }
+
     CWorldScene::frustumIndex++;
     CWorldScene::frustumStack[CWorldScene::frustumIndex] = CWorldScene::frustumStack[CWorldScene::frustumIndex - 1];
     CWorldScene::FrustumSet(rect);
@@ -4260,16 +4266,20 @@ void CWorldScene::CullSortTable(CRect* rect) {
     CSortEntry* entry = CWorldScene::sortTable.m_table;
 
     for (uint32_t i = 0; i < 64; i++) {
-        CWorldScene::CullChunks(entry, i);
-        CWorldScene::CullMapObjDefGroups(entry, rect, i);
-        CWorldScene::CullLiquid(entry);
-        CWorldScene::CullEntitys(entry);
-        CWorldScene::CullDoodads(entry, CWorldView::GetFadeLevelForDistance(i * 33.333332f));
-        CWorldScene::UpdateOcclusion(entry);
+        { prof::Scope p(prof::kCullChunks);    CWorldScene::CullChunks(entry, i); }
+        { prof::Scope p(prof::kCullWmo);       CWorldScene::CullMapObjDefGroups(entry, rect, i); }
+        { prof::Scope p(prof::kCullLiquid);    CWorldScene::CullLiquid(entry); }
+        { prof::Scope p(prof::kCullUnits);     CWorldScene::CullEntitys(entry); }
+        { prof::Scope p(prof::kCullDoodads);   CWorldScene::CullDoodads(entry, CWorldView::GetFadeLevelForDistance(i * 33.333332f)); }
+        { prof::Scope p(prof::kCullOcclusion); CWorldScene::UpdateOcclusion(entry); }
         entry++;
     }
 
-    CWorldScene::CullHorizon(rect);
+    {
+        prof::Scope p(prof::kCullHorizon);
+        CWorldScene::CullHorizon(rect);
+    }
+
     CWorldScene::frustumIndex--;
 }
 
