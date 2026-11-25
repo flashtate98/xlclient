@@ -572,4 +572,11 @@ extern uint32_t s_liquidTypeId;
 
 extern int32_t s_disableAreaAmbient;
 
+// SXC (FlashWOW): set by CGUnit_C::UpdateWorldObject around CMap::ObjectUpdate for a unit other than the
+// player: a unit that only walked (its bounds the same) relinks to the map once it is a step away from where
+// it last linked, not at every frame's move. [World] UnitRelinkSlack.
+namespace SXC {
+    extern bool g_unitRelinkSlack;
+}
+
 #endif

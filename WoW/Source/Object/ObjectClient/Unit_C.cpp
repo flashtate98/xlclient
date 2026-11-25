@@ -1026,7 +1026,10 @@ void CGUnit_C::UpdateWorldObject(int32_t a2) {
             }
         }
 
+        // SXC (FlashWOW): another unit may relink a step late (World.cpp, ObjectUpdate); never the player.
+        SXC::g_unitRelinkSlack = static_cast<CGUnit_C*>(ClntObjMgrGetActivePlayerObj()) != this;
         CMap::ObjectUpdate(this->m_worldObject, matrix, box, sphere, vec, a2, this->m_torsoKeyBone);
+        SXC::g_unitRelinkSlack = false;
     }
 
     if (this->m_vehicle && this->m_vehicle->m_vehicleRec) {

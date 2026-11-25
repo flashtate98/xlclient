@@ -28,6 +28,8 @@
 #include "Engine/Source/Os/TimeManager.h"
 #include "Engine/Source/Services/AsyncFile.h"
 #include "Engine/Source/Services/SysMessage.h"
+#include "SXC/Settings/Settings.h"  // SXC: [World] UnitRelinkSlack
+#include <unordered_map>
 #include "Engine/Source/Services/Texture.h"
 #include "Engine/Source/ShaderEffect/ShaderEffect.h"
 #include "Engine/Source/ShaderEffect/ShaderEffectManager.h"
@@ -1004,6 +1006,10 @@ void CMap::ObjectUpdate(CMapEntity* entity, C44Matrix& mat, CAaBox& box, CAaSphe
     C3Vector topDelta = entity->m_bbox.t - bbox.t;
     C3Vector centerDelta = entity->m_sphere.c - center;
     float radiusDelta = entity->m_sphere.r - radius;
+    // SXC: the bounds' shape (its extents, the sphere's and the mid point's offsets): what a walk leaves alone.
+    const C3Vector extentDelta = (entity->m_bbox.t - entity->m_bbox.b) - (bbox.t - bbox.b);
+    const C3Vector offsetDelta = (entity->m_sphere.c - entity->m_position) - (center - position);
+    const C3Vector vec2OffsetDelta = (entity->m_vec2 - entity->m_position) - (vec2 - position);
 
     entity->m_position = position;
     entity->m_vec2 = vec2;
@@ -1015,9 +1021,42 @@ void CMap::ObjectUpdate(CMapEntity* entity, C44Matrix& mat, CAaBox& box, CAaSphe
 
     if (positionDelta.SquaredMag() > 0.000001f || vec2Delta.SquaredMag() > 0.0001f || bottomDelta.SquaredMag() > 0.0001f || topDelta.SquaredMag() > 0.0001f || centerDelta.SquaredMag() > 0.0001f || radiusDelta > 0.0001f) {
         if (!a6) {
-            CMap::UpdateEntity(entity);
+            // SXC (FlashWOW): relinking (the links freed, a ray 1000 yd down through every WMO whose box it
+            // meets, for indoor or out, the ground, the group it is drawn with) ran for every walking unit at
+            // every frame: about 1 ms with 24 players walking in Goldshire. A unit other than the player (the
+            // caller sets the flag) whose bounds only moved relinks once it is kRelinkSlack from where it last
+            // linked. One without links (new, or its WMO group purged) always links.
+            static SXC::Settings::Bool s_slackSetting("World", "UnitRelinkSlack", true, "World: walking units relink every step",
+                                                      "Other units relink to buildings (indoor or out, the room they are drawn with) once they have "
+                                                      "walked a quarter of a yard, not at every frame's move.");
+            static std::unordered_map<const CMapEntity*, C3Vector> s_linkedAt;
+            constexpr float kRelinkSlack = 0.25f;
+            constexpr float kShape = 0.0001f;
+
+            bool skip = false;
+
+            if (SXC::g_unitRelinkSlack && s_slackSetting.Get() && entity->m_parentLinkList.Head() &&
+                extentDelta.SquaredMag() <= kShape && offsetDelta.SquaredMag() <= kShape && vec2OffsetDelta.SquaredMag() <= kShape &&
+                std::fabs(radiusDelta) <= kShape) {
+                const auto it = s_linkedAt.find(entity);
+                skip = it != s_linkedAt.end() && (it->second - position).SquaredMag() < kRelinkSlack * kRelinkSlack;
+            }
+
+            if (!skip) {
+                CMap::UpdateEntity(entity);
+
+                if (s_linkedAt.size() > 8192) {
+                    s_linkedAt.clear();   // despawned units' entries: dropped wholesale (each relinks once)
+                }
+
+                s_linkedAt[entity] = position;
+            }
         }
     }
+}
+
+namespace SXC {
+    bool g_unitRelinkSlack = false;
 }
 
 // VERIFY: d0b5cfbd manual
