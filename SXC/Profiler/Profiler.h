@@ -70,6 +70,8 @@ namespace SXC::Profiler {
         kShadowObjects, // our lights: the visible game objects collected for the frame's gatherings
         kLightsGrid,    // our lights: the cells built
         kCoverFrame,    // our covers: the frame's data resolved for the terrain shader
+        kCoverUpload,   // SXC: our covers: the frame's set (cover.FrameSet: the maps and trails sent to the GPU)
+        kLightsFrame,   // SXC: our lights: the frame's set (lights.FrameSet: the shadow maps recorded, the grid sent)
         kGrassPrepare,  // our grass: chunks taken, runs built
         kBackendDraw,   // inside any category: the Vulkan backend's work per draw call (state sync, pipeline,
                         // descriptors, constants, recording); the draw still counts to the category around it

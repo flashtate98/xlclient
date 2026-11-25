@@ -1,5 +1,6 @@
 // SXC: our point lights' GPU side (Vulkan/Lights.hpp).
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Lights.hpp"
+#include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler
 
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Context.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/DeviceCaps.hpp"
@@ -267,6 +268,7 @@ namespace gxvk::vk::lights
         if (!s.ready || slotIndex >= kSlots || surface >= kSurfaceCount) return VK_NULL_HANDLE;
         Slot& slot = s.slots[slotIndex];
         if (slot.serial == serial) return slot.sets[surface];
+        SXC::Profiler::Scope profile(SXC::Profiler::kLightsFrame);   // SXC: once a frame, inside the first draw that asks
 
         Frame f;
         const bool on = s.provider && s.provider(f) && f.on && f.cells > 0 && f.cells <= kMaxCells && f.perCell > 0 && f.perCell <= kMaxPerCell

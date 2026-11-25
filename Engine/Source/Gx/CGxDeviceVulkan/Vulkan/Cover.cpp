@@ -1,5 +1,6 @@
 // SXC: surface covers in our terrain shader (Vulkan/Cover.hpp).
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Cover.hpp"
+#include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler
 
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Context.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/DeviceCaps.hpp"
@@ -553,6 +554,7 @@ namespace gxvk::vk::cover
         if (!s.ready || slotIndex >= kSlots) return VK_NULL_HANDLE;
         Slot& slot = s.slots[slotIndex];
         if (slot.serial == serial) return slot.set;
+        SXC::Profiler::Scope profile(SXC::Profiler::kCoverUpload);   // SXC: once a frame, inside the first draw that asks
 
         VkCommandBuffer pre = frame::PrePass();
         if (!pre) return VK_NULL_HANDLE;

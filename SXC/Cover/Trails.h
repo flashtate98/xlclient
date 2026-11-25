@@ -30,6 +30,10 @@ namespace SXC::Cover::Trails {
         std::vector<float> cells;
         std::vector<Rect> dirty; // changed since the device last took them
         bool full = true;        // everything changed (a new window): upload all of it
+        // SXC (FlashWOW): the tiles (kTile texels a side) changed since the last frame's rectangles; joined
+        // into `dirty` once a frame (Update). A rectangle a stamp made 24 walkers past the old limit of 96 a
+        // frame, and the whole layer (9.4 MB fine, 4 MB coarse) went to the device every frame.
+        std::vector<uint8_t> tiles;
         uint32_t version = 1;
     };
 

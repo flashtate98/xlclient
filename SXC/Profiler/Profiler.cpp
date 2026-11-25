@@ -76,6 +76,8 @@ namespace {
         { "lights (ours): shadows: game objects collected", kCpuOnly },
         { "lights (ours): cells", kCpuOnly },
         { "covers (ours): frame data", kCpuOnly },
+        { "covers (ours): maps and trails sent", kCpuOnly },
+        { "lights (ours): frame set, shadow maps recorded", kCpuOnly },
         { "grass (ours): chunks, runs", kCpuOnly },
         { "draw calls: the Vulkan backend's share (in all of the above)", kCpuOnly },
         { "draw calls: shader constants (in the above)", kCpuOnly },

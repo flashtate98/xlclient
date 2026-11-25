@@ -2,6 +2,7 @@
 
 #include "SXC/Cover/Trails.h"
 
+#include <algorithm>
 #include <cmath>
 #include <initializer_list>
 #include <iterator>
@@ -28,7 +29,8 @@ namespace {
     constexpr uint32_t kCoarseSize = 512;   // x 0.5 yd = 256 yd across
     constexpr float kCoarseCell = 0.5f;
     constexpr int32_t kCoarseStep = 32;
-    constexpr uint32_t kMaxRects = 96;      // more changed rectangles in a frame: upload the whole layer
+    constexpr uint32_t kMaxRects = 192;     // more changed rectangles in a frame: upload the whole layer (the device takes 256)
+    constexpr int32_t kTile = 16;           // texels a side of a changed tile (both layers' sizes and steps are multiples)
 
     // Whether a new carving goes deeper than what a cell holds: its ceiling as it has risen since, at a
     // rate assumed here (the shader's own rate follows the cover's depth and relax time).
@@ -87,41 +89,113 @@ namespace {
         c[3] = 0.0f;
     }
 
-    // World cells [i0, i1] x [j0, j1] (inside the window) changed: their texels, split where they wrap.
+    int32_t TilesAcross(const Layer& L) { return (static_cast<int32_t>(L.size) + kTile - 1) / kTile; }
+
+    // World cells [i0, i1] x [j0, j1] (inside the window) changed: the tiles their texels lie in (the window
+    // wraps, so a range may run past the edge: taken a tile at a time in slot space).
     void Mark(Layer& L, int32_t i0, int32_t i1, int32_t j0, int32_t j1) {
-        if (L.full) {
+        if (L.full || L.size == 0) {
             return;
         }
 
+        const int32_t across = TilesAcross(L);
+
+        if (L.tiles.size() != static_cast<size_t>(across) * across) {
+            L.tiles.assign(static_cast<size_t>(across) * across, 0);
+        }
+
         const int32_t n = static_cast<int32_t>(L.size);
-        int32_t xs[2][2], ys[2][2];
+        const int32_t w = i1 - i0 + 1 < n ? i1 - i0 + 1 : n, h = j1 - j0 + 1 < n ? j1 - j0 + 1 : n;
+        const int32_t sx = Slot(i0, L.size), sy = Slot(j0, L.size);
+        // Tile ranges in slot space, split where the range wraps.
+        int32_t xr[2][2], yr[2][2];
         int xc = 0, yc = 0;
-        const int32_t sx = Slot(i0, L.size), sy = Slot(j0, L.size), w = i1 - i0 + 1, h = j1 - j0 + 1;
 
         if (sx + w <= n) {
-            xs[xc][0] = sx, xs[xc][1] = w, xc++;
+            xr[xc][0] = sx / kTile, xr[xc][1] = (sx + w - 1) / kTile, xc++;
         } else {
-            xs[xc][0] = sx, xs[xc][1] = n - sx, xc++;
-            xs[xc][0] = 0, xs[xc][1] = w - (n - sx), xc++;
+            xr[xc][0] = sx / kTile, xr[xc][1] = across - 1, xc++;
+            xr[xc][0] = 0, xr[xc][1] = (w - (n - sx) - 1) / kTile, xc++;
         }
 
         if (sy + h <= n) {
-            ys[yc][0] = sy, ys[yc][1] = h, yc++;
+            yr[yc][0] = sy / kTile, yr[yc][1] = (sy + h - 1) / kTile, yc++;
         } else {
-            ys[yc][0] = sy, ys[yc][1] = n - sy, yc++;
-            ys[yc][0] = 0, ys[yc][1] = h - (n - sy), yc++;
+            yr[yc][0] = sy / kTile, yr[yc][1] = across - 1, yc++;
+            yr[yc][0] = 0, yr[yc][1] = (h - (n - sy) - 1) / kTile, yc++;
         }
 
         for (int a = 0; a < xc; a++) {
             for (int b = 0; b < yc; b++) {
-                if (L.dirty.size() >= kMaxRects) {
-                    L.full = true;
-                    L.dirty.clear();
-                    return;
+                for (int32_t ty = yr[b][0]; ty <= yr[b][1]; ty++) {
+                    uint8_t* row = &L.tiles[static_cast<size_t>(ty) * across];
+
+                    for (int32_t tx = xr[a][0]; tx <= xr[a][1]; tx++) {
+                        row[tx] = 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // The changed tiles as rectangles: runs along each tile row, a run joined with the one below it when
+    // they span the same tiles. Too many: the whole layer.
+    void JoinTiles(Layer& L) {
+        if (L.tiles.empty()) {
+            return;
+        }
+
+        if (L.full) {
+            std::fill(L.tiles.begin(), L.tiles.end(), 0);
+            return;
+        }
+
+        const int32_t across = TilesAcross(L);
+        const int32_t n = static_cast<int32_t>(L.size);
+        // The rectangles still open from the row above: index into dirty, by their first tile.
+        std::vector<int32_t> open(static_cast<size_t>(across), -1), next(static_cast<size_t>(across), -1);
+
+        for (int32_t ty = 0; ty < across; ty++) {
+            uint8_t* row = &L.tiles[static_cast<size_t>(ty) * across];
+            std::fill(next.begin(), next.end(), -1);
+
+            for (int32_t tx = 0; tx < across;) {
+                if (!row[tx]) {
+                    tx++;
+                    continue;
                 }
 
-                L.dirty.push_back(Rect{ xs[a][0], ys[b][0], xs[a][1], ys[b][1] });
+                int32_t end = tx;
+
+                while (end + 1 < across && row[end + 1]) {
+                    end++;
+                }
+
+                const int32_t x = tx * kTile, y = ty * kTile;
+                const int32_t w = ((end + 1) * kTile < n ? (end + 1) * kTile : n) - x;
+                const int32_t h = (y + kTile < n ? y + kTile : n) - y;
+                const int32_t above = open[tx];
+
+                if (above >= 0 && L.dirty[above].w == w) {
+                    L.dirty[above].h += h;
+                    next[tx] = above;
+                } else {
+                    if (L.dirty.size() >= kMaxRects) {
+                        L.full = true;
+                        L.dirty.clear();
+                        std::fill(L.tiles.begin(), L.tiles.end(), 0);
+                        return;
+                    }
+
+                    next[tx] = static_cast<int32_t>(L.dirty.size());
+                    L.dirty.push_back(Rect{ x, y, w, h });
+                }
+
+                std::fill(row + tx, row + end + 1, 0);
+                tx = end + 1;
             }
+
+            open.swap(next);
         }
     }
 
@@ -467,6 +541,8 @@ namespace SXC::Cover::Trails {
 
         s_stats.feet = feet;
         s_stats.parts = parts;
+        JoinTiles(s_fine);
+        JoinTiles(s_coarse);
     }
 
     const Layer& Fine() { return s_fine; }
