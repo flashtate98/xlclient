@@ -86,12 +86,69 @@ bool OutOfView()
 // drifts are tenths of a yard, and trails show in them as before.
 const float kSplitFrom = 0.03;
 
-// The covers' height at a point of the triangle (position and normal interpolated like Terrain.tese does).
+// SXC (FlashWOW): a painted cover below the terrain (mud: only its top shows) counts toward the split only
+// where trails lie: it is there for prints to press into. Counted everywhere, rain's wet mud split all the
+// covered ground in reach (Goldshire in rain, 24 players: terrain 12.7 ms of GPU with Depth on, 3.5 off).
+// Set per triangle from the coarse trail layer, which every print is stamped into (SXC/Cover/Trails.cpp).
+bool g_trailNear = true;
+
+// Whether a trail lies in the box (xy, a cell's margin): the coarse layer's cells there, untouched ones
+// at 1e6 with no rim (Vulkan/Cover's kUntouched). A box past 24 cells is taken to hold one.
+bool TrailIn(vec2 lo, vec2 hi)
+{
+    vec4 m = cover.trailCoarse;
+    int n = int(m.y + 0.5);
+
+    if (cover.trail.w < 0.5 || n < 1)
+    {
+        return false;
+    }
+
+    ivec2 first = ivec2(m.zw);
+    ivec2 a = max(ivec2(floor(lo / m.x)) - 1, first);
+    ivec2 b = min(ivec2(floor(hi / m.x)) + 1, first + ivec2(n - 1));
+
+    if (a.x > b.x || a.y > b.y)
+    {
+        return false;
+    }
+
+    if (b.x - a.x > 24 || b.y - a.y > 24)
+    {
+        return true;
+    }
+
+    int lift = n * (int(17100.0 / (m.x * float(n))) + 2);   // as CoverTrailSample: the cell mod n of a positive number
+
+    for (int j = a.y; j <= b.y; j++)
+    {
+        for (int i = a.x; i <= b.x; i++)
+        {
+            vec4 t = texelFetch(sTrailCoarse, ivec2(uvec2(ivec2(i, j) + lift) % uint(n)), 0);
+
+            if (t.x < 0.5e6 || t.z > 0.0)
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+// The covers' height at a point of the triangle (position and normal interpolated like Terrain.tese does):
+// CoverHeight's, the part below the terrain only where trails lie (g_trailNear).
 float HeightAt(vec3 position, vec3 normal)
 {
+    if (cover.enable.x < 0.5)
+    {
+        return 0.0;
+    }
+
     vec3 n = normal * inversesqrt(max(dot(normal, normal), 1e-12));
     vec4 alpha = textureLod(sAlpha, TerrainCoord(LAYERS, position.xy), 0.0);
-    return CoverHeight(position.xy, position.z, n.z, CoverLayerWeights(alpha, kBigAlpha));
+    CoverSpot s = CoverEvaluate(position.xy, position.z, n.z, CoverLayerWeights(alpha, kBigAlpha));
+    return s.paintedHeight + s.snowHeight + (g_trailNear && cover.trail.w > 0.5 ? s.below : 0.0);
 }
 
 // An edge from corner a to corner b: split where cover lies along it and it's within the reach.
@@ -149,6 +206,10 @@ void main()
             gl_TessLevelInner[0] = 1.0;
             return;
         }
+
+        vec2 lo = min(patchPosition[0].xy, min(patchPosition[1].xy, patchPosition[2].xy));
+        vec2 hi = max(patchPosition[0].xy, max(patchPosition[1].xy, patchPosition[2].xy));
+        g_trailNear = TrailIn(lo, hi);
 
         float h0 = HeightAt(patchPosition[0], patchNormal[0]);
         float h1 = HeightAt(patchPosition[1], patchNormal[1]);
