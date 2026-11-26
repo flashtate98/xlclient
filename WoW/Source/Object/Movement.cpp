@@ -88,6 +88,42 @@ namespace {
                inner.t.x <= outer.t.x && inner.t.y <= outer.t.y && inner.t.z <= outer.t.z;
     }
 
+    // Which sides of the box a point lies past (CM2Model::GetCollisionFacets' codes): a triangle whose three
+    // corners share a side lies outside it.
+    uint32_t Outside(const CAaBox& box, const C3Vector& p) {
+        return (p.x < box.b.x ? 1u : 0u) | (p.x > box.t.x ? 2u : 0u) | (p.y < box.b.y ? 4u : 0u) | (p.y > box.t.y ? 8u : 0u) |
+               (p.z < box.b.z ? 16u : 0u) | (p.z > box.t.z ? 32u : 0u);
+    }
+
+    // The kept triangles that reach the box, with their ids: about what the exact query gives. The
+    // collision code after it tests every triangle it is given, so the wider box's extras cost there.
+    void TrimFacets(const World::FacetData& from, const CAaBox& box, World::FacetData& to) {
+        const uint32_t count = from.facets.m_count;
+        const bool ids = from.facetIds.m_count == count;
+        to.facets.SetCount(count);
+        to.facetIds.SetCount(ids ? count : 0);
+        uint32_t kept = 0;
+
+        for (uint32_t i = 0; i < count; i++) {
+            const CFacet& f = from.facets.m_data[i];
+
+            if (Outside(box, f.v[0]) & Outside(box, f.v[1]) & Outside(box, f.v[2])) {
+                continue;
+            }
+
+            to.facets.m_data[kept] = f;
+
+            if (ids) {
+                to.facetIds.m_data[kept] = from.facetIds.m_data[i];
+            }
+
+            kept++;
+        }
+
+        to.facets.SetCount(kept);
+        to.facetIds.SetCount(ids ? kept : 0);
+    }
+
     void CopyFacets(const World::FacetData& from, World::FacetData& to) {
         to.facets.SetCount(from.facets.m_count);
         to.facetIds.SetCount(from.facetIds.m_count);
@@ -115,7 +151,7 @@ namespace {
 
         for (FacetReuse& slot : s_facetReuse) {
             if (slot.used && slot.flags == flags && now - slot.time <= kReuseMs && Inside(slot.box, s_queryBox)) {
-                CopyFacets(slot.data, s_moveFacets);
+                TrimFacets(slot.data, s_queryBox, s_moveFacets);
                 return true;
             }
         }
@@ -140,6 +176,7 @@ namespace {
         slot.time = now;
         slot.used = true;
         CopyFacets(s_moveFacets, slot.data);
+        TrimFacets(slot.data, s_queryBox, s_moveFacets);
         return true;
     }
 }
