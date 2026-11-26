@@ -27,6 +27,20 @@
 #include "Engine/Source/Tempest/CRect.h"
 #include "WarcraftXL/Profile.h"
 #include "WarcraftXL/Seams.h"
+#include "SXC/Profiler/Profiler.h"  // SXC: the interface's parts in the frame profiler
+
+namespace {
+    // SXC (FlashWOW): rows for the interface's parts (under "interface (frames, text)").
+    int UiRow(int which) {
+        static const int s_rows[4] = {
+            SXC::Profiler::Register("interface: frames updated (animations, regions)", 0),
+            SXC::Profiler::Register("interface: layout (frames placed)", 0),
+            SXC::Profiler::Register("interface: batches built", 0),
+            SXC::Profiler::Register("interface: batches drawn", 0),
+        };
+        return s_rows[which];
+    }
+}
 
 // STATIC: 0x00B499A8
 CSimpleTop* CSimpleTop::s_instance;
@@ -875,17 +889,21 @@ void CSimpleTop::OnLayerUpdate(float elapsedSec) {
         frame->AllowAttributeChanges(0);
     }
 
-    CLayoutFrame::ResizePending();
+    { SXC::Profiler::Scope p(UiRow(1)); CLayoutFrame::ResizePending(); }
 
-    for (int32_t strata = 0; strata < FRAME_STRATA_TOOLTIP + 1; strata++) {
-        CFrameStrata* frameStrata = this->m_strata[strata];
+    {
+        SXC::Profiler::Scope p(UiRow(0));
 
-        for (uint32_t level = 0; level < frameStrata->m_topLevel; level++) {
-            frameStrata->m_levels[level]->OnLayerUpdate(elapsedSec);
+        for (int32_t strata = 0; strata < FRAME_STRATA_TOOLTIP + 1; strata++) {
+            CFrameStrata* frameStrata = this->m_strata[strata];
+
+            for (uint32_t level = 0; level < frameStrata->m_topLevel; level++) {
+                frameStrata->m_levels[level]->OnLayerUpdate(elapsedSec);
+            }
         }
     }
 
-    CLayoutFrame::ResizePending();
+    { SXC::Profiler::Scope p(UiRow(1)); CLayoutFrame::ResizePending(); }
 
     if (this->m_checkFocus) {
         this->m_checkFocus = 0;
@@ -901,8 +919,8 @@ void CSimpleTop::OnLayerRender() {
     CameraSetupScreenProjection(this->m_rect, offset, 0.0f, 0);
 
     for (int32_t strata = 0; strata < FRAME_STRATA_TOOLTIP + 1; strata++) {
-        this->m_strata[strata]->BuildBatches(this->m_mouseCapture == nullptr);
-        this->m_strata[strata]->RenderBatches();
+        { SXC::Profiler::Scope p(UiRow(2)); this->m_strata[strata]->BuildBatches(this->m_mouseCapture == nullptr); }
+        { SXC::Profiler::Scope p(UiRow(3)); this->m_strata[strata]->RenderBatches(); }
     }
     wxl::seam::SimpleTop::OnLayerRender::After(this);
 }

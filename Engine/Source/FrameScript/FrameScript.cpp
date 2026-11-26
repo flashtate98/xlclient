@@ -16,6 +16,7 @@
 #include "Engine/Source/lua-5.1/src/lua.h"
 #include "Engine/Source/lua-5.1/src/lualib.h"
 #include "WarcraftXL/Points.h"
+#include "SXC/Profiler/Profiler.h"  // SXC: the addons' Lua in the frame profiler
 
 // STATIC: 0x00D3F780
 double s_scriptTimeDivisor;
@@ -1222,6 +1223,9 @@ const char* FrameScript_GetText(const char* token, int32_t count, FRAMESCRIPT_GE
 // VERIFY: cfc227f0 manual
 // OFFSET: 0x00819EA0
 void FrameScript_Execute(int32_t function, FrameScript_Object* object, int32_t argCount, const char* taint, FrameScript_EventObject* event) {
+    // SXC (FlashWOW): every frame script (OnUpdate, OnEvent, OnShow, ...) under one row, wherever it runs.
+    static const int s_rowLua = SXC::Profiler::Register("interface: scripts (addons' Lua: OnUpdate, OnEvent, ...)", 0);
+    SXC::Profiler::Scope sxcLua(s_rowLua);
     lua_State* L = s_context;
     int64_t start = 0;
 

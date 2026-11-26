@@ -213,7 +213,11 @@ static int32_t OnPaint(const void* data, void* param) {
         }
 
         GxXformSetViewport(minX, maxX, minY, maxY, minZ, maxZ);
-        GxuFontUpdate();
+        {
+            static const int s_rowFonts = SXC::Profiler::Register("interface: text (the font cache updated)", 0);
+            SXC::Profiler::Scope p(s_rowFonts);
+            GxuFontUpdate();
+        }
         SXC::Profiler::Leave(SXC::Profiler::kInterface);
 
         if (!s_noPresent) {
