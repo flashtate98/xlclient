@@ -56,6 +56,94 @@ static World::FacetData s_liquidFacets;
 // STATIC: 0x00CA1660
 static CAaBox s_queryBox;
 
+// SXC (FlashWOW): other units' collision triangles reused nearby. Every moving player-style unit (other
+// players, playerbots: no spline) gathered the world's triangles around its step every frame, ~2.9% of
+// the frame in Goldshire (CM2Model::GetCollisionFacets transforming every collision vertex of each doodad
+// it touched, per unit, per query). The triangles depend only on the place and the query flags, so a
+// query for another unit fetches a box kReuseMargin larger and keeps it kReuseMs; a later query inside a
+// kept box (the same unit next frame, units walking together) takes its triangles. More triangles than the
+// exact box is what the stock code does itself (ValidateTestVsFacetQuery widens its query). Not for the
+// active mover, a unit on a transport, or local control (the 0x80000000 flag filters by the unit's own box).
+#include "SXC/Settings/Settings.h"
+#include "Engine/Source/Os/TimeManager.h"
+
+namespace {
+    constexpr float kReuseMargin = 2.0f;     // yd added on every side of the box fetched
+    constexpr uint32_t kReuseMs = 250;       // how long a fetched box is reused
+    constexpr uint32_t kReuseSlots = 32;
+
+    struct FacetReuse {
+        CAaBox box;
+        uint32_t flags = 0;
+        uint32_t time = 0;
+        bool used = false;
+        World::FacetData data;
+    };
+
+    FacetReuse s_facetReuse[kReuseSlots];
+    uint32_t s_facetReuseNext = 0;
+
+    bool Inside(const CAaBox& outer, const CAaBox& inner) {
+        return inner.b.x >= outer.b.x && inner.b.y >= outer.b.y && inner.b.z >= outer.b.z &&
+               inner.t.x <= outer.t.x && inner.t.y <= outer.t.y && inner.t.z <= outer.t.z;
+    }
+
+    void CopyFacets(const World::FacetData& from, World::FacetData& to) {
+        to.facets.SetCount(from.facets.m_count);
+        to.facetIds.SetCount(from.facetIds.m_count);
+
+        for (uint32_t i = 0; i < from.facets.m_count; i++) {
+            to.facets.m_data[i] = from.facets.m_data[i];
+        }
+
+        for (uint32_t i = 0; i < from.facetIds.m_count; i++) {
+            to.facetIds.m_data[i] = from.facetIds.m_data[i];
+        }
+    }
+
+    // The triangles for s_queryBox into s_moveFacets, as World::GetFacets(&unitBox, &s_queryBox, ...).
+    bool MoveFacets(CAaBox& unitBox, uint32_t flags, bool reuse) {
+        static SXC::Settings::Bool s_reuse("Movement", "ReuseFacets", true, "Other units: collision triangles reused nearby",
+                                           "Other players' and bots' movement takes the world's collision triangles from a slightly larger box fetched "
+                                           "in the last quarter second instead of asking the world again each frame.");
+
+        if (!reuse || (flags & 0x80000000u) || !s_reuse.Get()) {
+            return World::GetFacets(&unitBox, &s_queryBox, &s_moveFacets, flags, nullptr);
+        }
+
+        const uint32_t now = OsGetAsyncTimeMs();
+
+        for (FacetReuse& slot : s_facetReuse) {
+            if (slot.used && slot.flags == flags && now - slot.time <= kReuseMs && Inside(slot.box, s_queryBox)) {
+                CopyFacets(slot.data, s_moveFacets);
+                return true;
+            }
+        }
+
+        CAaBox wide = s_queryBox;
+        wide.b.x -= kReuseMargin;
+        wide.b.y -= kReuseMargin;
+        wide.b.z -= kReuseMargin;
+        wide.t.x += kReuseMargin;
+        wide.t.y += kReuseMargin;
+        wide.t.z += kReuseMargin;
+
+        // The wider box may reach an area not loaded yet: the exact query then, as before.
+        if (!World::GetFacets(&unitBox, &wide, &s_moveFacets, flags, nullptr)) {
+            return World::GetFacets(&unitBox, &s_queryBox, &s_moveFacets, flags, nullptr);
+        }
+
+        FacetReuse& slot = s_facetReuse[s_facetReuseNext];
+        s_facetReuseNext = (s_facetReuseNext + 1) % kReuseSlots;
+        slot.box = wide;
+        slot.flags = flags;
+        slot.time = now;
+        slot.used = true;
+        CopyFacets(s_moveFacets, slot.data);
+        return true;
+    }
+}
+
 // STATIC: 0x00C9ECC8
 static int32_t s_flushingQueue;
 
@@ -3209,7 +3297,10 @@ int32_t CMovement_C::GetMoveFacets(float distance, uint32_t elapsed, C3Vector di
     s_queryBox.t.y = s_queryBox.t.y + 0.0013888889f;
     s_queryBox.t.z = s_queryBox.t.z + 0.0013888889f;
 
-    if (!World::GetFacets(&box, &s_queryBox, &s_moveFacets, this->GetFacetQueryFlags(), nullptr)) {
+    // SXC: another unit's (not on a transport) from a nearby box fetched in the last quarter second (above).
+    const bool reuse = !this->m_transportGuid && this->m_unit->m_obj->m_guid != CGUnit_C::s_activeMover;
+
+    if (!MoveFacets(box, this->GetFacetQueryFlags(), reuse)) {
         return 0;
     }
 
