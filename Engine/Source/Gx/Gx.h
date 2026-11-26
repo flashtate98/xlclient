@@ -90,6 +90,11 @@ void GxCapsWindowSizeInScreenCoords(CRect& rect);
 void GxFormatColor(CImVector& color);
 CImVector GxSwizzleColor(const CImVector& color);
 void GxDraw(CGxBatch* batch, int32_t count);
+
+// SXC (FlashWOW): several index ranges of one draw (the same state, the bound buffers): the device draws
+// batches[0] and, when it can, the rest with it under one state sync; false: the caller draws batches[1..]
+// itself. Null on a device without it (draw each).
+namespace SXC { extern bool (*g_drawRanges)(CGxBatch* batches, uint32_t count); }
 void GxDevDestroy(CGxDevice* device);
 void GxDrawLockedElements();
 void GxDrawLockedElements(EGxPrim primType, uint32_t indexCount, const uint16_t* indices);

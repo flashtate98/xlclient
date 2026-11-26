@@ -377,7 +377,9 @@ class CM2Model {
     void LinkToCallbackListTail();
     int32_t OnSequenceInterrupted(uint32_t boneId, uint16_t boneIndex);
     void ProcessCallbacksRecursive();
-    void RenderBatchShadowMap(int32_t untextured, M2Batch* batch, const CModelBatchList& list, uint32_t index, M2SkinSection* section, M2SkinSection* prevSection);
+    // SXC: `more` the next pieces of this model drawn with it (the same bones, the same shader; untextured).
+    void RenderBatchShadowMap(int32_t untextured, M2Batch* batch, const CModelBatchList& list, uint32_t index, M2SkinSection* section, M2SkinSection* prevSection,
+                              M2SkinSection* const* more = nullptr, uint32_t moreCount = 0);
     void RenderModelBatchesForProjectedTexture();
     int32_t Release();
     int32_t SetIndices();

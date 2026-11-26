@@ -133,6 +133,7 @@ void CopySkinParentPose(CM2Model* child) {
 }
 #endif
 #include "SXC/Cover/Cover.h"  // SXC: effects at units' feet onto the covers
+#include "SXC/Settings/Settings.h"  // SXC: [Shadows] MergePieces
 #include "WarcraftXL/Seams.h"
 
 // STATIC: 0x00A45570
@@ -3028,7 +3029,8 @@ void CM2Model::RenderModelBatchesForProjectedTexture() {
 
 // VERIFY: be5156ea manual
 // OFFSET: 0x00829BA0
-void CM2Model::RenderBatchShadowMap(int32_t untextured, M2Batch* batch, const CModelBatchList& list, uint32_t index, M2SkinSection* section, M2SkinSection* prevSection) {
+void CM2Model::RenderBatchShadowMap(int32_t untextured, M2Batch* batch, const CModelBatchList& list, uint32_t index, M2SkinSection* section, M2SkinSection* prevSection,
+                                   M2SkinSection* const* more, uint32_t moreCount) {
     if (!untextured) {
         M2Data* data = this->m_shared->m_data;
         uint16_t textureIndex = data->m_textureCombos[batch->m_textureComboIndex];
@@ -3111,6 +3113,31 @@ void CM2Model::RenderBatchShadowMap(int32_t untextured, M2Batch* batch, const CM
 
         gxBatch.m_count = instances * section->m_indexCount;
         gxBatch.m_maxIndex = static_cast<uint16_t>(instances * this->m_shared->m_skinData->m_vertices.m_count - 1);
+
+        // SXC: the pieces drawn with it (one instance each: `more` only comes with a single batch).
+        if (moreCount && total == 1) {
+            CGxBatch ranges[33];
+            ranges[0] = gxBatch;
+
+            for (uint32_t k = 0; k < moreCount; k++) {
+                ranges[k + 1] = gxBatch;
+                ranges[k + 1].m_start = M2SkinSectionDrawStart(*more[k]);
+                ranges[k + 1].m_count = more[k]->m_indexCount;
+            }
+
+            if (!SXC::g_drawRanges || !SXC::g_drawRanges(ranges, moreCount + 1)) {
+                if (!SXC::g_drawRanges) {
+                    g_theGxDevicePtr->Draw(&ranges[0], 1);
+                }
+
+                for (uint32_t k = 1; k <= moreCount; k++) {
+                    g_theGxDevicePtr->Draw(&ranges[k], 1);
+                }
+            }
+
+            continue;
+        }
+
         g_theGxDevicePtr->Draw(&gxBatch, 1);
     }
 }
@@ -3152,9 +3179,41 @@ void CM2Model::RenderModelBatchListShadowMap(int32_t untextured, const CModelBat
             section = &shared->m_skinSections[batch->m_skinSectionIndex];
         }
 
-        model->RenderBatchShadowMap(untextured, batch, list, i, section, prevSection);
-        i += entry->m_count;
-        prevSection = section;
+        // SXC (FlashWOW): the model's next pieces with the same bones and shader drawn with this one: a
+        // unit's body, armour and hair were a draw each, in every shadow map, every frame (Goldshire with 24
+        // bots: ~850 of the ~1,050 shadow draws). Untextured only (the textured ones bind their texture).
+        static SXC::Settings::Bool s_merge("Shadows", "MergePieces", true, "Sun shadows: a model's pieces with the same bones in one draw",
+                                           "A unit's pieces (body, armour, hair) that share their bones go to the shadow maps as one draw.");
+        M2SkinSection* more[32];
+        uint32_t moreCount = 0;
+
+        if (untextured && entry->m_count == 1 && s_merge.Get()) {
+            for (uint32_t j = i + 1; j < list.m_count && moreCount < 32; j++) {
+                const CModelBatch& next = list.m_batches[j];
+
+                if (next.m_model != model || next.m_count != 1) {
+                    break;
+                }
+
+                M2SkinSection* s;
+
+                if (model->m_optGeo) {
+                    s = &model->m_optGeo->m_skinSections[model->m_optGeo->m_batches[next.m_batchIndex].m_skinSectionIndex];
+                } else {
+                    s = &shared->m_skinSections[shared->m_skinData->m_batches[next.m_batchIndex].m_skinSectionIndex];
+                }
+
+                if (s->m_boneComboIndex != section->m_boneComboIndex || s->m_boneCount != section->m_boneCount || s->m_boneInfluences != section->m_boneInfluences) {
+                    break;
+                }
+
+                more[moreCount++] = s;
+            }
+        }
+
+        model->RenderBatchShadowMap(untextured, batch, list, i, section, prevSection, more, moreCount);
+        i += entry->m_count + moreCount;
+        prevSection = moreCount ? more[moreCount - 1] : section;
     }
 }
 

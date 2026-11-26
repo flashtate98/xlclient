@@ -304,6 +304,7 @@ void CGxDeviceVulkan::ICreateDrawPath() {
                                                     &CGxDeviceVulkan::SxcGrassDraw, gxvk::vk::grass::PlantsInUse,
                                                     []() { return gxvk::vk::grass::kMaxPlants; } };
         SXC::Grass::SetDevice(gxvk::vk::grass::Init() ? &s_grass : nullptr);
+        SXC::g_drawRanges = &CGxDeviceVulkan::SxcDrawRanges;   // SXC: a model's pieces in one draw (shadows)
 
         // SXC: the frame profiler's GPU times (the pre-pass kinds into the profiler's pre-pass rows).
         static_assert(SXC::Profiler::kMaxCategories <= gxvk::vk::timings::kMaxCategories, "the timings carry every profiler category");

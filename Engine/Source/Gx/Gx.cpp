@@ -311,6 +311,8 @@ void GxDraw(CGxBatch* batch, int32_t count) {
     g_theGxDevicePtr->Draw(batch, count);
 }
 
+namespace SXC { bool (*g_drawRanges)(CGxBatch* batches, uint32_t count) = nullptr; }  // SXC: see Gx.h
+
 // VERIFY: 24d4e729 manual
 // OFFSET: 0x00493BF0
 void GxCapsWindowSizeInScreenCoords(CRect& rect) {

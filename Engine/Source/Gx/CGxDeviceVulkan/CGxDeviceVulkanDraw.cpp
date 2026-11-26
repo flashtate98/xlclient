@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <vector>
 #include "Engine/Source/Gx/CGxDeviceVulkan/CGxDeviceVulkan.h"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Frame.hpp"
 #include "Engine/Source/Gx/CGxDeviceVulkan/Vulkan/Pipelines.hpp"
@@ -21,6 +22,10 @@ namespace frame     = gxvk::vk::frame;
 namespace pipelines = gxvk::vk::pipelines;
 
 namespace {
+    // SXC: the ranges SxcDrawRanges hands to the next Draw (null: none), and whether that Draw took them.
+    CGxBatch* s_ranges = nullptr;
+    uint32_t s_rangeCount = 0;
+    bool s_rangesTaken = false;
     // The byte size of each CGxVertexAttrib::m_type, as CGxDeviceD3d::s_gxAttribToD3dAttribSize: a
     // stream's stride is the sum over the attributes it carries.
     const uint32_t s_attribSize[7] = { 4, 4, 4, 8, 12, 4, 4 };
@@ -183,6 +188,29 @@ void CGxDeviceVulkan::Draw(CGxBatch* batch, int32_t count) {
 
     d.count = batch->m_count;
     d.topology = batch->m_primType;
+
+    // SXC: SxcDrawRanges: the batches as runs of the one draw (not while a second view copies the draws:
+    // its copies keep no runs but the grass's).
+    static std::vector<pipelines::Run> s_runs;
+
+    if (s_ranges && s_rangeCount > 1 && indexBuf && batch->m_primType == GxPrim_Triangles
+        && !(gxvk::vk::view::Recording() && !colourTarget && !this->m_textureTarget[GxBuffers_Depth].m_texture)) {
+        const uint32_t base = indexBuf->m_index / sizeof(uint16_t);
+        s_runs.resize(s_rangeCount);
+
+        for (uint32_t r = 0; r < s_rangeCount; r++) {
+            pipelines::Run& run = s_runs[r];
+            run = pipelines::Run();
+            run.firstIndex = base + s_ranges[r].m_start;
+            run.indexCount = s_ranges[r].m_count;
+            run.instanceCount = 1;
+        }
+
+        d.runs = s_runs.data();
+        d.runCount = s_rangeCount;
+        s_rangesTaken = true;
+    }
+
     if (!this->IDrawState(d)) {
         return;
     }
@@ -229,7 +257,16 @@ void CGxDeviceVulkan::Draw(CGxBatch* batch, int32_t count) {
 
     // SXC: the frame profiler's draw count.
     if (SXC::Profiler::On()) {
-        const uint32_t n = d.count;
+        uint32_t n = d.count;
+
+        if (d.runs) {
+            n = 0;
+
+            for (uint32_t r = 0; r < d.runCount; r++) {
+                n += d.runs[r].indexCount;
+            }
+        }
+
         SXC::Profiler::CountDraw(d.topology == GxPrim_Triangles ? n / 3 : d.topology == GxPrim_TriangleStrip || d.topology == GxPrim_TriangleFan ? (n > 2 ? n - 2 : 0) : 0);
     }
 
@@ -656,4 +693,24 @@ void CGxDeviceVulkan::XformSetProjection(const C44Matrix& matrix) {
 
 void CGxDeviceVulkan::XformSetView(const C44Matrix& matrix) {
     CGxDevice::XformSetView(matrix);
+}
+
+// SXC: index ranges of one draw (SXC::g_drawRanges, Gx.h): batches[0] drawn through Draw, the rest as runs
+// of it when the draw allows (indexed triangles, no second view copying). False: the caller draws the rest.
+bool CGxDeviceVulkan::SxcDrawRanges(CGxBatch* batches, uint32_t count) {
+    CGxDeviceVulkan* device = static_cast<CGxDeviceVulkan*>(g_theGxDevicePtr);
+
+    if (!device || !batches || !count) {
+        return true;
+    }
+
+    s_ranges = batches;
+    s_rangeCount = count;
+    s_rangesTaken = false;
+    device->Draw(&batches[0], 1);
+    const bool taken = s_rangesTaken || count == 1;
+    s_ranges = nullptr;
+    s_rangeCount = 0;
+    s_rangesTaken = false;
+    return taken;
 }
