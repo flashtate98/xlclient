@@ -6,6 +6,7 @@
 #include "SXC/Lights/Lights.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -21,6 +22,7 @@
 #include "SXC/Api/sxc_lights.h"
 #include "SXC/Api/sxc_world.h"
 #include "SXC/Log.h"
+#include "SXC/Settings/Settings.h"  // [Lights] ScanCarriers
 #include "SXC/Water/Liquid.h"
 #include "SXC/Profiler/Profiler.h"
 #include "Engine/Source/Model2/M2Data.h"
@@ -76,6 +78,17 @@ namespace {
     std::vector<Row> s_rows;
     std::unordered_map<std::string, std::vector<uint32_t>> s_byPath; // normalised path -> rows
     uint32_t s_tableGeneration = 1;
+
+    // FlashWOW: the scan's short list. A full walk of the world scene records the top-level models that carry
+    // lights, have something attached, or aren't known yet (loading, faded); the frames between full walks visit
+    // only those. A model leaves the scene (DetachFromScene, which its destructor calls) before it is freed, and
+    // that raises s_sceneChanged, so the list never holds a freed model: the next frame walks it all again.
+    constexpr uint32_t kFullWalkEvery = 8;   // frames; a model that finishes loading in between shows up by then
+    std::atomic<bool> s_sceneChanged{ true };
+    std::vector<CM2Model*> s_carriers;
+    const CM2Scene* s_carrierScene = nullptr;
+    uint32_t s_carrierGeneration = 0;
+    uint32_t s_sinceFullWalk = kFullWalkEvery;
     bool s_anyEmitterRows = false;    // a row places an emitter (else emitters() walks nothing)
 
     // Per model file (CM2Shared, shared by every model of the file): its rows, and whether its own lights
@@ -2277,6 +2290,13 @@ namespace SXC::Lights {
         return s_drawModel ? ModelSurface(s_drawModel) : kSurfaceAny;
     }
 
+    void SceneChanged(const CM2Scene* scene) {
+        // Only the world's scene has a short list (the interface's model frames have their own scenes).
+        if (scene && scene == World::s_m2Scene) {
+            s_sceneChanged.store(true, std::memory_order_relaxed);
+        }
+    }
+
     const Frame& Current() {
         const uint32_t size = s_stats.struct_size;
         s_stats = sxc_lights_stats{};
@@ -2309,8 +2329,31 @@ namespace SXC::Lights {
         s_emitters.clear();
         SweepLandings();
 
-        for (CM2Model* model = scene->m_modelList; model; model = model->m_sceneNext) {
-            Visit(scene, model, camera, range, 0, true);
+        // FlashWOW: the whole scene every kFullWalkEvery frames or after a change, else only the carriers (above).
+        static SXC::Settings::Bool s_shortList("Lights", "ScanCarriers", true, "Lights: between full walks, scan only models that carry lights",
+                                               "Walk the whole scene for lights every 8 frames or when models come, go or change gear; in between, "
+                                               "only the models found carrying lights (or something attached, or still loading).");
+        const bool changed = s_sceneChanged.exchange(false);
+
+        if (changed || !s_shortList.Get() || scene != s_carrierScene || s_carrierGeneration != s_tableGeneration ||
+            ++s_sinceFullWalk >= kFullWalkEvery) {
+            s_carriers.clear();
+            s_carrierScene = scene;
+            s_carrierGeneration = s_tableGeneration;
+            s_sinceFullWalk = 0;
+            const uint16_t empty = static_cast<uint16_t>(((s_tableGeneration - 1) % 0x7FFFu + 1) | 0x8000u);
+
+            for (CM2Model* model = scene->m_modelList; model; model = model->m_sceneNext) {
+                Visit(scene, model, camera, range, 0, true);
+
+                if (model->m_sxcLights != empty || model->m_attachList) {
+                    s_carriers.push_back(model);
+                }
+            }
+        } else {
+            for (CM2Model* model : s_carriers) {
+                Visit(scene, model, camera, range, 0, true);
+            }
         }
 
         s_emitterStamp = scene->m_frameStamp ? scene->m_frameStamp : 1;

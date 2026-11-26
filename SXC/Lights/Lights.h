@@ -91,6 +91,10 @@ namespace SXC::Lights {
 
     // This frame's lights, gathered now. Main thread, once per frame (the device's first terrain draw).
     const Frame& Current();
+    // FlashWOW: a model joined or left a scene, or was attached to or detached from another (gear, spell effects):
+    // the scan walks the whole world scene again next frame (its short list of light carriers may be stale). Any
+    // thread; cheap.
+    void SceneChanged(const CM2Scene* scene);
 
     // Whether the stock point lights of the terrain chunks are to be left out (ours replace them).
     bool StockTerrainOff();

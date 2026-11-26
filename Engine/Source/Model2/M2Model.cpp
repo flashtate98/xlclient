@@ -134,6 +134,7 @@ void CopySkinParentPose(CM2Model* child) {
 #endif
 #include "SXC/Cover/Cover.h"  // SXC: effects at units' feet onto the covers
 #include "SXC/Settings/Settings.h"  // SXC: [Shadows] MergePieces
+#include "SXC/Lights/Lights.h"  // SXC: the lights scan told when the scene changes
 #include "WarcraftXL/Seams.h"
 
 // STATIC: 0x00A45570
@@ -191,6 +192,11 @@ void CModelBatchList::Add(CM2Model* model, uint32_t batchIndex) {
 // VERIFY: d951ddda manual
 // OFFSET: 0x00823D90
 void CM2Model::DetachFromScene() {
+    // SXC: the lights scan's short list may hold this model (SXC/Lights): it walks the scene again.
+    if (this->m_scenePrev) {
+        SXC::Lights::SceneChanged(this->m_scene);
+    }
+
     if (this->m_scenePrev) {
         *this->m_scenePrev = this->m_sceneNext;
     }
@@ -2058,6 +2064,7 @@ C3Vector CM2Model::GetAttachmentPivot(uint32_t id) {
 // VERIFY: dca38176 manual
 // OFFSET: 0x008274F0
 void CM2Model::DetachFromParent() {
+    SXC::Lights::SceneChanged(this->m_scene);   // SXC: gear or an effect off a model (the lights scan's short list)
 #if defined(WOWDECOMP_RETAIL_MODELS)
     ClearSkinParents(this);
 #endif
@@ -6298,6 +6305,8 @@ float CM2Model::GetAttachmentWorldScale(uint32_t id) {
 // VERIFY: dcb378e1 manual
 // OFFSET: 0x00831630
 void CM2Model::AttachToParent(CM2Model* parent, uint32_t id, const C3Vector* position, int32_t attachToRoot) {
+    SXC::Lights::SceneChanged(parent ? parent->m_scene : this->m_scene);   // SXC: gear or an effect on a model (the lights scan)
+
     if (this->m_attachParent) {
         this->DetachFromParent();
     }
@@ -7918,6 +7927,7 @@ void CM2Model::AttachToScene(CM2Scene* scene) {
 
     this->m_scenePrev = &scene->m_modelList;
     this->m_scene = scene;
+    SXC::Lights::SceneChanged(scene);   // SXC: a new model may carry lights
     this->m_sceneNext = scene->m_modelList;
     scene->m_modelList = this;
 
