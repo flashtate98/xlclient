@@ -30,6 +30,7 @@
 #include <chrono>
 #include "SXC/Log.h"  // SXC:
 #include "SXC/Settings/Settings.h"  // SXC: [Models] AnimateThreads
+#include "SXC/Profiler/Profiler.h"  // SXC: the animation's stages
 #include "Engine/Source/Model2/M2AnimatePool.h"  // SXC: the bones over more threads
 #include "SXC/Lights/Lights.h"  // SXC: the world's lights only on the world's scene
 
@@ -1781,6 +1782,23 @@ M2Element* CM2Scene::AddParticleElement(CParticleEmitter2* emitter, CM2Model* mo
 // OFFSET: 0x00821A20
 int32_t CM2Scene::Animate(const C3Vector& cameraPos) {
     WXL_CORE_ZONE("M2.Animate");
+
+    // SXC (FlashWOW): the frame profiler's rows for the stages below (under "models: animation"): the
+    // bones (over the threads), particles and ribbons, lighting, the draw list and its sort.
+    struct Stages {
+        int current = -1;
+        void Go(int c) {
+            if (this->current >= 0) SXC::Profiler::Leave(this->current);
+            this->current = c;
+            if (c >= 0) SXC::Profiler::Enter(c);
+        }
+        ~Stages() { this->Go(-1); }
+    } stages;
+    static const int s_rowBones = SXC::Profiler::Register("models: animation: bones (threads)", 0);
+    static const int s_rowEffects = SXC::Profiler::Register("models: animation: particles, ribbons (AnimateST)", 0);
+    static const int s_rowLighting = SXC::Profiler::Register("models: animation: lighting (SetupLighting)", 0);
+    static const int s_rowElements = SXC::Profiler::Register("models: animation: draw list built", 0);
+    static const int s_rowSort = SXC::Profiler::Register("models: animation: draw list sorted", 0);
     this->m_frameStamp++;
 
     uint32_t optFlags = this->m_cache->m_flags & 0xE000;
@@ -1796,6 +1814,7 @@ int32_t CM2Scene::Animate(const C3Vector& cameraPos) {
     this->m_viewInv = this->m_view.Inverse(this->m_view.Determinant());
 
     const SxcClock::time_point sxcBones = SxcClock::now();
+    stages.Go(s_rowBones);
 
     // SXC (FlashWOW): the bones over the pool's threads and this one (M2AnimatePool), each taking the next
     // model as it is free, where the stock way gave every other model to one more thread. The same
@@ -1873,6 +1892,7 @@ int32_t CM2Scene::Animate(const C3Vector& cameraPos) {
     }
 
     SxcSlow("all bones (AnimateMT, both threads)", sxcBones);
+    stages.Go(s_rowEffects);
 
     for (CM2Model* model = this->m_animateList; model; model = model->m_animateNext) {
         if (!model->m_attachParent) {
@@ -1881,6 +1901,8 @@ int32_t CM2Scene::Animate(const C3Vector& cameraPos) {
             SxcSlow("its particles and ribbons (AnimateST)", sxcModel, model);
         }
     }
+
+    stages.Go(s_rowLighting);
 
     while (this->m_animateList) {
         CM2Model* model = this->m_animateList;
@@ -1892,6 +1914,7 @@ int32_t CM2Scene::Animate(const C3Vector& cameraPos) {
         SxcSlow("its lighting (SetupLighting)", sxcModel, model);
     }
 
+    stages.Go(s_rowElements);
     this->m_doodadElements.m_count = 0;
 
     for (uint32_t i = 0; i < 3; i++) {
@@ -2343,6 +2366,7 @@ int32_t CM2Scene::Animate(const C3Vector& cameraPos) {
     }
 
     this->m_doodadElements.SetCount(out);
+    stages.Go(s_rowSort);
 
     M2HeapSort(&CM2Scene::SortOpaque, this->m_passElements[0].m_data, this->m_passElements[0].m_count, this);
     M2HeapSort(&CM2Scene::SortTransparent, this->m_passElements[1].m_data, this->m_passElements[1].m_count, this);
