@@ -1924,7 +1924,9 @@ int32_t CM2Scene::Animate(const C3Vector& cameraPos) {
     static const int s_rowEffects = SXC::Profiler::Register("models: animation: particles, ribbons (AnimateST)", 0);
     static const int s_rowLighting = SXC::Profiler::Register("models: animation: lighting (SetupLighting)", 0);
     static const int s_rowElements = SXC::Profiler::Register("models: animation: draw list built", 0);
-    static const int s_rowSort = SXC::Profiler::Register("models: animation: draw list sorted", 0);
+    static const int s_rowSort = SXC::Profiler::Register("models: animation: draw list sorted: opaque", 0);
+    static const int s_rowSortTransparent = SXC::Profiler::Register("models: animation: draw list sorted: transparent", 0);
+    static const int s_rowSortAdditive = SXC::Profiler::Register("models: animation: draw list sorted: additive regrouped", 0);
     this->m_frameStamp++;
 
     uint32_t optFlags = this->m_cache->m_flags & 0xE000;
@@ -2505,8 +2507,11 @@ int32_t CM2Scene::Animate(const C3Vector& cameraPos) {
         M2HeapSort(&CM2Scene::SortOpaque, this->m_passElements[0].m_data, this->m_passElements[0].m_count, this);
     }
 
+    stages.Go(s_rowSortTransparent);
     M2HeapSort(&CM2Scene::SortTransparent, this->m_passElements[1].m_data, this->m_passElements[1].m_count, this);
     M2HeapSort(&CM2Scene::SortTransparent, this->m_passElements[2].m_data, this->m_passElements[2].m_count, this);
+
+    stages.Go(s_rowSortAdditive);
 
     if ((this->m_cache->m_flags & 0x80) && additiveCount > 1) {
         this->SortAdditiveParticleElements(1);
