@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <cstring>
 #include <new>
-#include <unordered_map>
 #include <xmmintrin.h>
 #if defined(_MSC_VER)
 #include <malloc.h>
@@ -5130,58 +5129,6 @@ uint32_t CM2Model::ProcessSequenceCallback(uint32_t boneIndex, uint32_t frame, u
 
 // VERIFY: 745168f8 manual
 // OFFSET: 0x0082EC30
-// SXC (FlashWOW): a model's collision points placed in the world, kept per model with the placement and
-// data they came from. GetCollisionFacets placed every collision point of each doodad a query touched, on
-// every query (other units' movement in Goldshire: ~1.3% of the frame, the points of the same fences and
-// trees every frame). A doodad doesn't move, so the same model with the same matrix (compared byte for
-// byte) and the same data takes the points placed before: the same products, so the same triangles. Per
-// thread; emptied past kCollisionKept models.
-namespace {
-    constexpr size_t kCollisionKept = 4096;
-
-    struct CollisionPlaced {
-        C44Matrix transform;
-        const M2Data* data = nullptr;
-        uint32_t count = 0;
-        std::vector<C3Vector> positions;
-    };
-
-    const C3Vector* PlacedCollision(const CM2Model* model, const M2Data* data, const C44Matrix& transform) {
-        static SXC::Settings::Bool s_keep("Models", "KeepCollisionPoints", true, "Doodads: collision points placed once",
-                                          "Keep each doodad's collision points placed in the world instead of placing them again on every "
-                                          "collision query (the same triangles).");
-
-        if (!s_keep.Get()) {
-            return nullptr;
-        }
-
-        thread_local std::unordered_map<const CM2Model*, CollisionPlaced> t_placed;
-
-        if (t_placed.size() > kCollisionKept) {
-            t_placed.clear();
-        }
-
-        CollisionPlaced& placed = t_placed[model];
-        const uint32_t count = data->m_collisionPositions.m_count;
-
-        if (placed.data == data && placed.count == count && std::memcmp(&placed.transform, &transform, sizeof(C44Matrix)) == 0) {
-            return placed.positions.data();
-        }
-
-        placed.transform = transform;
-        placed.data = data;
-        placed.count = count;
-        placed.positions.resize(count);
-        const C3Vector* source = data->m_collisionPositions.Data();
-
-        for (uint32_t i = 0; i < count; i++) {
-            placed.positions[i] = source[i] * transform;
-        }
-
-        return placed.positions.data();
-    }
-}
-
 void CM2Model::GetCollisionFacets(const CAaBox& box, const C44Matrix& transform, TSGrowableArray<CFacet>& facets) {
     if (!(this->m_fFlags & 1)) {
         this->WaitForLoad(nullptr);
@@ -5199,17 +5146,10 @@ void CM2Model::GetCollisionFacets(const CAaBox& box, const C44Matrix& transform,
 
     C3Vector* sourcePositions = data->m_collisionPositions.Data();
     uint32_t positionCount = data->m_collisionPositions.m_count;
-    // SXC: the points placed once (above), else placed here as before.
-    const C3Vector* placed = PlacedCollision(this, data, transform);
-    const C3Vector* positions = placed ? placed : CM2Model::s_collisionPositions.m_data;
 
     for (uint32_t i = 0; i < positionCount; i++) {
-        const C3Vector* position = &positions[i];
-
-        if (!placed) {
-            CM2Model::s_collisionPositions.m_data[i] = sourcePositions[i] * transform;
-        }
-
+        C3Vector* position = &CM2Model::s_collisionPositions.m_data[i];
+        *position = sourcePositions[i] * transform;
         uint32_t* code = &CM2Model::s_collisionCodes.m_data[i];
         *code = 0;
 
@@ -5288,9 +5228,9 @@ void CM2Model::GetCollisionFacets(const CAaBox& box, const C44Matrix& transform,
         }
 
         CFacet* facet = facets.New();
-        facet->v[0] = positions[indices[0]];
-        facet->v[1] = positions[indices[1]];
-        facet->v[2] = positions[indices[2]];
+        facet->v[0] = CM2Model::s_collisionPositions.m_data[indices[0]];
+        facet->v[1] = CM2Model::s_collisionPositions.m_data[indices[1]];
+        facet->v[2] = CM2Model::s_collisionPositions.m_data[indices[2]];
 
         C3Vector& normal = data->m_collisionFaceNormals[i];
         facet->plane.n.x = normal.y * rotation.b0 + normal.z * rotation.c0 + normal.x * rotation.a0;
