@@ -215,6 +215,24 @@ bool OptionTextured(uint32_t optionId, const std::vector<uint32_t>& selected) {
     return !waits;
 }
 
+bool ChoiceTextured(uint32_t choiceId, const std::vector<uint32_t>& chosen) {
+    Index& x = Ready(); if (!x.ready) return true;
+    // The table choices on both sides (a Death Knight eye colour stands for its table choice).
+    uint32_t rgb = 0;
+    EyeTint(choiceId, choiceId, rgb);
+    std::vector<uint32_t> selected;
+    BaseChoices(chosen, selected);
+    const auto elements = x.elementsByChoice.find(choiceId); if (elements == x.elementsByChoice.end()) return true;
+    bool materials = false;
+    for (const Row* element : elements->second) {
+        if (!x.element->Value(*element, "ChrCustomizationMaterialID")) continue;
+        materials = true;
+        const uint32_t needs = x.element->Value(*element, "RelatedChrCustomizationChoiceID");
+        if (!needs || std::find(selected.begin(), selected.end(), needs) != selected.end()) return true;
+    }
+    return !materials;
+}
+
 bool OptionShows(uint32_t optionId, const std::vector<uint32_t>& selected) {
     Index& x = Ready();
     if (!x.ready) return true;

@@ -53,6 +53,10 @@ namespace Retail::Appearance
     // on another choice (a face's texture per skin colour) and none waits on one that is taken: the face
     // options of an unlocked NPC skin, which has no face textures of its own.
     bool OptionTextured(uint32_t optionId, const std::vector<uint32_t>& selected);
+    // FlashWOW: whether the choice paints a texture with the other choices taken. False when every one of its
+    // material elements waits on another choice (RelatedChrCustomizationChoiceID) and none of those is taken:
+    // a Tauren horn colour with no texture for the horn style chosen. True when it has no material elements.
+    bool ChoiceTextured(uint32_t choiceId, const std::vector<uint32_t>& selected);
 
     // FlashWOW Death Knight eye colours: the Death Knight eye choice in other colours. They are not in the
     // tables; each is the Death Knight choice's ID packed with a colour index, offered right after it to

@@ -878,6 +878,22 @@ uint32_t ResolveFor(const CharacterPreferences& prefs, const std::map<uint32_t, 
         choices.push_back(option.offered[option.index]);
         resolved.push_back(std::move(option));
     }
+    // FlashWOW: the hair colour selector's choice (a Tauren's Horn Color) must have a texture for the rest of the
+    // look: a horn colour's textures each go with a horn style, and a 3.3.5 value can land on a colour retail has
+    // no texture for with the style taken, which drew the horns with the white placeholder (two Goldshire bots,
+    // style 1089 with colour 1104, 2026-11-25). The next colour that has one is taken instead, the style kept.
+    for (size_t i = 0; i < resolved.size(); ++i) {
+        ResolvedOption& option = resolved[i];
+        if (!option.driven || option.stock != static_cast<int32_t>(Stock::HairColor) || option.offered.size() < 2) continue;
+        if (Retail::Appearance::ChoiceTextured(choices[i], choices)) continue;
+        for (uint32_t step = 1; step < option.offered.size(); ++step) {
+            const uint32_t k = (option.index + step) % option.offered.size();
+            if (!Retail::Appearance::ChoiceTextured(option.offered[k], choices)) continue;
+            option.index = k;
+            choices[i] = option.offered[k];
+            break;
+        }
+    }
     // Class-implied options follow the look: their Demon Hunter choice when any visible choice is a Demon
     // Hunter one (horns, blindfold, tattoo), else their other choice. FlashWOW opens Demon Hunter choices
     // to every class, so a class cannot decide it.
