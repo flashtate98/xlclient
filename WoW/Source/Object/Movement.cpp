@@ -33,7 +33,6 @@
 #include "WoW/Source/UIUtil/InputControl.h"
 #include "WoW/Source/WorldClient/World.h"
 #include "WoW/Source/WowSvcs/WowSvcsClient/ClientServices.h"
-#include "SXC/Settings/Settings.h"  // SXC: [Movement] CollideReach
 
 static const float MAX_SHORT_RANGE_TELEPORT_SQUARED = 22500.0f;
 
@@ -4727,28 +4726,7 @@ uint32_t CMovement_C::RequestMove(uint32_t time, uint32_t elapsed, const C3Vecto
     C3Vector target(move.x + this->m_anchorPos.x, this->m_anchorPos.y + move.y, this->m_anchorPos.z + move.z);
     CGUnit_C* unit = this->m_unit;
 
-    // SXC (FlashWOW): a creature on a server path collides with the world while it is in view (0x800000, set
-    // for every visible object by CGWorldFrame::ObjectEnumProc), so it follows the ground between the path's
-    // points: Goldshire's wandering turkeys at normal zoom were ~1 ms of "unit movement". Past CollideReach yd
-    // from the camera it follows its path as an unseen one does (the path's points carry the server's heights;
-    // between them a far creature may float or sink a little). Not the active mover, units without a path
-    // (players, bots), or a unit on a transport. 0 collides at every distance, as before.
-    bool inView = (unit->m_modelFlags & 0x800000) != 0;
-
-    if (inView && this->m_spline && !this->m_transportGuid) {
-        static SXC::Settings::Float s_reach("Movement", "CollideReach", 40.0f, 0.0f, 500.0f, "Creatures: ground collision within (yd, 0 everywhere)",
-                                            "Creatures walking a server path follow the ground with collision only within this distance of the camera; "
-                                            "farther ones follow their path, as creatures out of view do.");
-        const float reach = s_reach.Get();
-
-        if (reach > 0.0f) {
-            const C3Vector& eye = CWorldScene::s_activeWorldView;
-            const float dx = target.x - eye.x, dy = target.y - eye.y, dz = target.z - eye.z;
-            inView = dx * dx + dy * dy + dz * dz <= reach * reach;
-        }
-    }
-
-    if (unit->m_obj->m_guid == CGUnit_C::s_activeMover || !this->m_spline || inView) {
+    if (unit->m_obj->m_guid == CGUnit_C::s_activeMover || !this->m_spline || (unit->m_modelFlags & 0x800000)) {
         C3Vector delta(target.x - this->m_position.x, target.y - this->m_position.y, target.z - this->m_position.z);
         return this->CollideRequestMove(time, elapsed, delta);
     }
