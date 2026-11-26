@@ -17,6 +17,7 @@
 #include "SXC/Cover/Cover.h"  // SXC: projected textures on the raised covers
 #include "SXC/Lights/Lights.h"  // SXC: the draw's glow
 #include "SXC/Profiler/Profiler.h"  // SXC: the frame profiler's draw count
+#include "SXC/Settings/Settings.h"  // SXC: [Terrain] UnderlayAfter
 
 namespace frame     = gxvk::vk::frame;
 namespace pipelines = gxvk::vk::pipelines;
@@ -234,16 +235,28 @@ void CGxDeviceVulkan::Draw(CGxBatch* batch, int32_t count) {
         frame::PixelWritesToReads(cmd);
     }
 
-    // SXC: a raised terrain chunk: its flat self first, a little lower, under the raised surface.
-    if (d.terrainUnderlay) {
+    // SXC: a raised terrain chunk: its flat self as well, a little lower, under the raised surface (it shows only
+    // in the hairlines between chunks). FlashWOW: drawn after the raised chunk rather than before ([Terrain]
+    // UnderlayAfter): it lies lower, so where the raised surface covers it its pixels fail the depth test, and
+    // the GPU's coarse depth rejects most of it before shading. Before, it was shaded in full and then covered
+    // (about 4 ms of the terrain's GPU time in a wide Goldshire view). The same picture either way.
+    static SXC::Settings::Bool s_underlayAfter("Terrain", "UnderlayAfter", true, "Covers: draw the flat underlay after its raised chunk",
+                                               "The lowered copy under each raised chunk is drawn after it, so the GPU skips the parts it covers.");
+    const bool underlayAfter = d.terrainUnderlay && s_underlayAfter.Get();
+    const bool mirrored = gxvk::vk::view::Recording() && !colourTarget && !this->m_textureTarget[GxBuffers_Depth].m_texture;
+    auto recordUnderlay = [&]() {
         pipelines::Draw underlay = d;
         underlay.terrainVertex = (d.terrainVertex & ~(pipelines::terrain::kVertexTess | pipelines::terrain::kVertexBigAlpha)) | pipelines::terrain::kVertexSunk;
         underlay.terrainUnderlay = false;
         pipelines::Record(cmd, frame::RenderPass(), frame::PassGeneration(), frame::Serial(), frame::Slot(), underlay);
 
-        if (gxvk::vk::view::Recording() && !colourTarget && !this->m_textureTarget[GxBuffers_Depth].m_texture) {
+        if (mirrored) {
             gxvk::vk::view::Copy(underlay, reinterpret_cast<const float*>(&this->m_projNative));
         }
+    };
+
+    if (d.terrainUnderlay && !underlayAfter) {
+        recordUnderlay();
     }
 
     if (!pipelines::Record(cmd, frame::RenderPass(), frame::PassGeneration(), frame::Serial(), frame::Slot(), d)) {
@@ -251,8 +264,12 @@ void CGxDeviceVulkan::Draw(CGxBatch* batch, int32_t count) {
     }
 
     // SXC: a second view (the water's mirror) copies the scene's draws while it records.
-    if (gxvk::vk::view::Recording() && !colourTarget && !this->m_textureTarget[GxBuffers_Depth].m_texture) {
+    if (mirrored) {
         gxvk::vk::view::Copy(d, reinterpret_cast<const float*>(&this->m_projNative));
+    }
+
+    if (underlayAfter) {
+        recordUnderlay();
     }
 
     // SXC: the frame profiler's draw count.
