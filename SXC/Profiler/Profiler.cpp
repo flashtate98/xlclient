@@ -11,6 +11,7 @@
 #include "SXC/Api/sxc_profiler.h"
 #include "SXC/Settings/Settings.h"
 #include "SXC/Watchdog.h"
+#include "SXC/Log.h"  // FlashWOW: the hitch log
 #include "SXC/ThirdParty/imgui/imgui.h"
 
 namespace {
@@ -409,6 +410,83 @@ namespace SXC::Profiler {
         return s_frameOn;
     }
 
+    // FlashWOW: a frame slower than [Profiler] HitchMs goes to sxc.log with its own top rows: a stutter is one
+    // frame the panel's one-second average hides. While the profiler measures; at most kHitchBurst lines per
+    // kHitchWindowMs, then a count of those left out.
+    void LogHitch(int64_t frameTicks) {
+        static SXC::Settings::Float s_hitchMs("Profiler", "HitchMs", 50.0f, 0.0f, 1000.0f, "Profiler: log frames slower than (ms, 0 off)",
+                                              "While the profiler measures, a frame slower than this goes to sxc.log with its own top rows.");
+        constexpr uint32_t kHitchBurst = 20;
+        constexpr int64_t kHitchWindowMs = 10000;
+        static int64_t s_windowStart = 0;
+        static uint32_t s_logged = 0, s_skipped = 0;
+        static uint64_t s_frameNumber = 0;
+        s_frameNumber++;
+
+        const float limit = s_hitchMs.Get();
+        const double toMs = 1000.0 / static_cast<double>(s_qpcFreq);
+        const double frameMs = static_cast<double>(frameTicks) * toMs;
+
+        if (limit <= 0.0f || frameMs < limit) {
+            return;
+        }
+
+        const int64_t now = Now();
+
+        if (static_cast<double>(now - s_windowStart) * toMs >= kHitchWindowMs) {
+            if (s_skipped) {
+                SXC::Log("hitch: %u more frames over %.0f ms in the last %lld s, not logged", s_skipped, limit, static_cast<long long>(kHitchWindowMs / 1000));
+            }
+
+            s_windowStart = now;
+            s_logged = 0;
+            s_skipped = 0;
+        }
+
+        if (s_logged >= kHitchBurst) {
+            s_skipped++;
+            return;
+        }
+
+        s_logged++;
+
+        // The frame's six largest rows (CPU, this frame only).
+        int top[6];
+        int found = 0;
+
+        for (int c = 0; c < s_count; c++) {
+            if (s_frame.cpu[c] <= 0) {
+                continue;
+            }
+
+            int at;
+
+            if (found < 6) {
+                at = found++;
+            } else if (s_frame.cpu[c] > s_frame.cpu[top[5]]) {
+                at = 5;
+            } else {
+                continue;
+            }
+
+            top[at] = c;
+
+            while (at > 0 && s_frame.cpu[top[at]] > s_frame.cpu[top[at - 1]]) {
+                std::swap(top[at], top[at - 1]);
+                at--;
+            }
+        }
+
+        char line[1024];
+        int used = std::snprintf(line, sizeof(line), "hitch: frame %llu took %.1f ms:", static_cast<unsigned long long>(s_frameNumber), frameMs);
+
+        for (int i = 0; i < found && used > 0 && used < static_cast<int>(sizeof(line)); i++) {
+            used += std::snprintf(line + used, sizeof(line) - used, "%s %s %.1f", i ? ";" : "", s_info[top[i]].name, static_cast<double>(s_frame.cpu[top[i]]) * toMs);
+        }
+
+        SXC::Log("%s", line);
+    }
+
     void FrameEnd() {
         SXC::Watchdog::Beat();   // a frame done: the hang watchdog's heartbeat
         const int64_t now = Now();
@@ -432,6 +510,7 @@ namespace SXC::Profiler {
 
             s_window.ticks += now - s_frameStart;
             s_window.frames++;
+            LogHitch(now - s_frameStart);
         }
 
         std::memset(&s_frame, 0, sizeof(s_frame));
